@@ -1,0 +1,241 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+const { createProjectStore } = require("../project_store");
+const { createXsxbMcpService, toolDefinitions } = require("../xsxb_mcp_service");
+const { encodePngRgba } = require("../xsxb_mcp_cutout");
+
+const ONE_PIXEL_PNG = encodePngRgba(new Uint8ClampedArray([255, 255, 255, 255]), 1, 1);
+
+/**
+ * Isolated tuner root plus MCP service.
+ * @returns {{root:string,service:object,cleanup:Function}} Fixture.
+ */
+function fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-inplace-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="InPlace"\n');
+  createProjectStore(root).addProject({ id: "inplace", label: "InPlace", projectRoot: godotRoot });
+  return {
+    root,
+    service: createXsxbMcpService({ root }),
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * Writes a two-frame PNG sequence.
+ * @param {string} directory Sequence directory.
+ * @returns {string[]} Absolute PNG paths.
+ */
+function writeSequence(directory) {
+  fs.mkdirSync(directory, { recursive: true });
+  const files = [path.join(directory, "01.png"), path.join(directory, "02.png")];
+  for (const filePath of files) fs.writeFileSync(filePath, ONE_PIXEL_PNG);
+  return files;
+}
+
+/**
+ * Workspace copy folder for an imported animation.
+ * @param {string} root XSXB root.
+ * @param {string} projectId Project id.
+ * @param {string} profileId Profile id.
+ * @param {string} animationId Animation id.
+ * @returns {string} Absolute assets directory.
+ */
+function copiedAssetDir(root, projectId, profileId, animationId) {
+  return path.join(root, "workspace", "projects", projectId, "assets", profileId, animationId);
+}
+
+/**
+ * PNG files inside a directory.
+ * @param {string} directory Folder.
+ * @returns {string[]} Absolute PNG paths.
+ */
+function listCopiedPngs(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs
+    .readdirSync(directory)
+    .filter((name) => name.toLowerCase().endsWith(".png"))
+    .map((name) => path.join(directory, name));
+}
+
+/**
+ * Whether two paths share a filesystem inode.
+ * @param {string} left First path.
+ * @param {string} right Second path.
+ * @returns {boolean} True when both exist and share device+inode.
+ */
+function sameInode(left, right) {
+  try {
+    const a = fs.statSync(left);
+    const b = fs.statSync(right);
+    return a.ino === b.ino && a.dev === b.dev;
+  } catch {
+    return false;
+  }
+}
+
+test("catalog advertises in_place on import_animation", () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_import_animation");
+  assert.ok(tool);
+  assert.equal(tool.inputSchema.properties.in_place.type, "boolean");
+  assert.equal(tool.inputSchema.properties.in_place.default, false);
+  const video = toolDefinitions().find((entry) => entry.name === "xsxb_import_video");
+  assert.ok(video.inputSchema.properties.in_place);
+});
+
+test("default import copies frames so deleting the source sequence still resolves", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "walk-seq");
+    const sources = writeSequence(directory);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "walk",
+    });
+    assert.equal(imported.importedFrameCount, 2);
+    assert.equal(imported.inPlace, false);
+    const copiedDir = copiedAssetDir(
+      current.root,
+      imported.projectId,
+      imported.profileId,
+      imported.animationId,
+    );
+    const copies = listCopiedPngs(copiedDir);
+    assert.equal(copies.length, 2);
+    assert.ok(copies.every((filePath) => fs.existsSync(filePath)));
+    assert.ok(
+      copies.every((filePath, index) => path.resolve(filePath) !== path.resolve(sources[index])),
+      "workspace copies must not be the source paths",
+    );
+    for (const source of sources) fs.rmSync(source, { force: true });
+    fs.rmSync(directory, { recursive: true, force: true });
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    assert.equal(animation.frameCount, 2);
+    assert.ok(animation.allFramesGenerated);
+    for (const frame of animation.animation.frames) {
+      assert.ok(frame.exists);
+      assert.ok(fs.existsSync(frame.absolutePath));
+      decodeRequiresPng(frame.absolutePath);
+    }
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("in_place import does not duplicate PNG bytes and still measures frames", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "run-seq");
+    const sources = writeSequence(directory);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "run",
+      in_place: true,
+    });
+    assert.equal(imported.importedFrameCount, 2);
+    assert.equal(imported.inPlace, true);
+    assert.ok(imported.metrics);
+    assert.equal(imported.metrics.canvas.width, 1);
+    const copiedDir = copiedAssetDir(
+      current.root,
+      imported.projectId,
+      imported.profileId,
+      imported.animationId,
+    );
+    const copies = listCopiedPngs(copiedDir);
+    const duplicated = copies.filter((copyPath, index) => {
+      const source = sources[index];
+      if (!source) return true;
+      return !sameInode(copyPath, source);
+    });
+    assert.equal(duplicated.length, 0, "in_place must not write a second full byte copy");
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "run" });
+    assert.equal(animation.animation.inPlace, true);
+    assert.equal(animation.frameCount, 2);
+    assert.ok(animation.allFramesGenerated);
+    for (const [index, frame] of animation.animation.frames.entries()) {
+      assert.ok(frame.exists);
+      assert.equal(path.resolve(frame.absolutePath), path.resolve(sources[index]));
+      decodeRequiresPng(frame.absolutePath);
+    }
+    const measured = await current.service.call("xsxb_measure_frames", { animation_id: "run" });
+    assert.equal(measured.frames.length, 2);
+    assert.equal(typeof measured.frames[0].bboxH, "number");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("in_place import can reference a game-pack directory outside the XSXB root", async () => {
+  const current = fixture();
+  const pack = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-game-pack-"));
+  try {
+    const sources = writeSequence(pack);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "pack_run",
+      in_place: true,
+    });
+    assert.equal(imported.inPlace, true);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "pack_run" });
+    assert.ok(animation.allFramesGenerated);
+    assert.equal(path.resolve(animation.animation.frames[0].absolutePath), path.resolve(sources[0]));
+    const measured = await current.service.call("xsxb_measure_frames", { animation_id: "pack_run" });
+    assert.equal(measured.frames.length, 2);
+  } finally {
+    current.cleanup();
+    fs.rmSync(pack, { recursive: true, force: true });
+  }
+});
+
+test("replacing a copied animation with in_place drops the stale workspace folder", async () => {
+  const current = fixture();
+  try {
+    const first = path.join(current.root, "first-seq");
+    writeSequence(first);
+    const copied = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: first,
+      animation_id: "swap",
+    });
+    const copiedDir = copiedAssetDir(current.root, copied.projectId, copied.profileId, copied.animationId);
+    assert.ok(listCopiedPngs(copiedDir).length >= 2);
+    const second = path.join(current.root, "second-seq");
+    const sources = writeSequence(second);
+    const replaced = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: second,
+      animation_id: "swap",
+      replace: true,
+      in_place: true,
+    });
+    assert.equal(replaced.replaced, true);
+    assert.equal(replaced.inPlace, true);
+    assert.equal(listCopiedPngs(copiedDir).length, 0);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "swap" });
+    assert.equal(path.resolve(animation.animation.frames[0].absolutePath), path.resolve(sources[0]));
+    assert.ok(animation.allFramesGenerated);
+  } finally {
+    current.cleanup();
+  }
+});
+
+/**
+ * Decodes a PNG header by requiring the file to exist and start with PNG magic.
+ * @param {string} filePath Absolute PNG path.
+ * @returns {void}
+ */
+function decodeRequiresPng(filePath) {
+  const buffer = fs.readFileSync(filePath);
+  assert.equal(buffer.toString("ascii", 1, 4), "PNG");
+}

@@ -1,0 +1,13 @@
+---
+description: 用 xsxb MCP 时开工先分析、多步 todo、每步看图再往下
+alwaysApply: true
+---
+
+# MCP 会话怎么走
+
+改帧、抠图、贴合、导出这类多步活，按 MCP `instructions` / skill「MCP 工程流程」走，不要连打工具。
+
+- 开工：一句话目标 + 当前项目/动画 + 选哪条 playbook。
+- 多步：有序 todo。做完一项勾掉。
+- 每步 check：打开 `preview.path` / overlay / gif，不要只看回执。眼睛不过就停。
+- 改 MCP 代码仍走 `AGENTS.md`（先失败测试，再 `npm run check:mcp`），那是仓库工程，不是 MCP 工具 playbook。

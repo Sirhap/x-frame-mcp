@@ -1,0 +1,19 @@
+---
+description: MCP 抠图/联系表验收看洋红底，不要拿回执或种脚小表当「人还在」
+alwaysApply: true
+---
+
+# MCP 视觉验收
+
+回执 `confirmed` / `keyed` / 四角透明 **不等于** 角色还在。黑底板生成图上，海军蓝衣服可以很暗，仍是衣服。
+
+- 抠完看 `preview.path`（洋红扁平成图）。不要用默认带格、按 `feetY` 贴底的小格子表当「腿还在」。黑底合成图上看不见深蓝裤子。
+- 给人看的表：`grid=false`，格子至少盖住画布。种脚表才按靴底裁切。
+- 生成黑/白底板用 `border_flood` + `key_color`。复测要从 raw 重抠（或 `force` + `key_color`）；对着已抠帧会 skip。
+- 改完 MCP 代码后重载 xsxb。磁盘上的修复不是 Cursor 里还在跑的旧进程。
+- 站姿图已经持剑再 `place_image` 是叠刃。着地冰花挡住蹲姿是构图；洋红里裤子仍连到靴子才算抠对。
+
+```text
+BAD: keyed=true、220 种脚表只剩躯干 → 报通过
+GOOD: 打开洋红 preview，腰到靴是连续裤子 → 再报通过
+```
