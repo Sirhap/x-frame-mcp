@@ -58,7 +58,7 @@ Cursor **不会**展开 `${workspaceFolder}`。`args` 必须是指向 `mcp/xsxb_
 }
 ```
 
-省略 `XSXB_ROOT` 时，项目数据写在本仓库的 `data/` 与 `workspace/`。`xsxb_open_tuner` 另需 `XSXB_TUNER_ROOT` 指向带 `tools/animation_tuner/server.js` 的 Frame Tuner 仓。
+省略 `XSXB_ROOT` 时，作者文件写在**当前工作目录**的 `.x-frame/`（和 AI 平时操作的项目目录一致，不必是 Godot）。`xsxb_create_project` / `xsxb_bind_godot` 带 `project_root` 时，写到那个目录的 `.x-frame/`。`xsxb_open_tuner` 另需 `XSXB_TUNER_ROOT` 指向带 `tools/animation_tuner/server.js` 的 Frame Tuner 仓。
 
 命令行自检：
 
@@ -71,7 +71,7 @@ npm run mcp:start
 服务在 `initialize` 里下发同一段说明，大意是：
 
 - **工程流程：** 开工先用一句话写下用户目标，再 `list`/`get` 选 playbook；多步用有序 todo；每步改盘后打开图（`preview.path` / overlay / gif）再勾掉，`confirmed` 不算完成；眼睛不过就停，不要接着走 playbook
-- 改数据前先 `xsxb_list_projects` 或 `xsxb_get_project`。没有项目时用 `xsxb_create_project`（`project_id` / `label` / `project_root` 均可选；已存在的 id 不重复建）
+- 改数据前先 `xsxb_list_projects` 或 `xsxb_get_project`。没有项目时用 `xsxb_create_project`（`project_id` / `label` / `project_root` 均可选；已存在的 id 不重复建）。默认落在当前目录 `.x-frame/`；带 `project_root` 时落在那个目录的 `.x-frame/`
 - 同步前先 `xsxb_bind_godot`
 - 导入用 `xsxb_import_animation`（支持 `start_frame` / `end_frame` / `replace` / `in_place`）；`xsxb_import_video` 只是视频别名，可另传 `start_time` / `duration`（ffmpeg `-ss`/`-t` 放在 `-i` 后；省略则抽整段）。`in_place: true` 让 PNG 序列继续用源文件，不拷进 `workspace/assets`
 - 切表用 `xsxb_slice_sheet`（packed sprite/contact sheet → PNG 序列）。走循环锁高锁脚仍用 `xsxb_measure_frames` / `xsxb_register_clip`，不要用切表当锁尺

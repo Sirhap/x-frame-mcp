@@ -253,7 +253,7 @@ function resolveBoxPatch(patch, animation, frameRecord, args, image) {
  * @returns {{tools:object[],call:(name:string,args?:object)=>Promise<object>}} MCP-facing service.
  */
 function createXsxbMcpService(options = {}) {
-  const root = path.resolve(options.root || process.env.XSXB_ROOT || path.join(__dirname, ".."));
+  const root = path.resolve(options.root || process.env.XSXB_ROOT || process.cwd());
   const projectStore = createProjectStore(root);
   const extractVideoFramesImpl = options.extractVideoFramesImpl || extractVideoFrames;
   const encodeGifImpl = options.encodeGifImpl || encodeGifWithFfmpeg;

@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { createProjectStore } = require("../project_store");
+const { createProjectStore, FRAME_STORE_DIR } = require("../project_store");
 const { createXsxbMcpService, toolDefinitions } = require("../xsxb_mcp_service");
 const { encodePngRgba } = require("../xsxb_mcp_cutout");
 
@@ -23,6 +23,7 @@ function fixture() {
   createProjectStore(root).addProject({ id: "inplace", label: "InPlace", projectRoot: godotRoot });
   return {
     root,
+    godotRoot,
     service: createXsxbMcpService({ root }),
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
   };
@@ -48,8 +49,17 @@ function writeSequence(directory) {
  * @param {string} animationId Animation id.
  * @returns {string} Absolute assets directory.
  */
-function copiedAssetDir(root, projectId, profileId, animationId) {
-  return path.join(root, "workspace", "projects", projectId, "assets", profileId, animationId);
+function copiedAssetDir(godotRoot, projectId, profileId, animationId) {
+  return path.join(
+    godotRoot,
+    FRAME_STORE_DIR,
+    "workspace",
+    "projects",
+    projectId,
+    "assets",
+    profileId,
+    animationId,
+  );
 }
 
 /**
@@ -103,7 +113,7 @@ test("default import copies frames so deleting the source sequence still resolve
     assert.equal(imported.importedFrameCount, 2);
     assert.equal(imported.inPlace, false);
     const copiedDir = copiedAssetDir(
-      current.root,
+      current.godotRoot,
       imported.projectId,
       imported.profileId,
       imported.animationId,
@@ -146,7 +156,7 @@ test("in_place import does not duplicate PNG bytes and still measures frames", a
     assert.ok(imported.metrics);
     assert.equal(imported.metrics.canvas.width, 1);
     const copiedDir = copiedAssetDir(
-      current.root,
+      current.godotRoot,
       imported.projectId,
       imported.profileId,
       imported.animationId,
@@ -208,7 +218,12 @@ test("replacing a copied animation with in_place drops the stale workspace folde
       directory: first,
       animation_id: "swap",
     });
-    const copiedDir = copiedAssetDir(current.root, copied.projectId, copied.profileId, copied.animationId);
+    const copiedDir = copiedAssetDir(
+      current.godotRoot,
+      copied.projectId,
+      copied.profileId,
+      copied.animationId,
+    );
     assert.ok(listCopiedPngs(copiedDir).length >= 2);
     const second = path.join(current.root, "second-seq");
     const sources = writeSequence(second);

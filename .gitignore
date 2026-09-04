@@ -20,6 +20,7 @@ desktop.ini
 .idea/
 .cursor/mcp.json
 .tmp/
+.x-frame/
 
 # Local tuner registry and per-project data.
 data/projects.json

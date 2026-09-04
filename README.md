@@ -54,7 +54,7 @@ To operate an existing Tuner workspace (same `data/projects` and frames):
 }
 ```
 
-Without `XSXB_ROOT`, projects live under this repo’s `data/` and `workspace/`.
+Without `XSXB_ROOT`, authoring files go in the current working directory’s `.x-frame/` folder (the project the agent is in). Pass `project_root` to store under another folder’s `.x-frame/`.
 
 Reload the `xsxb` MCP server after pulling. Confirm with `xsxb_list_projects`.
 
@@ -72,11 +72,11 @@ npm run mcp:perception:doctor
 
 ## Layout
 
-| Path | Role |
-| --- | --- |
-| `mcp/` | Server, tools, vendored algorithms |
-| `tools/xsxb_mcp_*.js` | Compatibility shims (`require` → `mcp/`) |
-| `tools/tests/` | MCP tests |
+| Path                       | Role                                      |
+| -------------------------- | ----------------------------------------- |
+| `mcp/`                     | Server, tools, vendored algorithms        |
+| `tools/xsxb_mcp_*.js`      | Compatibility shims (`require` → `mcp/`)  |
+| `tools/tests/`             | MCP tests                                 |
 | `skills/xsxb-frame-tuner/` | Agent skill copied for the same playbooks |
 
 `xsxb_open_tuner` looks for `tools/animation_tuner/server.js` under `XSXB_TUNER_ROOT` or `XSXB_ROOT`. This repo does not ship the Tuner UI.

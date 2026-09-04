@@ -410,7 +410,7 @@ function resolveMcpArtifactPath(requested, options) {
   if (options.extensionPattern && !options.extensionPattern.test(outputPath)) {
     throw new Error(`output_path must end with ${options.extensionLabel}.`);
   }
-  const outside = !isInsideDirectory(outputPath, root);
+  const outside = !isInsideDirectory(outputPath, root) && !isInsideDirectory(outputPath, artifactDir);
   if (outside && !(options.allowOutsideRoot && requested && path.isAbsolute(String(requested)))) {
     throw new Error(
       `output_path must stay inside the XSXB workspace root (${root}). Received: ${requested || defaultName}`,

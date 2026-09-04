@@ -161,12 +161,44 @@ function uniqueId(baseId, usedIds) {
   return candidate;
 }
 
+/** Authoring store folder at the host directory the agent is working in. */
+const FRAME_STORE_DIR = ".x-frame";
+
+/**
+ * Resolves `<host>/.x-frame` without nesting if `host` is already that folder.
+ * @param {string} host Directory the agent is operating on.
+ * @returns {string} Absolute `.x-frame` store path.
+ */
+function frameStoreRoot(host) {
+  const resolved = path.resolve(host);
+  if (path.basename(resolved) === FRAME_STORE_DIR) return resolved;
+  return path.join(resolved, FRAME_STORE_DIR);
+}
+
+/**
+ * Resolves where one project's data and workspace live.
+ * Files go under the host directory's `.x-frame/` (cwd / XSXB_ROOT, or an
+ * explicit `project_root`). That host is any folder, not only a Godot game.
+ * @param {string} root MCP host directory.
+ * @param {{projectRoot?:string}} project Registry project.
+ * @returns {string} Absolute store root.
+ */
+function projectStoreRoot(root, project) {
+  const projectRoot = String(project?.projectRoot || "").trim();
+  if (projectRoot) return frameStoreRoot(projectRoot);
+  return frameStoreRoot(root);
+}
+
 function projectDataDir(root, project) {
-  return safeResolve(root, project?.dataDir) || path.join(root, "data", "projects", project.id);
+  const storeRoot = projectStoreRoot(root, project);
+  return safeResolve(storeRoot, project?.dataDir) || path.join(storeRoot, "data", "projects", project.id);
 }
 
 function projectWorkspaceDir(root, project) {
-  return safeResolve(root, project?.workspaceDir) || path.join(root, "workspace", "projects", project.id);
+  const storeRoot = projectStoreRoot(root, project);
+  return (
+    safeResolve(storeRoot, project?.workspaceDir) || path.join(storeRoot, "workspace", "projects", project.id)
+  );
 }
 
 function projectPaths(root, project) {
@@ -255,7 +287,7 @@ function normalizeRegistry(raw) {
 }
 
 function createProjectStore(root) {
-  const dataDir = path.join(root, "data");
+  const dataDir = path.join(frameStoreRoot(root), "data");
   const projectsPath = path.join(dataDir, "projects.json");
 
   function readRegistry() {
@@ -407,6 +439,8 @@ module.exports = {
   DEFAULT_PROJECT_ID,
   EMPTY_MANIFEST,
   EMPTY_TUNING,
+  FRAME_STORE_DIR,
+  frameStoreRoot,
   createProjectStore,
   godotProjectName,
   normalizeRegistry,

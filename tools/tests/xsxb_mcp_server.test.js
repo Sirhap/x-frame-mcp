@@ -493,7 +493,7 @@ test("GIF export allows an absolute path outside the root and still rejects rela
       () =>
         current.service.call("xsxb_export_gif", {
           animation_id: "walk",
-          output_path: "../../../../../../escape.gif",
+          output_path: "../../../../../../../../../../../../escape.gif",
         }),
       /must stay inside the XSXB workspace root/u,
     );
@@ -796,6 +796,132 @@ test("xsxb_create_project adds a registry project without changing list/get/set_
     assert.deepEqual(setSchema.inputSchema.required, ["project_id"]);
   } finally {
     current.cleanup();
+  }
+});
+
+test("xsxb_create_project with project_root stores files under that directory's .x-frame folder", async () => {
+  const current = fixture();
+  try {
+    const game = path.join(current.root, "game");
+    fs.mkdirSync(game, { recursive: true });
+    fs.writeFileSync(path.join(game, "project.godot"), '[application]\nconfig/name="Hero"\n');
+    const created = await current.service.call("xsxb_create_project", {
+      project_id: "hero",
+      label: "Hero",
+      project_root: game,
+    });
+    const frameRoot = path.join(game, ".x-frame");
+    assert.equal(created.created, true);
+    assert.ok(created.project.dataPath.startsWith(frameRoot));
+    assert.ok(created.project.workspacePath.startsWith(frameRoot));
+    assert.equal(
+      fs.existsSync(path.join(frameRoot, "data", "projects", "hero", "animation_manifest.json")),
+      true,
+    );
+    assert.equal(
+      fs.existsSync(path.join(current.root, "data", "projects", "hero", "animation_manifest.json")),
+      false,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("xsxb_bind_godot stores subsequent project files under the game .x-frame directory", async () => {
+  const current = fixture();
+  try {
+    await current.service.call("xsxb_create_project", {
+      project_id: "orphan",
+      label: "Orphan",
+    });
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "orphan",
+      project_root: current.godotRoot,
+    });
+    const frameRoot = path.join(current.godotRoot, ".x-frame");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(current.godotRoot));
+    const snapshot = await current.service.call("xsxb_get_project", { project_id: "orphan" });
+    assert.ok(snapshot.dataPath.startsWith(frameRoot));
+    assert.equal(
+      fs.existsSync(path.join(frameRoot, "data", "projects", "orphan", "animation_manifest.json")),
+      true,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("xsxb_create_project without project_root stores under the current host .x-frame directory", async () => {
+  const current = fixture();
+  try {
+    const created = await current.service.call("xsxb_create_project", {
+      project_id: "notes",
+      label: "Notes",
+    });
+    const frameRoot = path.join(current.root, ".x-frame");
+    assert.equal(created.created, true);
+    assert.ok(created.project.dataPath.startsWith(frameRoot));
+    assert.equal(
+      fs.existsSync(path.join(frameRoot, "data", "projects", "notes", "animation_manifest.json")),
+      true,
+    );
+    assert.equal(
+      fs.existsSync(path.join(current.root, "data", "projects", "notes", "animation_manifest.json")),
+      false,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("xsxb_create_project project_root can be any directory, not only a Godot project", async () => {
+  const current = fixture();
+  try {
+    const folder = path.join(current.root, "art");
+    fs.mkdirSync(folder, { recursive: true });
+    const created = await current.service.call("xsxb_create_project", {
+      project_id: "sheets",
+      label: "Sheets",
+      project_root: folder,
+    });
+    const frameRoot = path.join(folder, ".x-frame");
+    assert.ok(created.project.dataPath.startsWith(frameRoot));
+    assert.equal(
+      fs.existsSync(path.join(frameRoot, "data", "projects", "sheets", "animation_manifest.json")),
+      true,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("MCP without an explicit root stores in the current working directory .x-frame", async () => {
+  const host = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-cwd-"));
+  const previousCwd = process.cwd();
+  const previousRoot = process.env.XSXB_ROOT;
+  delete process.env.XSXB_ROOT;
+  process.chdir(host);
+  try {
+    const service = createXsxbMcpService({
+      probeTunerImpl: async () => true,
+      launchTunerImpl: async () => ({ pid: 1 }),
+    });
+    const created = await service.call("xsxb_create_project", {
+      project_id: "local",
+      label: "Local",
+    });
+    const frameRoot = fs.realpathSync(path.join(host, ".x-frame"));
+    const dataPath = fs.realpathSync(created.project.dataPath);
+    assert.ok(dataPath === frameRoot || dataPath.startsWith(`${frameRoot}${path.sep}`));
+    assert.equal(
+      fs.existsSync(path.join(frameRoot, "data", "projects", "local", "animation_manifest.json")),
+      true,
+    );
+  } finally {
+    process.chdir(previousCwd);
+    if (previousRoot === undefined) delete process.env.XSXB_ROOT;
+    else process.env.XSXB_ROOT = previousRoot;
+    fs.rmSync(host, { recursive: true, force: true });
   }
 });
 
@@ -1277,7 +1403,8 @@ test("MCP service uses XSXB_ROOT when options.root is omitted", async () => {
       launchTunerImpl: async () => ({ pid: 1 }),
     });
     await service.call("xsxb_list_projects");
-    assert.ok(fs.existsSync(path.join(root, "data", "projects.json")));
+    assert.ok(fs.existsSync(path.join(root, ".x-frame", "data", "projects.json")));
+    assert.equal(fs.existsSync(path.join(root, "data", "projects.json")), false);
   } finally {
     if (previous === undefined) delete process.env.XSXB_ROOT;
     else process.env.XSXB_ROOT = previous;

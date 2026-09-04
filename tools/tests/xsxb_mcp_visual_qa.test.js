@@ -953,7 +953,7 @@ test("export_sheet writes a PNG inside the workspace, allows absolute outside pa
     await assert.rejects(
       current.service.call("xsxb_export_sheet", {
         animation_id: "walk",
-        output_path: "../../../../../../escape.png",
+        output_path: "../../../../../../../../../../../../escape.png",
       }),
       /must stay inside the XSXB workspace root/,
     );

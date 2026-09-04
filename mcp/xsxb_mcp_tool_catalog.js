@@ -136,7 +136,8 @@ function toolDefinitions() {
           label: { type: "string", description: "Display label. Defaults to project_id." },
           project_root: {
             type: "string",
-            description: "Optional existing Godot directory that contains project.godot.",
+            description:
+              "Directory this project belongs to (any folder, not only Godot). Authoring files are stored in that folder's .x-frame/ directory.",
           },
           set_active: {
             type: "boolean",
@@ -1293,7 +1294,7 @@ function toolDefinitions() {
     {
       name: "xsxb_bind_godot",
       description:
-        "Point one XSXB project at an existing Godot root that contains project.godot. Does not sync files.",
+        "Point one XSXB project at an existing Godot root that contains project.godot. Authoring files are stored in that folder's .x-frame/ directory. Does not sync files.",
       inputSchema: {
         type: "object",
         required: ["project_root"],
