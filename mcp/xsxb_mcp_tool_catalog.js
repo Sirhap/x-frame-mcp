@@ -8,6 +8,7 @@
  */
 
 const path = require("node:path");
+const { authoringDefinitions } = require("./authoring/catalog");
 const { ORGANIZER_SIMILARITY_THRESHOLD } = require("./lib/animation_tuner/public/frame_organizer_core");
 const { workbenchSliderSchemaProperties } = require("./xsxb_mcp_cutout");
 const { receiptEnvelopeSchema } = require("./xsxb_mcp_receipt");
@@ -58,6 +59,7 @@ const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_plan_place",
   "xsxb_place_image",
   "xsxb_open_tuner",
+  ...authoringDefinitions().map((tool) => tool.name),
 ]);
 
 function toolDefinitions() {
@@ -74,6 +76,16 @@ function toolDefinitions() {
       description:
         "Content-addressed observation id. Required when a write derives frame order or A1 cells from an earlier observation.",
     },
+  };
+  const frameTimingProperties = {
+    frame: { type: "integer", minimum: 0 },
+    duration_ms: { type: "number", minimum: 1 },
+    duration: {
+      type: "number",
+      minimum: 0.001,
+      description: "Frame duration multiplier. 1 equals one FPS tick.",
+    },
+    disabled: { type: "boolean" },
   };
   const gridOverlayProperties = {
     grid_density: {
@@ -649,17 +661,10 @@ function toolDefinitions() {
         properties: {
           ...animationProperties,
           fps: { type: "number", minimum: 1, maximum: 120 },
-          frame: { type: "integer", minimum: 0 },
-          duration_ms: { type: "number", minimum: 1 },
-          duration: {
-            type: "number",
-            minimum: 0.001,
-            description: "Frame duration multiplier. 1 equals one FPS tick.",
-          },
-          disabled: { type: "boolean" },
+          ...frameTimingProperties,
           frames: {
             type: "array",
-            items: { type: "object" },
+            items: { type: "object", properties: frameTimingProperties, additionalProperties: false },
             description:
               "Batch mode: [{frame, duration_ms?, duration?, disabled?}, ...] applied in one write. Overrides the single-frame parameters.",
           },
@@ -1294,7 +1299,7 @@ function toolDefinitions() {
     {
       name: "xsxb_bind_godot",
       description:
-        "Point one XSXB project at an existing Godot root that contains project.godot. Authoring files are stored in that folder's .x-frame/ directory. Does not sync files.",
+        "Point one XSXB project at an existing Godot root that contains project.godot. Keeps the existing authoring directory and animation data unchanged. Does not sync files.",
       inputSchema: {
         type: "object",
         required: ["project_root"],
@@ -1314,6 +1319,13 @@ function toolDefinitions() {
         type: "object",
         properties: {
           ...animationProperties,
+          frames: {
+            type: "array",
+            items: { type: "integer", minimum: 0 },
+            description: "Process only these frame indexes; do not combine with start/end range.",
+          },
+          start_frame: { type: "integer", minimum: 0 },
+          end_frame: { type: "integer", minimum: 0 },
           file_path: {
             type: "string",
             description:
@@ -1894,7 +1906,10 @@ function toolDefinitions() {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
   ];
-  return tools.map((tool) => ({ ...tool, outputSchema: receiptEnvelopeSchema() }));
+  return [...tools, ...authoringDefinitions()].map((tool) => ({
+    ...tool,
+    outputSchema: receiptEnvelopeSchema(),
+  }));
 }
 
 module.exports = { DEFAULT_PROFILE_ID, MCP_TOOL_NAMES, toolDefinitions };

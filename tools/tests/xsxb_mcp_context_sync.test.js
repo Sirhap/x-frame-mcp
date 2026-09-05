@@ -1,0 +1,191 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
+const { handleMessage } = require("../../mcp/xsxb_mcp_server");
+const { createProjectStore } = require("../../mcp/lib/project_store");
+const { encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
+
+/**
+ * Runs a public MCP workflow with two projects and different animation selections.
+ * @param {Function} operation Scenario body.
+ * @returns {Promise<void>} Completion with temporary data removed.
+ */
+async function withProjects(operation) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-context-sync-"));
+  const service = createXsxbMcpService({ root, florenceDetectImpl: null });
+  const call = async (name, args = {}) => (await service.callMcp(name, args)).data;
+  try {
+    const png = path.join(root, "frame.png");
+    fs.writeFileSync(png, encodePngRgba(new Uint8ClampedArray([210, 30, 40, 255]), 1, 1));
+    for (const [id, profile, animation] of [
+      ["a", "hero", "walk"],
+      ["b", "enemy", "idle"],
+    ]) {
+      await call("xsxb_create_project", { project_id: id });
+      await call("xsxb_import_animation", {
+        source: "items",
+        items: [{ path: png }],
+        profile_id: profile,
+        animation_id: animation,
+      });
+    }
+    await operation({ root, service, call, png });
+  } finally {
+    service.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+for (const selector of ["xsxb_set_active_project", "xsxb_get_project", "xsxb_create_project"]) {
+  test(`${selector} switching projects clears the previous animation selection`, async () => {
+    await withProjects(async ({ call }) => {
+      await call(selector, { project_id: "a" });
+      const selected = await call("xsxb_get_animation");
+      assert.equal(selected.project.id, "a");
+      assert.equal(selected.profile.id, "hero");
+      assert.equal(selected.animation.id, "walk");
+      const direct = await call("xsxb_get_animation", { project_id: "b" });
+      assert.equal(direct.profile.id, "enemy");
+      assert.equal(direct.animation.id, "idle");
+    });
+  });
+}
+
+test("switching profiles clears only the old animation and same-project selection stays selected", async () => {
+  await withProjects(async ({ call, png }) => {
+    await call("xsxb_import_animation", {
+      project_id: "b",
+      source: "items",
+      items: [{ path: png }],
+      profile_id: "second",
+      animation_id: "jump",
+    });
+    await call("xsxb_set_active_project", { project_id: "b" });
+    assert.equal((await call("xsxb_get_animation")).animation.id, "jump");
+    const selected = await call("xsxb_get_animation", { profile_id: "enemy" });
+    assert.equal(selected.animation.id, "idle");
+    await call("xsxb_set_active_project", { project_id: "b" });
+    assert.equal((await call("xsxb_get_animation")).profile.id, "enemy");
+    await call("xsxb_create_project", { project_id: "background", set_active: false });
+    assert.equal((await call("xsxb_get_animation")).project.id, "b");
+  });
+});
+
+for (const [tool, args] of [
+  ["xsxb_update_timing", { frame: 0, duration: 2 }],
+  ["xsxb_shift_frames", { frames: [{ frame: 0, dy: 2 }] }],
+]) {
+  test(`${tool} reports local changes when Godot sync fails and supports sync-only retry`, async () => {
+    await withProjects(async ({ root, service, call }) => {
+      const game = path.join(root, "game");
+      fs.mkdirSync(game);
+      fs.writeFileSync(path.join(game, "project.godot"), '[application]\nconfig/name="Sync"\n');
+      await call("xsxb_bind_godot", { project_id: "a", project_root: game });
+      const selector = { project_id: "a", profile_id: "hero", animation_id: "walk" };
+      const before = await call("xsxb_get_animation", selector);
+      const png = before.animation.frames[0].absolutePath;
+      const store = createProjectStore(root);
+      const paths = store.projectPaths(store.activeProject("a"));
+      const affected = tool === "xsxb_update_timing" ? paths.tuning : png;
+      const original = fs.readFileSync(affected);
+      const targetTuning = path.join(game, "xsxb_frame_tuner/data/projects/a/animation_tuning.json");
+      const rename = fs.renameSync;
+      let response;
+      fs.renameSync = (source, target) => {
+        if (target === targetTuning) throw new Error("injected Godot write failure");
+        return rename(source, target);
+      };
+      try {
+        response = await handleMessage(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: tool, arguments: { ...selector, ...args, sync: true } },
+          },
+          service,
+        );
+      } finally {
+        fs.renameSync = rename;
+      }
+      const receipt = response.result.structuredContent;
+      assert.equal(response.result.isError, true);
+      assert.equal(receipt.ok, false);
+      assert.equal(receipt.execution.effect, "partial");
+      assert.equal(receipt.data.sync.ok, false);
+      assert.equal(receipt.error.code, "GODOT_SYNC_FAILED");
+      assert.equal(receipt.error.details.localChangesSaved, true);
+      assert.match(response.result.content[0].text, /local.*saved.*xsxb_sync_godot/i);
+      const saved = fs.readFileSync(affected);
+      assert.notDeepEqual(saved, original);
+      const retry = receipt.error.details.retry;
+      assert.deepEqual(retry, { tool: "xsxb_sync_godot", arguments: { project_id: "a" } });
+      const synced = await service.callMcp(retry.tool, retry.arguments);
+      assert.equal(synced.ok, true);
+      assert.equal(synced.data.ok, true);
+      assert.deepEqual(fs.readFileSync(affected), saved, "sync retry does not reapply the local mutation");
+      assert.deepEqual(JSON.parse(fs.readFileSync(targetTuning)), JSON.parse(fs.readFileSync(paths.tuning)));
+    });
+  });
+}
+
+test("sync requested without a binding reports a failed sync instead of full success", async () => {
+  await withProjects(async ({ service }) => {
+    const receipt = await service.callMcp("xsxb_update_timing", { frame: 0, duration: 2, sync: true });
+    assert.equal(receipt.ok, false);
+    assert.equal(receipt.execution.effect, "partial");
+    assert.equal(receipt.data.sync.ok, false);
+    assert.match(receipt.error.message, /bound Godot/);
+  });
+});
+
+test("invalid edits remain refused and do not claim locally saved changes", async () => {
+  await withProjects(async ({ service }) => {
+    const result = await handleMessage(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "xsxb_update_timing", arguments: { frame: 99, duration: 2, sync: true } },
+      },
+      service,
+    );
+    assert.equal(result.result.isError, true);
+    assert.equal(result.result.structuredContent.execution.effect, "refused");
+    assert.equal(result.result.structuredContent.data, null);
+  });
+});
+
+test("a standalone failed sync keeps partial status without claiming a new local edit", async () => {
+  await withProjects(async ({ root, service, call }) => {
+    const game = path.join(root, "game");
+    fs.mkdirSync(game);
+    fs.writeFileSync(path.join(game, "project.godot"), '[application]\nconfig/name="Sync"\n');
+    await call("xsxb_bind_godot", { project_id: "b", project_root: game });
+    const store = createProjectStore(root);
+    const paths = store.projectPaths(store.activeProject("b"));
+    const original = fs.readFileSync(paths.tuning);
+    const targetManifest = path.join(game, "xsxb_frame_tuner/data/projects/b/animation_manifest.json");
+    const rename = fs.renameSync;
+    fs.renameSync = (source, target) => {
+      if (target === targetManifest) throw new Error("injected sync failure");
+      return rename(source, target);
+    };
+    let receipt;
+    try {
+      receipt = await service.callMcp("xsxb_sync_godot", { project_id: "b" });
+    } finally {
+      fs.renameSync = rename;
+    }
+    assert.equal(receipt.ok, false);
+    assert.equal(receipt.execution.effect, "partial");
+    assert.equal(receipt.error.details.localChangesSaved, false);
+    assert.deepEqual(fs.readFileSync(paths.tuning), original);
+    assert.equal((await service.callMcp("xsxb_sync_godot", { project_id: "b" })).ok, true);
+  });
+});

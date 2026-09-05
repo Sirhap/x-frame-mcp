@@ -137,6 +137,13 @@ function executionEffect(status) {
  */
 function successReceipt(tool, data, options = {}) {
   const raw = data && typeof data === "object" ? data : {};
+  const failedSync =
+    raw.sync?.requested === true && raw.sync.ok === false
+      ? raw.sync
+      : tool === "xsxb_sync_godot" && raw.requested === true && raw.ok === false
+        ? raw
+        : null;
+  if (failedSync) return syncFailureReceipt(tool, data, failedSync, options);
   const rawVerify = raw.verify && typeof raw.verify === "object" ? raw.verify : null;
   const previewOnly = raw.dryRun === true || raw.applied === false || raw.deleted === false;
   const execution = options.readOnly
@@ -195,12 +202,48 @@ function errorReceipt(tool, error) {
 }
 
 /**
+ * Preserves committed business data when the following Godot sync fails.
+ * @param {string} tool Tool being called.
+ * @param {object} data Completed handler result.
+ * @param {object} sync Failed synchronization result.
+ * @param {object} options Observation and route metadata.
+ * @returns {object} Partial error receipt with a sync-only recovery action.
+ */
+function syncFailureReceipt(tool, data, sync, options) {
+  const localChangesSaved = tool !== "xsxb_sync_godot";
+  const retry = { tool: "xsxb_sync_godot", arguments: { project_id: sync.projectId || data.projectId } };
+  const error = new Error(
+    `${localChangesSaved ? "Local changes saved; " : ""}Godot sync failed: ${sync.error?.message || sync.reason || "Unknown failure"}`,
+  );
+  error.code = "GODOT_SYNC_FAILED";
+  error.details = { localChangesSaved, godotMayBePartiallyUpdated: true, retry };
+  return {
+    ...errorReceipt(tool, error),
+    data,
+    observation: options.observation || null,
+    execution: {
+      effect: "partial",
+      route: "external_process",
+      artifacts: options.execution?.artifacts || [],
+    },
+    verification: { status: "unknown", checks: [{ stage: "godot_sync", ok: false }], evidence: [] },
+  };
+}
+
+/**
  * Produces a short human diagnostic without duplicating structuredContent.
  * @param {object} receipt V2 receipt.
  * @returns {string} Compact text content.
  */
 function receiptSummary(receipt) {
-  if (!receipt?.ok) return `${receipt?.tool || "xsxb"}: ${receipt?.error?.code || "error"}`;
+  if (!receipt?.ok) {
+    const summary = `${receipt?.tool || "xsxb"}: ${receipt?.error?.code || "error"}`;
+    if (receipt?.error?.code === "GODOT_SYNC_FAILED") {
+      const saved = receipt.error.details?.localChangesSaved ? "local changes saved; " : "";
+      return `${summary}; ${saved}retry xsxb_sync_godot only`;
+    }
+    return summary;
+  }
   const effect = receipt.execution?.effect;
   const parts = [`${receipt.tool}: ${effect || "ok"}`];
   const snapshotId = receipt.observation?.snapshotId;

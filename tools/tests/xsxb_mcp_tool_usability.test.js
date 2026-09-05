@@ -11,6 +11,11 @@ test("every MCP tool has an isolated usability probe and none fail", async () =>
     audit.results.map((row) => row.tool),
     MCP_TOOL_NAMES,
   );
+  assert.equal(audit.transport, "tools/call");
+  assert.ok(
+    audit.results.every((row) => row.publicCalls > 0),
+    "every ready verdict has public MCP evidence",
+  );
   assert.equal(audit.missing.length, 0);
   assert.equal(audit.counts.fail, 0, JSON.stringify(audit.results.filter((row) => row.status === "fail")));
   assert.equal(audit.counts.stub, 0, JSON.stringify(audit.results.filter((row) => row.status === "stub")));

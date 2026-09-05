@@ -65,10 +65,20 @@ See [`mcp/README.md`](mcp/README.md) for the tool playbook.
 ```bash
 npm start                 # stdio MCP server
 npm test                  # MCP unit tests
-npm run check             # syntax, Prettier, tests
+npm run check             # discover sources/tests; syntax, Prettier, tests
+npm run benchmark:mcp     # isolated 100/500-frame performance baseline
 npm run mcp:perception:install   # optional Florence-2 fallback
 npm run mcp:perception:doctor
 ```
+
+`npm test` and `npm run check` discover the same `tools/tests/**/*.test.js` files.
+Syntax checks visit every JavaScript and Python file under `mcp/` and `tools/`; vendored algorithms retain their upstream formatting. The legacy `check:mcp` and `check:mcp-v2` commands both run the complete check.
+
+The usability audit (`node mcp/xsxb_mcp_tool_usability.js`) exercises public JSON-RPC `tools/call` receipts, including explicit snapshot/overlay flows. GIF encoding and Tuner startup are stubbed and identified in the audit report.
+
+See [the measured performance baseline](docs/performance/mcp-baseline-2026-09-05.md) for scope, numbers, and next steps.
+
+See [authoring tools](mcp/authoring/README.md) for checkpoints/undo, animation copy/split/merge/rename, selective cutout, canvas edits, quality reports, and attachment interpolation.
 
 ## Layout
 

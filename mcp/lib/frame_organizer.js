@@ -76,6 +76,21 @@ function decodePngDataUrl(value) {
 }
 
 /**
+ * Reads one import frame while keeping inline data URLs backward-compatible.
+ * An explicit in-place source wins; otherwise inline data wins over sourcePath.
+ * @param {{data?:string,sourcePath?:string}} item Inline PNG or on-disk source.
+ * @param {number} index Zero-based frame index for diagnostics.
+ * @param {string} [inPlaceSource] Validated original path for in-place imports.
+ * @returns {{buffer:Buffer,dimensions:{width:number,height:number}}} One frame.
+ */
+function readImportFrame(item, index, inPlaceSource) {
+  const sourcePath = inPlaceSource || (item.data === undefined ? String(item.sourcePath || "").trim() : "");
+  const buffer = sourcePath ? fs.readFileSync(sourcePath) : decodePngDataUrl(item.data);
+  if (!buffer) throw new Error(`Frame ${index + 1} is not PNG image data.`);
+  return { buffer, dimensions: pngSize(buffer) };
+}
+
+/**
  * Mirrors saved box offsets and rotations for a horizontally flipped frame.
  * @param {object} boxes Frame box entry.
  * @returns {object}
@@ -380,17 +395,6 @@ function importAnimation(options) {
       })
     : [];
 
-  const buffers = items.map((item, index) => {
-    if (inPlace) {
-      const buffer = fs.readFileSync(sourcePaths[index]);
-      pngSize(buffer);
-      return buffer;
-    }
-    const buffer = decodePngDataUrl(item.data);
-    if (!buffer) throw new Error(`Frame ${index + 1} is not PNG image data.`);
-    pngSize(buffer);
-    return buffer;
-  });
   const paths = projectStore.projectPaths(project);
   const manifest = projectStore.readJson(paths.manifest, { schemaVersion: 1, profiles: [] });
   const tuning = projectStore.readJson(paths.tuning, {
@@ -476,7 +480,9 @@ function importAnimation(options) {
   try {
     const frameFiles = [];
     const usedFrameIds = new Set();
-    frames = buffers.map((buffer, index) => {
+    frames = items.map((item, index) => {
+      // Read and release one frame at a time; source paths need no base64 copy.
+      const { buffer, dimensions } = readImportFrame(item, index, sourcePaths[index]);
       const requestedFrameId = String(items[index]?.frameId || items[index]?.id || "")
         .replace(/[\u0000-\u001f]/g, "")
         .slice(0, 160);
@@ -497,7 +503,7 @@ function importAnimation(options) {
           path: storedImportPath(root, sourcePath),
           assetRevision: Math.max(0, Number(items[index]?.assetRevision) || 0),
           duration: 1,
-          ...pngSize(buffer),
+          ...dimensions,
         };
       }
       const frameName = `frame_${String(index + 1).padStart(4, "0")}.png`;
@@ -510,7 +516,7 @@ function importAnimation(options) {
         path: reslash(path.relative(root, path.join(targetDir, frameName))),
         assetRevision: Math.max(0, Number(items[index]?.assetRevision) || 0),
         duration: 1,
-        ...pngSize(buffer),
+        ...dimensions,
       };
     });
     const animationType = ["actor", "boss", "vfx", "prop", "scene_prop_attachment"].includes(

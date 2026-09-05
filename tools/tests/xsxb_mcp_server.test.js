@@ -827,7 +827,7 @@ test("xsxb_create_project with project_root stores files under that directory's 
   }
 });
 
-test("xsxb_bind_godot stores subsequent project files under the game .x-frame directory", async () => {
+test("xsxb_bind_godot preserves the existing authoring directory", async () => {
   const current = fixture();
   try {
     await current.service.call("xsxb_create_project", {
@@ -838,7 +838,7 @@ test("xsxb_bind_godot stores subsequent project files under the game .x-frame di
       project_id: "orphan",
       project_root: current.godotRoot,
     });
-    const frameRoot = path.join(current.godotRoot, ".x-frame");
+    const frameRoot = path.join(current.root, ".x-frame");
     assert.equal(path.resolve(bound.projectRoot), path.resolve(current.godotRoot));
     const snapshot = await current.service.call("xsxb_get_project", { project_id: "orphan" });
     assert.ok(snapshot.dataPath.startsWith(frameRoot));
@@ -959,8 +959,8 @@ test("import_video forwards optional start_time/duration and omits them for full
     assert.equal(seen.length, 2);
     assert.equal(seen[0].start_time, undefined);
     assert.equal(seen[0].duration, undefined);
-    assert.equal(seen[1].start_time, "1.6");
-    assert.equal(seen[1].duration, "0.8");
+    assert.equal(seen[1].start_time, 1.6);
+    assert.equal(seen[1].duration, 0.8);
     const fullArgs = videoExtractFfmpegArgs("/tmp/a.mp4", "/tmp/out/frame_%06d.png", {});
     assert.deepEqual(fullArgs, [
       "-hide_banner",

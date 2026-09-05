@@ -178,14 +178,15 @@ function frameStoreRoot(host) {
 /**
  * Resolves where one project's data and workspace live.
  * Files go under the host directory's `.x-frame/` (cwd / XSXB_ROOT, or an
- * explicit `project_root`). That host is any folder, not only a Godot game.
+ * explicit `project_root` at creation). `authoringRoot` stays fixed when the
+ * Godot binding changes; legacy records initially use their existing projectRoot.
  * @param {string} root MCP host directory.
- * @param {{projectRoot?:string}} project Registry project.
+ * @param {{authoringRoot?:string,projectRoot?:string}} project Registry project.
  * @returns {string} Absolute store root.
  */
 function projectStoreRoot(root, project) {
-  const projectRoot = String(project?.projectRoot || "").trim();
-  if (projectRoot) return frameStoreRoot(projectRoot);
+  const authoringRoot = String(project?.authoringRoot ?? project?.projectRoot ?? "").trim();
+  if (authoringRoot) return frameStoreRoot(authoringRoot);
   return frameStoreRoot(root);
 }
 
@@ -258,6 +259,8 @@ function normalizeProject(raw, usedIds, fallback) {
     label: String(source.label || source.name || id),
     kind: String(source.kind || "godot"),
     projectRoot: String(source.projectRoot || source.root || ""),
+    // Legacy records keep their original storage location when binding changes.
+    authoringRoot: String(source.authoringRoot ?? (source.projectRoot || source.root || "")),
     petRoot: String(source.petRoot || ""),
     dataDir: reslash(source.dataDir || `data/projects/${id}`),
     workspaceDir: reslash(source.workspaceDir || `workspace/projects/${id}`),
@@ -362,7 +365,9 @@ function createProjectStore(root) {
     }
 
     if (projectRoot) {
-      const existingByRoot = registry.projects.find((project) => samePath(project.projectRoot, projectRoot));
+      const existingByRoot = registry.projects.find((project) =>
+        samePath(project.authoringRoot ?? project.projectRoot, projectRoot),
+      );
       if (existingByRoot) {
         registry.activeProjectId = existingByRoot.id;
         return writeRegistry(registry);
@@ -386,6 +391,7 @@ function createProjectStore(root) {
       label,
       kind: String(payload.kind || "godot"),
       projectRoot,
+      authoringRoot: projectRoot,
       petRoot: String(payload.petRoot || ""),
       dataDir: `data/projects/${id}`,
       workspaceDir: `workspace/projects/${id}`,
@@ -402,6 +408,7 @@ function createProjectStore(root) {
       label: project.label,
       kind: project.kind || "godot",
       projectRoot: project.projectRoot,
+      authoringRoot: project.authoringRoot,
       petRoot: project.petRoot || "",
       dataDir: reslash(project.dataDir),
       workspaceDir: reslash(project.workspaceDir),

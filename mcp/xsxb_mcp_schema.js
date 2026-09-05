@@ -8,8 +8,8 @@
  * so a misspelled property was silently ignored and the tool quietly ran with
  * its defaults. This module closes that gap without narrowing what already
  * works: the handlers deliberately accept the stringified numbers and booleans
- * that agents send, so those keep passing. Only input that cannot be
- * interpreted at all is rejected.
+ * that agents send, so those keep passing and are normalized before dispatch.
+ * Invalid structural values are rejected instead of coerced into indexes or flags.
  */
 
 const BOOLEAN_WORDS = new Set(["true", "false", "yes", "no", "1", "0"]);
@@ -26,15 +26,13 @@ function typeOf(value) {
 }
 
 /**
- * Whether a value satisfies one declared property type, allowing the string and
- * numeric spellings the tool handlers already normalize.
- * @param {unknown} value Candidate value.
- * @param {string} expected Declared JSON Schema type.
- * @returns {boolean} Whether the value is usable as that type.
+ * Parses only numbers and numeric strings, including simple fractions.
+ * @param {unknown} value Raw argument.
+ * @returns {number} Parsed number or NaN for an invalid representation.
  */
 function parseNumeric(value) {
   if (typeof value === "number") return value;
-  if (typeof value !== "string") return Number(value);
+  if (typeof value !== "string") return NaN;
   const trimmed = value.trim();
   const fraction = trimmed.match(/^(\d+)\s*\/\s*(\d+)$/);
   if (fraction) {
@@ -44,31 +42,28 @@ function parseNumeric(value) {
   return trimmed ? Number(trimmed) : NaN;
 }
 
-function matchesType(value, expected) {
+/**
+ * Normalizes a scalar only after its representation is known to be valid.
+ * @param {unknown} value Raw argument.
+ * @param {string} expected Declared type.
+ * @returns {{valid:boolean,value:unknown}} Validation and canonical value.
+ */
+function normalizeScalar(value, expected) {
   const actual = typeOf(value);
-  if (expected === "string") return actual === "string";
-  if (expected === "array") return actual === "array";
-  if (expected === "object") return actual === "object";
   if (expected === "boolean") {
-    if (actual === "boolean") return true;
-    if (actual === "number") return value === 0 || value === 1;
-    return actual === "string" && BOOLEAN_WORDS.has(value.trim().toLowerCase());
+    if (actual === "boolean") return { valid: true, value };
+    if (actual === "number") return { valid: value === 0 || value === 1, value: value === 1 };
+    const word = actual === "string" ? value.trim().toLowerCase() : "";
+    return { valid: BOOLEAN_WORDS.has(word), value: ["true", "yes", "1"].includes(word) };
   }
   if (expected === "number" || expected === "integer") {
     const numeric = parseNumeric(value);
-    if (!Number.isFinite(numeric)) return false;
-    return expected === "number" || Number.isInteger(numeric);
+    return {
+      valid: Number.isFinite(numeric) && (expected === "number" || Number.isInteger(numeric)),
+      value: numeric,
+    };
   }
-  return true;
-}
-
-/**
- * Reads a declared numeric property as a number for bound checks.
- * @param {unknown} value Candidate value.
- * @returns {number} Parsed number, or NaN.
- */
-function asNumber(value) {
-  return parseNumeric(value);
+  return { valid: !expected || actual === expected, value };
 }
 
 /**
@@ -97,81 +92,77 @@ function closestName(unknown, candidates) {
 }
 
 /**
- * Validates one tool call's arguments against its declared input schema.
- * @param {string} toolName Tool being called.
- * @param {object} schema Declared input schema.
- * @param {object} args Caller-supplied arguments.
- * @returns {object} The same arguments, once they are known to be usable.
- * @throws {Error} When an argument is missing, unknown, or unusable.
+ * Validates and normalizes a declared value, including nested objects and arrays.
+ * Defaults remain the handler's responsibility; omitted fields stay omitted.
+ * @param {string} toolName Tool and nested object context.
+ * @param {object} schema Declared schema subset.
+ * @param {unknown} input Caller value, never mutated.
+ * @param {string} label Argument name used in errors.
+ * @returns {unknown} Canonical value.
  */
-function validateToolArguments(toolName, schema, args) {
-  const properties = schema?.properties || {};
-  const declared = Object.keys(properties);
-  /**
-   * Raises a validation failure naming the tool and the property at fault.
-   * @param {string} message Problem description.
-   * @returns {never}
-   */
+function normalizeValue(toolName, schema, input, label) {
+  /** Raises a machine-readable argument error before any tool side effect. */
   const reject = (message) => {
     const error = new Error(`${toolName}: ${message}`);
     error.code = "xsxb_invalid_arguments";
     throw error;
   };
-
-  for (const name of schema?.required || []) {
-    const value = args?.[name];
-    if (value === undefined || value === null || value === "") {
-      reject(`missing required argument "${name}".`);
+  const normalized = normalizeScalar(input, schema.type);
+  if (!normalized.valid) {
+    reject(`argument "${label}" must be ${schema.type}, received ${typeOf(input)}.`);
+  }
+  const value = normalized.value;
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+    reject(`argument "${label}" must be one of: ${schema.enum.join(", ")}. Received "${input}".`);
+  }
+  if (schema.minimum !== undefined && value < schema.minimum) {
+    reject(`argument "${label}" must be at least ${schema.minimum}. Received ${input}.`);
+  }
+  if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) {
+    reject(`argument "${label}" must be greater than ${schema.exclusiveMinimum}. Received ${input}.`);
+  }
+  if (schema.maximum !== undefined && value > schema.maximum) {
+    reject(`argument "${label}" must be at most ${schema.maximum}. Received ${input}.`);
+  }
+  if (Array.isArray(value) && schema.items) {
+    return value.map((item, index) => normalizeValue(toolName, schema.items, item, `${label}[${index}]`));
+  }
+  if (typeOf(value) !== "object") return value;
+  const properties = schema.properties || {};
+  const declared = Object.keys(properties);
+  for (const name of schema.required || []) {
+    if (value[name] === undefined || value[name] === null || value[name] === "") {
+      reject(`missing required argument "${name}" in ${label}.`);
     }
   }
-
-  for (const [name, value] of Object.entries(args || {})) {
-    const property = properties[name];
-    if (!property) {
-      if (schema?.additionalProperties !== false) continue;
+  const entries = Object.entries(value).map(([name, entry]) => {
+    const property = Object.hasOwn(properties, name) ? properties[name] : null;
+    if (!property && schema.additionalProperties === false) {
       const suggestion = closestName(name, declared);
       reject(
-        `unknown argument "${name}".${suggestion ? ` Did you mean "${suggestion}"?` : ""} ` +
+        `unknown argument "${name}" in ${label}.${suggestion ? ` Did you mean "${suggestion}"?` : ""} ` +
           `Accepted arguments: ${declared.length ? declared.join(", ") : "none"}.`,
       );
     }
-    // An omitted optional argument arrives as undefined from spread call sites.
-    if (value === undefined) continue;
-    if (property.type && !matchesType(value, property.type)) {
-      reject(`argument "${name}" must be ${property.type}, received ${typeOf(value)}.`);
-    }
-    if (Array.isArray(property.enum) && !property.enum.includes(value)) {
-      reject(`argument "${name}" must be one of: ${property.enum.join(", ")}. Received "${value}".`);
-    }
-    if (property.type === "array" && property.items) {
-      for (const [index, item] of value.entries()) {
-        if (property.items.type && !matchesType(item, property.items.type)) {
-          reject(`argument "${name}"[${index}] must be ${property.items.type}, received ${typeOf(item)}.`);
-        }
-        if (item && typeof item === "object" && !Array.isArray(item)) {
-          validateToolArguments(`${toolName}.${name}[${index}]`, property.items, item);
-        }
-      }
-    }
-    if (property.minimum !== undefined && asNumber(value) < property.minimum) {
-      reject(`argument "${name}" must be at least ${property.minimum}. Received ${value}.`);
-    }
-    if (property.exclusiveMinimum !== undefined && asNumber(value) <= property.exclusiveMinimum) {
-      reject(`argument "${name}" must be greater than ${property.exclusiveMinimum}. Received ${value}.`);
-    }
-    if (property.maximum !== undefined && asNumber(value) > property.maximum) {
-      reject(`argument "${name}" must be at most ${property.maximum}. Received ${value}.`);
-    }
-    if (
-      value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      (property.properties || property.additionalProperties === false)
-    ) {
-      validateToolArguments(`${toolName}.${name}`, property, value);
-    }
-  }
-  return args;
+    if (entry === undefined || !property) return [name, entry];
+    return [
+      name,
+      normalizeValue(toolName, property, entry, label === "arguments" ? name : `${label}.${name}`),
+    ];
+  });
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Validates arguments and returns a normalized copy for public and internal calls.
+ * @param {string} toolName Tool being called.
+ * @param {object} schema Declared input schema.
+ * @param {unknown} args Caller-supplied arguments.
+ * @returns {object} Normalized arguments without changing caller-owned objects.
+ * @throws {Error} When an argument is missing, unknown, or unusable.
+ */
+function validateToolArguments(toolName, schema, args) {
+  return normalizeValue(toolName, schema, args, "arguments");
 }
 
 module.exports = { validateToolArguments };

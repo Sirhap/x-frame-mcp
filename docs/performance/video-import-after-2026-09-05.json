@@ -1,0 +1,62 @@
+{
+  "generatedAt": "2026-09-05T11:30:48.399Z",
+  "node": "v22.12.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M3",
+  "workload": "Synthetic identical textured 512x512 sprites; stubbed FFmpeg extraction; warm local file cache; three observation samples. Not an end-to-end video benchmark.",
+  "results": [
+    {
+      "count": 100,
+      "dimensions": [512, 512],
+      "pngBytes": 340409,
+      "sourceMiB": 32.463932037353516,
+      "importMs": 755.159167,
+      "importPingMs": 755.192792,
+      "extractionCopyMs": 29.740166999999992,
+      "observationSamples": [
+        {
+          "toolMs": 43.397792000000095,
+          "pingMs": 43.44037500000002
+        },
+        {
+          "toolMs": 40.501292000000035,
+          "pingMs": 40.54683299999999
+        },
+        {
+          "toolMs": 39.684166000000005,
+          "pingMs": 39.71074999999996
+        }
+      ],
+      "pngReadsPerObservation": 200,
+      "pngMiBReadPerObservation": 64.92786407470703,
+      "peakRssMiB": 178.75
+    },
+    {
+      "count": 500,
+      "dimensions": [512, 512],
+      "pngBytes": 340409,
+      "sourceMiB": 162.31966018676758,
+      "importMs": 3707.46725,
+      "importPingMs": 3707.501083,
+      "extractionCopyMs": 185.71745900000002,
+      "observationSamples": [
+        {
+          "toolMs": 199.85616600000048,
+          "pingMs": 199.90054099999998
+        },
+        {
+          "toolMs": 194.54166700000042,
+          "pingMs": 194.57116700000006
+        },
+        {
+          "toolMs": 193.5744169999998,
+          "pingMs": 193.6102919999994
+        }
+      ],
+      "pngReadsPerObservation": 1000,
+      "pngMiBReadPerObservation": 324.63932037353516,
+      "peakRssMiB": 316.21875
+    }
+  ]
+}

@@ -58,7 +58,7 @@ Cursor **不会**展开 `${workspaceFolder}`。`args` 必须是指向 `mcp/xsxb_
 }
 ```
 
-省略 `XSXB_ROOT` 时，作者文件写在**当前工作目录**的 `.x-frame/`（和 AI 平时操作的项目目录一致，不必是 Godot）。`xsxb_create_project` / `xsxb_bind_godot` 带 `project_root` 时，写到那个目录的 `.x-frame/`。`xsxb_open_tuner` 另需 `XSXB_TUNER_ROOT` 指向带 `tools/animation_tuner/server.js` 的 Frame Tuner 仓。
+省略 `XSXB_ROOT` 时，作者文件写在**当前工作目录**的 `.x-frame/`（和 AI 平时操作的项目目录一致，不必是 Godot）。`xsxb_create_project` 带 `project_root` 时，写到那个目录的 `.x-frame/`。创作位置由注册表的 `authoringRoot` 保持稳定；`xsxb_bind_godot` 只更新 Godot 同步目标，不移动已有动画或切换创作目录。旧记录沿用原来的存储位置。`xsxb_open_tuner` 另需 `XSXB_TUNER_ROOT` 指向带 `tools/animation_tuner/server.js` 的 Frame Tuner 仓。
 
 命令行自检：
 
@@ -92,6 +92,8 @@ npm run mcp:start
 - 挂件/音效用 `file_path`。刀光 / `place_image` 不是走循环默认路径；攻击片才看 tool description 和 Skill。已过眼的参考（只作例子）：`exports/niulai-plunger-mcp/niulai-chop-crescent-trail-v4.gif`
 - `xsxb_open_tuner` 会在本机 Tuner 没起来时拉起服务
 - 默认项目用 `xsxb_set_active_project`
+- 切换项目会清空旧角色与动画选择；同一项目重新设为 active 保留当前选择。切换角色时不沿用前一个角色的动画。省略角色或动画时选取当前作用域内的默认项。
+- 本地修改已保存但 Godot 同步失败时，公开回执为 `ok=false`、`execution.effect=partial`、`error.code=GODOT_SYNC_FAILED`；`data` 保留本地操作结果，`error.details.localChangesSaved` 标明是否有已完成的本地操作。排除绑定或写入错误后，使用 `error.details.retry` 单独重试 `xsxb_sync_godot`，不要重复移帧或导入。Godot 文件可能已部分更新，重试会重新同步。兼容 `service.call` 调用者应检查返回的 `sync.ok`（单独同步则检查顶层 `ok`）。
 - 先改框和时长，再显式同步
 - 验证用 `layer=standalone|bind|gameplay`
 - 误导入先 `dry_run` 再删
@@ -105,3 +107,7 @@ npm run mcp:start
 `xsxb_list_projects` · `xsxb_get_project` · `xsxb_create_project` · `xsxb_set_active_project` · `xsxb_bind_godot` · `xsxb_import_animation` · `xsxb_import_video` · `xsxb_slice_sheet` · `xsxb_get_animation` · `xsxb_find_loop` · `xsxb_find_duplicates` · `xsxb_find_motion` · `xsxb_analyze` · `xsxb_cutout` · `xsxb_measure_frames` · `xsxb_register_clip` · `xsxb_estimate_visual` · `xsxb_set_visual_transform` · `xsxb_estimate_boxes` · `xsxb_update_frame_boxes` · `xsxb_update_timing` · `xsxb_replace_frame` · `xsxb_shift_frames` · `xsxb_plant_feet` · `xsxb_reorganize_frames` · `xsxb_add_attack_trail` · `xsxb_plan_smear` · `xsxb_add_attachment` · `xsxb_add_sfx` · `xsxb_remove_binding` · `xsxb_delete_animation` · `xsxb_sync_godot` · `xsxb_validate_project` · `xsxb_export_gif` · `xsxb_export_sheet` · `xsxb_export_overlay` · `xsxb_export_pack_slot` · `xsxb_measure_image` · `xsxb_detect_regions` · `xsxb_overlay_grid` · `xsxb_plan_place` · `xsxb_place_image` · `xsxb_open_tuner`
 
 工具只接受项目、角色、动画、帧等业务标识，不接受任意 Shell 或不受限文件路径。
+
+## 创作能力扩展
+
+新增版本保存／比较／恢复／撤销、动画复制／拆分／合并／重命名、指定帧抠图、画布边距、跨帧质检与附件插值。工具说明、参数示例和适用限制见 [authoring/README.md](authoring/README.md)。

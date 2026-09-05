@@ -117,7 +117,7 @@ test("get_animation include reads back boxes, timing, sfx, attachments, and trai
 
     await assert.rejects(
       current.service.call("xsxb_get_animation", { animation_id: "walk", include: ["nope"] }),
-      /Unknown include section/,
+      /include\[0\].*must be one of/,
     );
   } finally {
     current.cleanup();

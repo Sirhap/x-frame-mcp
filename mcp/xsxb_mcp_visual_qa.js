@@ -1392,7 +1392,7 @@ function drawMarkBorder(rgba, width, originX, originY, cell) {
 /**
  * Renders a contact sheet that scales every source canvas into a shared cell.
  * @param {Array<{data:Uint8ClampedArray,width:number,height:number}>} frames Source frames.
- * @param {{cell?:number,pad?:number,columns?:number,startIndex?:number,markFrame?:number,labels?:boolean}} [options] Layout.
+ * @param {{cell?:number,pad?:number,columns?:number,startIndex?:number,frameIndexes?:number[],markFrame?:number,labels?:boolean}} [options] Layout.
  * @returns {{data:Uint8ClampedArray,width:number,height:number}} Sheet.
  */
 function renderContactSheet(frames, options = {}) {
@@ -1421,7 +1421,7 @@ function renderContactSheet(frames, options = {}) {
     const column = index % columns;
     const originX = pad + column * (cell + pad);
     const originY = pad + row * (cell + pad);
-    const absoluteIndex = startIndex + index;
+    const absoluteIndex = options.frameIndexes?.[index] ?? startIndex + index;
     for (let y = 0; y < cell; y += 1) {
       for (let x = 0; x < cell; x += 1) {
         const checker = (Math.floor(x / 4) + Math.floor(y / 4)) % 2 === 0 ? 200 : 150;

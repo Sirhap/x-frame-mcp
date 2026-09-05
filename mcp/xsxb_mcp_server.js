@@ -65,7 +65,7 @@ async function handleMessage(message, service) {
       return success(id, {
         content: [{ type: "text", text: receiptSummary(result) }],
         structuredContent: result,
-        isError: false,
+        isError: result.ok === false,
       });
     } catch (error) {
       const result = errorReceipt(name, error);

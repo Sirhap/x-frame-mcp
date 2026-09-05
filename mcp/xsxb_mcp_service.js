@@ -16,6 +16,9 @@ const {
 const { deleteAnimation } = require("./lib/animation_mutations");
 const { frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
 const { importAnimation, reorganizeAnimation } = require("./lib/frame_organizer");
+const { withFileTransaction } = require("./lib/file_transaction");
+const { createAuthoringTools } = require("./authoring");
+const { frameIndexes } = require("./authoring/common");
 const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
@@ -266,6 +269,18 @@ function createXsxbMcpService(options = {}) {
   const context = { projectId: "", profileId: "", animationId: "" };
 
   /**
+   * Selects a project and clears child selections only when the project changes.
+   * @param {string} projectId Resolved project id.
+   * @returns {void}
+   */
+  function selectProject(projectId) {
+    if (context.projectId === projectId) return;
+    context.projectId = projectId;
+    context.profileId = "";
+    context.animationId = "";
+  }
+
+  /**
    * Resolves the active Tuner project's `.xsxb` folder for MCP artifacts.
    * @param {object} [project] Project record when already loaded.
    * @returns {string} Absolute artifact directory.
@@ -370,7 +385,7 @@ function createXsxbMcpService(options = {}) {
         `XSXB project ${project.id} Godot binding does not exist: ${boundPath}. Use xsxb_bind_godot to retarget.`,
       );
     }
-    context.projectId = project.id;
+    selectProject(project.id);
     return project;
   }
 
@@ -395,7 +410,8 @@ function createXsxbMcpService(options = {}) {
     const project = registryProject(args.project_id || args.project, false);
     const manifest = manifestFor(project);
     const profileId = String(args.profile_id || args.profile || context.profileId || "").trim();
-    const animationId = String(args.animation_id || args.animation || context.animationId || "").trim();
+    const previousAnimation = profileId === context.profileId ? context.animationId : "";
+    const animationId = String(args.animation_id || args.animation || previousAnimation || "").trim();
     const profiles = Array.isArray(manifest.profiles) ? manifest.profiles : [];
     const profile = profileId ? profiles.find((entry) => entry.id === profileId) : profiles[0];
     if (!profile) throw new Error(`Animation profile not found: ${profileId || "(default)"}`);
@@ -404,7 +420,7 @@ function createXsxbMcpService(options = {}) {
       ? animations.find((entry) => String(entry.id || entry.name) === animationId)
       : animations[0];
     if (!animation) throw new Error(`Animation not found: ${profile.id}/${animationId || "(default)"}`);
-    context.projectId = project.id;
+    selectProject(project.id);
     context.profileId = profile.id;
     context.animationId = String(animation.id || animation.name);
     return { project, manifest, profile, animation };
@@ -482,10 +498,33 @@ function createXsxbMcpService(options = {}) {
     };
   }
 
+  /**
+   * Synchronizes after a local commit without discarding the committed result.
+   * Failed synchronization can be retried without repeating the local mutation.
+   * @param {object} project Resolved project.
+   * @param {boolean} enabled Whether synchronization was requested.
+   * @param {object} options Godot synchronization options.
+   * @returns {object} Sync result, including a structured failure when necessary.
+   */
   function synchronize(project, enabled, options = {}) {
     if (enabled === false) return { requested: false, ok: null };
-    const result = syncGodotProject(root, projectStore, project, options);
-    return { requested: true, ...result };
+    try {
+      const result = syncGodotProject(root, projectStore, project, options);
+      if (result.ok) return { requested: true, ...result };
+      return {
+        requested: true,
+        ...result,
+        projectId: project.id,
+        error: { code: "GODOT_SYNC_FAILED", message: result.reason || "Godot synchronization failed." },
+      };
+    } catch (error) {
+      return {
+        requested: true,
+        ok: false,
+        projectId: project.id,
+        error: { code: "GODOT_SYNC_FAILED", message: error.message || String(error) },
+      };
+    }
   }
 
   async function createProject(args = {}) {
@@ -496,7 +535,7 @@ function createXsxbMcpService(options = {}) {
     if (existing) {
       if (setActive) {
         projectStore.setActiveProject(existing.id);
-        context.projectId = existing.id;
+        selectProject(existing.id);
       }
       return {
         created: false,
@@ -513,7 +552,7 @@ function createXsxbMcpService(options = {}) {
     if (!setActive && written.activeProjectId !== registry.activeProjectId && registry.activeProjectId) {
       projectStore.setActiveProject(registry.activeProjectId);
     } else {
-      context.projectId = project.id;
+      selectProject(project.id);
     }
     return {
       created: true,
@@ -581,7 +620,7 @@ function createXsxbMcpService(options = {}) {
       if (!extracted.paths.length) throw new Error("Video extraction produced no PNG frames.");
       const items = extracted.paths.map((framePath) => ({
         name: path.basename(framePath),
-        data: `data:image/png;base64,${fs.readFileSync(framePath).toString("base64")}`,
+        sourcePath: framePath,
       }));
       const imported = importAnimation({
         root,
@@ -596,7 +635,7 @@ function createXsxbMcpService(options = {}) {
         replace: replaced,
         items,
       });
-      context.projectId = project.id;
+      selectProject(project.id);
       context.profileId = profileId;
       context.animationId = animationId;
       const sync = synchronize(project, syncRequested);
@@ -687,7 +726,7 @@ function createXsxbMcpService(options = {}) {
       inPlace,
       items: importItems,
     });
-    context.projectId = project.id;
+    selectProject(project.id);
     context.profileId = profileId;
     context.animationId = animationId;
     const sync = synchronize(project, syncRequested);
@@ -1867,9 +1906,17 @@ function createXsxbMcpService(options = {}) {
     });
     const apply = booleanFlag(args.apply) && !booleanFlag(args.dry_run);
     if (apply) {
-      frames.forEach((frame, index) => {
-        const placed = scaleAboutFeet(frame.image, frame, plan.frames[index]);
-        fs.writeFileSync(filePaths[index], encodePngRgba(placed.data, placed.width, placed.height));
+      withFileTransaction((transaction) => {
+        frames.forEach((frame, index) => {
+          assertWritableAnimationFrame(
+            project,
+            animation,
+            filePaths[index],
+            `Register refused frame ${index} outside the project workspace.`,
+          );
+          const placed = scaleAboutFeet(frame.image, frame, plan.frames[index]);
+          transaction.writeFile(filePaths[index], encodePngRgba(placed.data, placed.width, placed.height));
+        });
       });
     }
     const after = apply
@@ -2024,7 +2071,7 @@ function createXsxbMcpService(options = {}) {
   function setActiveProject(args = {}) {
     const project = registryProject(args.project_id || args.project, false);
     projectStore.setActiveProject(project.id);
-    context.projectId = project.id;
+    selectProject(project.id);
     return { activeProjectId: project.id, project: projectStore.projectForClient(project) };
   }
 
@@ -2039,7 +2086,7 @@ function createXsxbMcpService(options = {}) {
       throw new Error(`Godot project.godot not found in ${projectRoot}`);
     }
     const updated = projectStore.setProjectRoot(project.id, projectRoot).project;
-    context.projectId = updated.id;
+    selectProject(updated.id);
     return {
       projectId: updated.id,
       projectRoot: updated.projectRoot,
@@ -2179,7 +2226,11 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function cutoutAnimation(args = {}) {
-    if (args.file_path) return cutoutStandalonePng(args);
+    if (args.file_path) {
+      if (args.frames !== undefined || args.start_frame !== undefined || args.end_frame !== undefined)
+        throw new Error("Standalone cutout does not accept frame selection.");
+      return cutoutStandalonePng(args);
+    }
     const selection = animationFor(args);
     const { project, profile, animation } = selection;
     const explicitCanvas = Number.isInteger(Number(args.output_width || args.canvas))
@@ -2196,9 +2247,16 @@ function createXsxbMcpService(options = {}) {
     const keyColor = args.key_color || args.color || undefined;
     const frames = Array.from(animation.frames || []);
     if (!frames.length) throw new Error("Cannot cut out an animation without frames.");
+    const indexes = frameIndexes(args, frames.length);
+    const selectedIndexes = new Set(indexes);
+    if (args.apply_visual && indexes.length !== frames.length)
+      throw new Error(
+        "Partial cutout cannot bake group visual transforms; omit apply_visual or process the full animation.",
+      );
     const jobs = [];
     const unsafePaths = [];
     for (const [index, frame] of frames.entries()) {
+      if (!selectedIndexes.has(index)) continue;
       const rawPath = String(frame.path || "");
       if (!rawPath) continue;
       const absolutePath = resolveAnimationFramePath(project, rawPath, animation);
@@ -2233,6 +2291,12 @@ function createXsxbMcpService(options = {}) {
       ?.animations?.find(
         (entry) => String(entry.id || entry.name) === String(animation.id || animation.name),
       );
+    const staging = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-cutout-batch-"));
+    const stagedJobs = jobs.map((job) => ({
+      ...job,
+      sourcePath: job.absolutePath,
+      absolutePath: path.join(staging, `${job.index}.png`),
+    }));
     let processedFrameCount = 0;
     let receipt = {
       pipeline: "smart_product",
@@ -2244,72 +2308,83 @@ function createXsxbMcpService(options = {}) {
     const fit = args.fit === undefined ? "none" : String(args.fit);
     const keyMode = String(args.key_mode || "smart");
     const receiptMode = String(args.receipt || "short");
-    if (cutoutPngFileImpl) {
-      for (const job of jobs) {
-        const temporaryPath = `${job.absolutePath}.cutout-tmp.png`;
-        await cutoutPngFileImpl(job.absolutePath, temporaryPath, {
-          ...collectWorkbenchExtras(args),
-          keyColor,
-          outputWidth,
-          outputHeight,
-          fit,
-          keyMode,
+    try {
+      for (const job of stagedJobs) fs.copyFileSync(job.sourcePath, job.absolutePath);
+      if (cutoutPngFileImpl) {
+        for (const job of stagedJobs) {
+          const temporaryPath = `${job.absolutePath}.cutout-tmp.png`;
+          await cutoutPngFileImpl(job.absolutePath, temporaryPath, {
+            ...collectWorkbenchExtras(args),
+            keyColor,
+            outputWidth,
+            outputHeight,
+            fit,
+            keyMode,
+          });
+          if (!fs.existsSync(temporaryPath)) {
+            throw new Error(`Cutout produced no file for frame ${job.index}: ${job.absolutePath}`);
+          }
+          fs.renameSync(temporaryPath, job.absolutePath);
+          processedFrameCount += 1;
+          if (stored?.frames?.[job.index] && outputWidth && outputHeight) {
+            stored.frames[job.index].width = outputWidth;
+            stored.frames[job.index].height = outputHeight;
+          }
+        }
+      } else {
+        receipt = cutoutFrameFiles(
+          stagedJobs.map((job) => job.absolutePath),
+          {
+            ...collectWorkbenchExtras(args),
+            keyColor,
+            outputWidth,
+            outputHeight,
+            force: booleanFlag(args.force),
+            frameScales: visualScales ? jobs.map((job) => visualScales[job.index]) : undefined,
+            fit,
+            keyMode,
+          },
+        );
+        processedFrameCount = receipt.processedFrameCount;
+        jobs.forEach((job, order) => {
+          if (!stored?.frames?.[job.index]) return;
+          const size = receipt.frameSizes?.[order];
+          if (!size) return;
+          stored.frames[job.index].width = size.width;
+          stored.frames[job.index].height = size.height;
         });
-        if (!fs.existsSync(temporaryPath)) {
-          throw new Error(`Cutout produced no file for frame ${job.index}: ${job.absolutePath}`);
-        }
-        fs.renameSync(temporaryPath, job.absolutePath);
-        processedFrameCount += 1;
-        if (stored?.frames?.[job.index] && outputWidth && outputHeight) {
-          stored.frames[job.index].width = outputWidth;
-          stored.frames[job.index].height = outputHeight;
-        }
       }
-    } else {
-      receipt = cutoutFrameFiles(
-        jobs.map((job) => job.absolutePath),
-        {
-          ...collectWorkbenchExtras(args),
-          keyColor,
-          outputWidth,
-          outputHeight,
-          force: booleanFlag(args.force),
-          frameScales: visualScales,
-          fit,
-          keyMode,
-        },
-      );
-      processedFrameCount = receipt.processedFrameCount;
-      jobs.forEach((job, order) => {
-        if (!stored?.frames?.[job.index]) return;
-        const size = receipt.frameSizes?.[order];
-        if (!size) return;
-        stored.frames[job.index].width = size.width;
-        stored.frames[job.index].height = size.height;
+      let updatedTuning = null;
+      if (applyVisual) {
+        const animationId = String(animation.id || animation.name);
+        const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);
+        tuning.values = tuning.values && typeof tuning.values === "object" ? tuning.values : {};
+        tuning.values[`profiles.${profile.id}.groups.${animationId}.visual_size`] = 1;
+        delete tuning.values[`profiles.${profile.id}.groups.${animationId}.visual_scale`];
+        const overrides =
+          tuning.frame_visual_overrides && typeof tuning.frame_visual_overrides === "object"
+            ? tuning.frame_visual_overrides
+            : {};
+        const prefix = `${frameBoxKey(profile.id, animationId, 0).replace(/:0$/, ":")}`;
+        for (const key of Object.keys(overrides)) {
+          if (!key.startsWith(prefix)) continue;
+          const current = overrides[key] && typeof overrides[key] === "object" ? overrides[key] : {};
+          delete current.visual_size;
+          delete current.visual_scale;
+          if (!Object.keys(current).length) delete overrides[key];
+          else overrides[key] = current;
+        }
+        tuning.frame_visual_overrides = overrides;
+        updatedTuning = tuning;
+      }
+      withFileTransaction((transaction) => {
+        for (const job of stagedJobs)
+          transaction.writeFile(job.sourcePath, fs.readFileSync(job.absolutePath));
+        transaction.writeJson(paths.manifest, manifest);
+        if (updatedTuning) transaction.writeJson(paths.tuning, updatedTuning);
       });
-    }
-    projectStore.writeJson(paths.manifest, manifest);
-    if (applyVisual) {
-      const animationId = String(animation.id || animation.name);
-      const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);
-      tuning.values = tuning.values && typeof tuning.values === "object" ? tuning.values : {};
-      tuning.values[`profiles.${profile.id}.groups.${animationId}.visual_size`] = 1;
-      delete tuning.values[`profiles.${profile.id}.groups.${animationId}.visual_scale`];
-      const overrides =
-        tuning.frame_visual_overrides && typeof tuning.frame_visual_overrides === "object"
-          ? tuning.frame_visual_overrides
-          : {};
-      const prefix = `${frameBoxKey(profile.id, animationId, 0).replace(/:0$/, ":")}`;
-      for (const key of Object.keys(overrides)) {
-        if (!key.startsWith(prefix)) continue;
-        const current = overrides[key] && typeof overrides[key] === "object" ? overrides[key] : {};
-        delete current.visual_size;
-        delete current.visual_scale;
-        if (!Object.keys(current).length) delete overrides[key];
-        else overrides[key] = current;
-      }
-      tuning.frame_visual_overrides = overrides;
-      projectStore.writeJson(paths.tuning, tuning);
+    } finally {
+      fs.rmSync(staging, { recursive: true, force: true });
     }
     let inspectFeet = null;
     const lookCell = Math.min(
@@ -2353,7 +2428,7 @@ function createXsxbMcpService(options = {}) {
       const lookSheet = renderContactSheet(lookFrames, {
         cell: lookCell,
         pad: 8,
-        columns: Math.min(frames.length, 8),
+        columns: Math.min(jobs.length, 8),
         grid: false,
         normalize: "none",
         labels: false,
@@ -2395,6 +2470,8 @@ function createXsxbMcpService(options = {}) {
       outputWidth: receipt.outputWidth || outputWidth || 0,
       outputHeight: receipt.outputHeight || outputHeight || 0,
       frameCount: frames.length,
+      selectedFrames: indexes,
+      selectedFrameCount: jobs.length,
       processedFrameCount,
       skippedFrameCount: Number(receipt.skippedFrameCount || 0),
       verify: {
@@ -2403,7 +2480,7 @@ function createXsxbMcpService(options = {}) {
           keyed: Boolean(receipt.keyed),
           processedFrameCount,
           skippedFrameCount: Number(receipt.skippedFrameCount || 0),
-          frameCount: frames.length,
+          frameCount: jobs.length,
         }),
       },
       preview,
@@ -2951,6 +3028,11 @@ function createXsxbMcpService(options = {}) {
     };
   }
 
+  /**
+   * Stages ordered frame shifts and commits their pixels and dimensions together.
+   * @param {object} args Animation selector and per-frame shifts.
+   * @returns {object} Committed shift receipt.
+   */
   function shiftFrames(args = {}) {
     const selection = animationFor(args);
     const { project, manifest, profile, animation } = selection;
@@ -2960,54 +3042,54 @@ function createXsxbMcpService(options = {}) {
     if (!rawShifts.length) throw new Error("frames is required; each entry needs frame plus dx and/or dy.");
     const shifted = [];
     let sizeChanged = false;
-    for (const entry of rawShifts) {
-      if (!entry || typeof entry !== "object") continue;
-      if (entry.frame === undefined) throw new Error("Each shift entry needs frame.");
-      const index = requireFrameIndex(entry.frame, frames.length - 1);
-      const target = resolveAnimationFramePath(project, frames[index].path, animation);
-      assertWritableAnimationFrame(
-        project,
-        animation,
-        target,
-        `Shift refused frame ${index} outside the project workspace.`,
-      );
-      if (!fs.existsSync(target)) throw new Error(`Shift refused missing on-disk frame ${index}.`);
-      const image = decodePngRgba(target);
-      const pointOptions = writePointOptions(animation, frames[index], args, image);
-      const from = parseWritePoint(entry.from, { ...pointOptions, label: "from" });
-      const to = parseWritePoint(entry.to, { ...pointOptions, label: "to" });
-      let dx = Math.trunc(Number(entry.dx) || 0);
-      let dy = Math.trunc(Number(entry.dy) || 0);
-      if (from || to) {
-        if (!from || !to) throw new Error("Each shift entry with from/to needs both group points.");
-        dx = Math.trunc(to.x - from.x);
-        dy = Math.trunc(to.y - from.y);
+    withFileTransaction((transaction) => {
+      for (const entry of rawShifts) {
+        if (!entry || typeof entry !== "object") continue;
+        if (entry.frame === undefined) throw new Error("Each shift entry needs frame.");
+        const index = requireFrameIndex(entry.frame, frames.length - 1);
+        const target = resolveAnimationFramePath(project, frames[index].path, animation);
+        assertWritableAnimationFrame(
+          project,
+          animation,
+          target,
+          `Shift refused frame ${index} outside the project workspace.`,
+        );
+        if (!fs.existsSync(target)) throw new Error(`Shift refused missing on-disk frame ${index}.`);
+        const image = decodePngRgba(transaction.readPath(target));
+        const pointOptions = writePointOptions(animation, frames[index], args, image);
+        const from = parseWritePoint(entry.from, { ...pointOptions, label: "from" });
+        const to = parseWritePoint(entry.to, { ...pointOptions, label: "to" });
+        let dx = Math.trunc(Number(entry.dx) || 0);
+        let dy = Math.trunc(Number(entry.dy) || 0);
+        if (from || to) {
+          if (!from || !to) throw new Error("Each shift entry with from/to needs both group points.");
+          dx = Math.trunc(to.x - from.x);
+          dy = Math.trunc(to.y - from.y);
+        }
+        if (dx === 0 && dy === 0) {
+          shifted.push({ frame: index, dx: 0, dy: 0, skipped: true });
+          continue;
+        }
+        const geometry = measureSpriteGeometry(image.data, image.width, image.height);
+        const destMaxY = Number(geometry.maxY) + dy;
+        const outHeight = Math.max(image.height, destMaxY + 1);
+        const next = shiftPlantedRgba(image.data, image.width, image.height, dx, dy, outHeight);
+        transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
+        if (
+          Number(frames[index].width || 0) !== image.width ||
+          Number(frames[index].height || 0) !== outHeight
+        ) {
+          frames[index].width = image.width;
+          frames[index].height = outHeight;
+          sizeChanged = true;
+        }
+        shifted.push({ frame: index, dx, dy, width: image.width, height: outHeight });
       }
-      if (dx === 0 && dy === 0) {
-        shifted.push({ frame: index, dx: 0, dy: 0, skipped: true });
-        continue;
+      if (!shifted.length) throw new Error("frames is required; each entry needs frame plus dx and/or dy.");
+      if (sizeChanged) {
+        transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
       }
-      const geometry = measureSpriteGeometry(image.data, image.width, image.height);
-      const destMaxY = Number(geometry.maxY) + dy;
-      const outHeight = Math.max(image.height, destMaxY + 1);
-      const next = shiftPlantedRgba(image.data, image.width, image.height, dx, dy, outHeight);
-      const tempPath = `${target}.tmp-${process.pid}`;
-      fs.writeFileSync(tempPath, encodePngRgba(next, image.width, outHeight));
-      fs.renameSync(tempPath, target);
-      if (
-        Number(frames[index].width || 0) !== image.width ||
-        Number(frames[index].height || 0) !== outHeight
-      ) {
-        frames[index].width = image.width;
-        frames[index].height = outHeight;
-        sizeChanged = true;
-      }
-      shifted.push({ frame: index, dx, dy, width: image.width, height: outHeight });
-    }
-    if (!shifted.length) throw new Error("frames is required; each entry needs frame plus dx and/or dy.");
-    if (sizeChanged) {
-      projectStore.writeJson(projectStore.projectPaths(project).manifest, manifest);
-    }
+    });
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3040,43 +3122,43 @@ function createXsxbMcpService(options = {}) {
     const apply = booleanFlag(args.apply) && !booleanFlag(args.dry_run);
     const receipts = [];
     let sizeChanged = false;
-    for (const index of indexes) {
-      const target = resolveAnimationFramePath(project, frames[index].path, animation);
-      assertWritableAnimationFrame(
-        project,
-        animation,
-        target,
-        `Plant refused frame ${index} outside the project workspace.`,
-      );
-      if (!fs.existsSync(target)) throw new Error(`Plant refused missing on-disk frame ${index}.`);
-      const image = decodePngRgba(target);
-      const planned = planPlantFeet(image.data, image.width, image.height, {
-        targetY: args.target_y,
-        to: args.to,
-        ...writePointOptions(animation, frames[index], args, image),
-      });
-      const outHeight = Math.max(image.height, Number(planned.outHeight) || image.height);
-      if (apply && (planned.dy !== 0 || outHeight > image.height)) {
-        const next = shiftPlantedRgba(image.data, image.width, image.height, 0, planned.dy, outHeight);
-        const tempPath = `${target}.tmp-${process.pid}`;
-        fs.writeFileSync(tempPath, encodePngRgba(next, image.width, outHeight));
-        fs.renameSync(tempPath, target);
-      }
-      if (apply) {
-        if (
-          Number(frames[index].width || 0) !== image.width ||
-          Number(frames[index].height || 0) !== outHeight
-        ) {
-          frames[index].width = image.width;
-          frames[index].height = outHeight;
-          sizeChanged = true;
+    withFileTransaction((transaction) => {
+      for (const index of indexes) {
+        const target = resolveAnimationFramePath(project, frames[index].path, animation);
+        assertWritableAnimationFrame(
+          project,
+          animation,
+          target,
+          `Plant refused frame ${index} outside the project workspace.`,
+        );
+        if (!fs.existsSync(target)) throw new Error(`Plant refused missing on-disk frame ${index}.`);
+        const image = decodePngRgba(transaction.readPath(target));
+        const planned = planPlantFeet(image.data, image.width, image.height, {
+          targetY: args.target_y,
+          to: args.to,
+          ...writePointOptions(animation, frames[index], args, image),
+        });
+        const outHeight = Math.max(image.height, Number(planned.outHeight) || image.height);
+        if (apply && (planned.dy !== 0 || outHeight > image.height)) {
+          const next = shiftPlantedRgba(image.data, image.width, image.height, 0, planned.dy, outHeight);
+          transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
         }
+        if (apply) {
+          if (
+            Number(frames[index].width || 0) !== image.width ||
+            Number(frames[index].height || 0) !== outHeight
+          ) {
+            frames[index].width = image.width;
+            frames[index].height = outHeight;
+            sizeChanged = true;
+          }
+        }
+        receipts.push({ index, feetY: planned.feetY, dy: planned.dy, targetY: planned.targetY });
       }
-      receipts.push({ index, feetY: planned.feetY, dy: planned.dy, targetY: planned.targetY });
-    }
-    if (apply && sizeChanged) {
-      projectStore.writeJson(projectStore.projectPaths(project).manifest, manifest);
-    }
+      if (apply && sizeChanged) {
+        transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
+      }
+    });
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3632,7 +3714,23 @@ function createXsxbMcpService(options = {}) {
     return compilePlaceBrief(args, { root, artifactDir: currentArtifactDir() });
   }
 
+  const authoring = createAuthoringTools({
+    root,
+    projectStore,
+    animationFor,
+    registryProject,
+    currentArtifactDir,
+    resolveAnimationFramePath,
+    assertWritableAnimationFrame,
+    synchronize,
+    clearAnimationSelection() {
+      context.profileId = "";
+      context.animationId = "";
+    },
+  });
+
   const handlers = {
+    ...authoring.handlers,
     xsxb_list_projects: listProjects,
     xsxb_get_project: projectSnapshot,
     xsxb_create_project: createProject,
@@ -3694,9 +3792,7 @@ function createXsxbMcpService(options = {}) {
     if (!MCP_TOOL_NAMES.includes(name) || !handlers[name]) {
       throw new Error(`Unknown XSXB MCP tool: ${name}`);
     }
-    const callArgs = args && typeof args === "object" && !Array.isArray(args) ? args : {};
-    validateToolArguments(name, schemas.get(name), callArgs);
-    return callArgs;
+    return validateToolArguments(name, schemas.get(name), args);
   }
 
   /**
@@ -3815,7 +3911,15 @@ function createXsxbMcpService(options = {}) {
       observationTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths
         ? animationObservation(callArgs)
         : null;
-    const raw = await handlers[name](callArgs);
+    const checkpoint = authoring.checkpoint(name, callArgs);
+    let raw;
+    let revisionId;
+    try {
+      raw = await handlers[name](callArgs);
+    } finally {
+      revisionId = authoring.finishCheckpoint(checkpoint);
+    }
+    if (revisionId && raw && typeof raw === "object") raw.revisionId = revisionId;
     const definition = definitions.get(name);
     const metadata = raw && typeof raw === "object" ? raw.__mcp || {} : {};
     let observation = metadata.observation || null;
