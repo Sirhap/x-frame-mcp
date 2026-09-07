@@ -287,7 +287,7 @@ test("auto perception degrades cleanly and explicit Florence requires an install
     const source = spriteFixture();
     const filePath = path.join(root, "sprite.png");
     fs.writeFileSync(filePath, encodePngRgba(source.data, source.width, source.height));
-    const service = createXsxbMcpService({ root });
+    const service = createXsxbMcpService({ root, florenceDetectImpl: null });
     const automatic = await service.callMcp("xsxb_detect_regions", {
       file_path: filePath,
       provider: "auto",

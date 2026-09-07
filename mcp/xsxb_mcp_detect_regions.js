@@ -128,8 +128,59 @@ function groundingOverlap(modelBox, component) {
   return (intersectionWidth * intersectionHeight) / Math.max(1, (x2 - x1) * (y2 - y1));
 }
 
+const SUBJECT_LABEL = /person|character|human|figure|warrior|hero|dog|animal|cat|bird|人物|角色|人形|狗/iu;
+const WEAPON_LABEL = /sword|blade|weapon|spear|gun|axe|bow|staff|shield|剑|刀|武器/iu;
+const ACCESSORY_LABEL = /sunglasses|glasses|goggles|hat|helmet|tie|crown|mask|necktie/iu;
+
+/**
+ * Classifies a Florence caption into a code hypothesis family.
+ * @param {string} label Model caption.
+ * @returns {"subject"|"weapon"|"accessory"|"other"}
+ */
+function labelKind(label) {
+  if (SUBJECT_LABEL.test(label)) return "subject";
+  if (WEAPON_LABEL.test(label)) return "weapon";
+  if (ACCESSORY_LABEL.test(label)) return "accessory";
+  return "other";
+}
+
+/**
+ * Scores how well a caption family belongs on one code hypothesis.
+ * @param {"subject"|"weapon"|"accessory"|"other"} kind Caption family.
+ * @param {string} hypothesis Code hypothesis.
+ * @returns {number} Higher is a better home.
+ */
+function labelAffinity(kind, hypothesis) {
+  if (kind === "subject" && hypothesis === "subject") return 2;
+  if (kind === "weapon" && hypothesis === "elongated_attachment") return 2;
+  if (kind === "accessory" && hypothesis !== "subject") return 1;
+  return 0;
+}
+
+/**
+ * Appends a unique caption onto a fused candidate.
+ * @param {object} candidate Public candidate.
+ * @param {string} label Caption.
+ * @returns {void}
+ */
+function attachSemanticLabel(candidate, label) {
+  const existing = String(candidate.semanticLabel || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!existing.includes(label)) existing.push(label);
+  candidate.semanticLabel = existing.join("; ");
+  if (!candidate.evidence.includes("florence_label_grounded_by_code")) {
+    candidate.evidence.push("florence_label_grounded_by_code");
+  }
+  if (!candidate.provenance.includes("local_florence")) candidate.provenance.push("local_florence");
+}
+
 /**
  * Attaches Florence labels only to code-grounded geometry.
+ * Weapon captions prefer a detached blade blob; character captions prefer the
+ * subject. Object captions may label a lone high-confidence subject when no
+ * better-typed blob exists on that frame.
  * @param {object} code Code perception result.
  * @param {object} response Florence response.
  * @returns {{candidates:object[],model:object}}
@@ -142,34 +193,44 @@ function fuseFlorence(code, response) {
   }));
   const rejected = [];
   for (const detection of response?.detections || []) {
-    let bestIndex = -1;
-    let bestOverlap = 0;
+    const label = String(detection.label || "").trim();
+    const detectionFrame = Number.isInteger(Number(detection.frame)) ? Number(detection.frame) : 0;
+    const kind = labelKind(label);
+    const matches = [];
     code.internalCandidates.forEach((candidate, index) => {
-      const detectionFrame = Number.isInteger(Number(detection.frame)) ? Number(detection.frame) : 0;
       const candidateFrame = Number.isInteger(Number(code.candidates[index]?.frame))
         ? Number(code.candidates[index].frame)
         : 0;
       if (candidateFrame !== detectionFrame) return;
       const overlap = groundingOverlap(detection.bbox, candidate.component);
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        bestIndex = index;
-      }
+      if (overlap < 0.25) return;
+      matches.push({
+        index,
+        overlap,
+        affinity: labelAffinity(kind, candidates[index].hypothesis),
+      });
     });
-    const label = String(detection.label || "").trim();
-    if (bestIndex < 0 || bestOverlap < 0.25 || !label) {
+    matches.sort((left, right) => right.affinity - left.affinity || right.overlap - left.overlap);
+    const best = matches[0];
+    if (!best || !label) {
       rejected.push({ label: label || null, reason: "code_geometry_conflict" });
       continue;
     }
-    const selected = candidates[bestIndex];
-    const subjectLabel = /person|character|human|figure|warrior|hero|人物|角色|人形/iu.test(label);
-    if (selected.hypothesis === "subject" && selected.codeConfidence >= 0.8 && !subjectLabel) {
+    const selected = candidates[best.index];
+    const hasBlade = candidates.some((candidate) => {
+      const candidateFrame = Number.isInteger(Number(candidate.frame)) ? Number(candidate.frame) : 0;
+      return candidateFrame === detectionFrame && candidate.hypothesis === "elongated_attachment";
+    });
+    if (
+      selected.hypothesis === "subject" &&
+      selected.codeConfidence >= 0.8 &&
+      kind === "weapon" &&
+      hasBlade
+    ) {
       rejected.push({ label, reason: "high_confidence_subject_conflict" });
       continue;
     }
-    selected.semanticLabel = label;
-    selected.evidence.push("florence_label_grounded_by_code");
-    selected.provenance.push("local_florence");
+    attachSemanticLabel(selected, label);
   }
   return {
     candidates,
