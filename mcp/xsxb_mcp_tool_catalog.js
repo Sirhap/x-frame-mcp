@@ -774,8 +774,13 @@ function toolDefinitions() {
           },
           apply: {
             type: "boolean",
-            default: false,
-            description: "Write group and zoom-frame visual_size. Does not bake pixels.",
+            description:
+              "true commits visual_size; false forces preview. Omit both apply and dry_run to preview. Does not bake pixels.",
+          },
+          dry_run: {
+            type: "boolean",
+            description:
+              "true forces preview; false commits unless apply is false. Omit both flags to preview.",
           },
           sync: { type: "boolean", default: false },
         },
@@ -855,10 +860,14 @@ function toolDefinitions() {
           },
           dry_run: {
             type: "boolean",
-            default: false,
-            description: "Return the plan without writing pixels.",
+            description:
+              "true forces preview; false commits unless apply is false. Omit both flags to preview.",
           },
-          apply: { type: "boolean", default: false, description: "Bake the lock into workspace PNGs." },
+          apply: {
+            type: "boolean",
+            description:
+              "true bakes the lock into workspace PNGs unless dry_run is true; false forces preview.",
+          },
         },
         additionalProperties: false,
       },
@@ -867,7 +876,7 @@ function toolDefinitions() {
     {
       name: "xsxb_reorganize_frames",
       description:
-        "Atomically reorganize animation frames and remap frame-owned tuning, audio, attachment, and attack-trail state. Defaults to an identity organization test.",
+        "Preview frame reordering and remapping of frame-owned tuning, audio, attachments, and trails; dry_run:false commits atomically and sync:true explicitly synchronizes Godot.",
       inputSchema: {
         type: "object",
         properties: {
@@ -883,7 +892,12 @@ function toolDefinitions() {
             default: "none",
             description: "duplicate_first appends source frame 0 after the given order.",
           },
-          sync: { type: "boolean", default: true },
+          dry_run: {
+            type: "boolean",
+            default: true,
+            description: "Preview the output order; false commits the reorganization.",
+          },
+          sync: { type: "boolean", default: false },
         },
         additionalProperties: false,
       },
@@ -909,7 +923,7 @@ function toolDefinitions() {
     {
       name: "xsxb_shift_frames",
       description:
-        "Translate selected workspace frame PNGs without resampling. Does not scale — lock height with xsxb_register_clip. For walk-loop sole planting without computing dx/dy, prefer xsxb_plant_feet. dx/dy and from/to are group coordinates, the same numbers as the overlay ticks (1 unit = 1 source pixel). from/to also accept overlay cell ids (E5 / e5 / {cell:E5}) resolved from the frame PNG size plus grid_divs/grid_density/grid_scope (same auto grid as export_sheet); do not OCR overlay digits. from+to moves that group point onto the destination. Positive dy plants the subject down toward the foot origin. Yellow 0,0 is outside the bitmap — last pixel row is group y=-1; do not plant soles to 0,0 or they clip 1px. Plant the sole to y=-1. metrics.feetY is the boot sole and ignores connected bright slash/glow below it; still confirm on the overlay before planting. This tool is already in the catalog (MCP_TOOL_NAMES / tools/list); if a client reports it not found, the session catalog is stale — reload the xsxb MCP server. Do not skip planting or convert overlay numbers to canvas pixels. grid_divs / grid_density already work on xsxb_export_sheet / xsxb_cutout. Use after reading xsxb_export_sheet or xsxb_cutout inspectFeet; do not guess boot colors. Source canvas size stays the same.",
+        "Translate frame PNGs without resampling or scaling; coordinates use overlay group units (or cell ids). Positive dy moves down; plant soles at y=-1, never 0,0. Use xsxb_register_clip for height and xsxb_plant_feet for automatic planting; stale catalogs should be reloaded.",
       inputSchema: {
         type: "object",
         required: ["frames"],
@@ -977,13 +991,12 @@ function toolDefinitions() {
           },
           dry_run: {
             type: "boolean",
-            default: true,
-            description: "Return the plant table without writing pixels. Default true unless apply is true.",
+            description:
+              "true forces preview; false commits unless apply is false. Omit both flags to preview.",
           },
           apply: {
             type: "boolean",
-            default: false,
-            description: "Write the translate into workspace PNGs.",
+            description: "true writes the translation unless dry_run is true; false forces preview.",
           },
           ...gridOverlayProperties,
           sync: { type: "boolean", default: false },
@@ -1002,8 +1015,8 @@ function toolDefinitions() {
           ...animationProperties,
           dry_run: {
             type: "boolean",
-            default: false,
-            description: "Preview byte savings without writing files.",
+            default: true,
+            description: "Preview byte savings by default; false writes smaller files.",
           },
           start_frame: { type: "integer", minimum: 0, description: "Inclusive 0-based frame index." },
           end_frame: { type: "integer", minimum: 0, description: "Inclusive 0-based frame index." },
@@ -1015,7 +1028,7 @@ function toolDefinitions() {
     {
       name: "xsxb_add_attack_trail",
       description:
-        "Walk/run loops: do not use this (still-frame / smear only). Add or replace one attack-trail segment. path_kind polyline stores sticks but forbids the Hermite mesh (GIF/sheet bake skip it); smooth_arc may use the mesh only when that arc already matches. Sticks are blade edges (top=tip, bottom=grip) on one swing: start frame when the blade starts moving, end frame at the hit, a mid stick only if the arc bends. layer is behind while the blade is behind the body and front when it is in front. reverseDirection flips the curve handle if the ribbon folds through the body. Path length follows the faster blade edge, so a rotating slash still makes a trailing smear. Auto sticks start at the first frame and end at the last. before_stop_chase defaults to 0.12 so a slash-plus-settle still keeps the slash (拖影); 0 fills the whole swing; 1 hugs the current blade. Receipts include frameSpan, centerTravel, edgeTravel. xsxb_export_gif and xsxb_export_sheet bake the smear onto the preview. Omitting sticks writes a default two-stick trail. color is the striking-mass or a user-named hex — do not hardcode red. Use this mesh only when the sampled weapon-head path is already a smooth arc that matches the intended smear. Do not default to Hermite sticks when the head path is a polyline that should still read as a sickle (牛来 downward chop across-then-vertical, e.g. D1→G3 then H8, is one traced case; 上挑 clips can fail the same way): that curve is a 7字折杆, a diagonal slice, or a column plus hook, and tangentStrength / reverseDirection / extra mid sticks will not make a 月牙. Read the smear from this clip: overlay or sheet the frames and trace the striking-mass cells — do not pick a canned chop or 上挑 recipe. The generic playbook is only the skeleton. Before painting, call xsxb_plan_smear with the motion you read, path_kind, sampled color, and lock per-frame start and end cells (plus head); execute receipt.brief (the clip-specific prompt). Lock start = far cell already swept; end = leading/outer side of the striking face — do not pin the head on the striking-mass cell. Keep the band tight: layer behind (hairline readable cup). Reject a full-grid-cell void. Paint a 像素层 月牙/镰刀 along those locked cells (not overlapping the weapon): GenerateImage a hollow ribbon in the smear color → xsxb_cutout white, protect those smear colors → xsxb_place_image cell anchors on committed-strike frames. Validated reference (example only, not a recipe): 牛来 downward chop polyline D1→G3 then H8, files niulai-chop-crescent-trail-v4.gif / niulai-chop-crescent-trail-v4-sheet.png. Human inspect sheets pass grid=false.",
+        "Add or replace a still-frame attack-trail segment with blade-edge sticks, layer, color, and optional reverseDirection. Use smooth_arc only for truly curved motion; walk/run loops should use other tools and pixel-layer crescents belong to place_image.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1084,7 +1097,7 @@ function toolDefinitions() {
             },
           },
           ...gridOverlayProperties,
-          sync: { type: "boolean", default: true },
+          sync: { type: "boolean", default: false },
         },
         additionalProperties: false,
       },
@@ -1189,7 +1202,7 @@ function toolDefinitions() {
           scale: { type: "number", default: 1 },
           rotation: { type: "number", default: 0 },
           ...gridOverlayProperties,
-          sync: { type: "boolean", default: true },
+          sync: { type: "boolean", default: false },
         },
         required: ["file_path"],
         additionalProperties: false,
@@ -1208,7 +1221,7 @@ function toolDefinitions() {
           frame: { type: "integer", minimum: 0, default: 0 },
           id: { type: "string" },
           name: { type: "string" },
-          sync: { type: "boolean", default: true },
+          sync: { type: "boolean", default: false },
         },
         required: ["file_path"],
         additionalProperties: false,
@@ -1232,7 +1245,7 @@ function toolDefinitions() {
             description: "Only remove the binding on this frame. Not applicable to trails.",
           },
           dry_run: { type: "boolean", default: false },
-          sync: { type: "boolean", default: true },
+          sync: { type: "boolean", default: false },
         },
         additionalProperties: false,
       },
@@ -1314,7 +1327,7 @@ function toolDefinitions() {
     {
       name: "xsxb_cutout",
       description:
-        "Run the tuner smart-cutout product path on every animation frame, or on one standalone workspace PNG via file_path. Animation-frame cutout through MCP requires basis_snapshot_id from xsxb_get_animation/xsxb_analyze; success returns a new observation of the keyed frames. Slider names and ranges match the cutout workbench; omit them to keep the shared smart-cutout profile. Omitting the canvas keeps the source layout. fit=fill_canvas shares one scale and pins body feet to the bottom (old default — do not use it to lock idle height). Default fit=none keeps native size. receipt=short (default) returns metrics plus sheetPath without inspectFeet.grid; receipt=full keeps the overlay grid. key_mode=border_flood keys generated white or black plates from the border (pass key_color #000000 for a black studio plate). Look at receipt.preview.path (magenta flatten) to confirm dark clothes remain — do not use the default planted contact sheet as character QA. apply_visual rematches from group/frame visual_size instead of one shared scale and the receipt sets appliedVisual. Character visual_size stays playback-only and is not baked. inspectFeet overlay uses the same grid_divs / grid_density as export_sheet. metrics.feetY is the boot sole and ignores connected bright slash/glow below the boots; confirm on the overlay before planting. Yellow 0,0 is outside the bitmap — plant the sole to y=-1, not 0,0. For a generated white-background 月牙/镰刀 VFX, key the white and protect the smear colors with protected_colors (sample the striking mass or use the named hex; do not hardcode red) before xsxb_place_image. That 像素层 trail is not an xsxb_add_attack_trail mesh job. Walk loops do not need smear/place.",
+        "Run smart cutout on animation frames or one workspace PNG. Writes require basis_snapshot_id; fit=none preserves layout and keyed frames are skipped. Use border_flood for white/black plates, protected_colors for 月牙 VFX, and inspect receipt.preview.path (magenta flatten; feetY stays visible).",
       inputSchema: {
         type: "object",
         properties: {
@@ -1444,7 +1457,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_sheet",
       description:
-        "Export a contact sheet PNG. normalize=none (default) and normalize=feet keep one pixel scale and plant soles on one line — do not use per-cell fit for height QA. normalize=cell is the old stretch-every-canvas-into-the-cell mode for planting grids. The sheet paints an overlay grid (lines follow grid_density/grid_divs) plus row/col indices matching receipt grid.cells[row][col] (row 0 = top, col 0 = left; x,y is that square's top-left group corner). Group coordinates are code-generated in that JSON and grid.legend — do not OCR overlay digits. Yellow 0,0 and last-pixel -1 are landmarks. Last pixel row is group y=-1 — plant soles there, not to 0,0. Receipt lastPixel names that row. metrics.feetY is the boot sole and ignores connected bright slash/glow below it. Pass grid_density, grid_divs like 8x8, or grid_x/grid_y, and grid_scope canvas|subject — AI fills these; omit to keep the auto step. Source animation PNGs are unchanged. Receipt JSON repeats origin, step, divs, ticks, labels, lastPixel, xLines, yLines, cells, and legend. mark_frame highlights one cell for a second cull pass. output_path may be absolute outside the XSXB root. Inspect a 月牙 trail here when GIF playback is hard to read: accept a continuous bow, reject a 7字/slice. When the sheet is for a human to look at the animation (not planting), pass grid=false so 0,0 / -1 ticks stay off the PNG: blit 1:1 from the canvas origin so pixels below feetY stay visible; omitted cell grows to the frame edge.",
+        "Export a contact sheet PNG without changing source frames. normalize=none|feet preserves scale; normalize=cell stretches into cells. Optional grid settings annotate group cells; use grid=false for clean 月牙/feetY QA.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1743,7 +1756,7 @@ function toolDefinitions() {
     {
       name: "xsxb_place_image",
       description:
-        "Walk/run loops: do not use this (still-frame / smear only). Composite one PNG onto another using generic cell/alpha anchors. For agent-led still composites, call xsxb_plan_place first and execute receipt.brief; pass that plan_id when the brief issued one. target_anchor is {view,cells,derive} or {x_from,y_from} each with view/cells/derive; add snap (default alpha_centroid when cells are named without derive) and optional nudge {dx,dy}. Agent-led calls MUST pass overlay_id from xsxb_overlay_grid; mismatch is STALE_OVERLAY. object_anchor is alpha_center|alpha_centroid|alpha_bottom_center|alpha_support, cells+derive, cells+snap on the grip, or measure_t. Prefer snap alpha_centroid on named contact cells. Receipt.resolved lists MCP pixel coordinates (debug only — not next-call input); inspect verify.status and verify_overlay_path. scale is none, relative (target view+cells, span width|height, ratio), or physical (span, target_m, object_m, object_span bbox_width|bbox_height) from the selected span — never image width per meter. Aspect mismatch scales one edge and warns; it does not stretch. layer front (default) paints the object on top; behind restores every opaque target pixel; under_target restores opaque target pixels only inside the target_anchor cell union so a grip can sit in a palm while the blade stays in front outside that box. rotation is clockwise degrees around the object anchor (screen y-down). Held objects: do not leave source-upright (rotation 0 is the generated PNG). Point the mass/striking end along the figure's facing, shaft with the forearm, scale from the body span not canvas 1:1, grip on the handle, under_target in the palm. xsxb_place_image does not redraw a hand. If the head clips the canvas, pad the target or grip closer to the head. output_path must stay inside the XSXB root. 月牙/镰刀 VFX: after xsxb_plan_smear, place the cut-out 像素层 on committed-strike frames with cell anchors from that brief (not canvas-pixel math). Start = far cell already swept; end = leading/outer side of the striking face — do not pin the head on the striking-mass cell or the ribbon overlaps the cup/shaft. layer behind so opaque weapon pixels stay readable (hairline); reject a full-grid-cell void. Do not send a polyline/7字 path to xsxb_add_attack_trail.",
+        "Composite one PNG onto another using cell or alpha anchors; require overlay_id and prefer xsxb_plan_place. Choose scale from the body span, align held objects to the forearm, and rotate generated source-upright art; place_image does not redraw a hand and clipped heads need padding. output_path stays inside XSXB root.",
       inputSchema: {
         type: "object",
         required: ["target_path", "object_path", "target_anchor", "object_anchor"],

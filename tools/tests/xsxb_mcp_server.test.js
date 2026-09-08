@@ -151,48 +151,37 @@ test("stdio transport disposes its service when input closes", async () => {
   assert.equal(closeCalls, 1);
 });
 
-test("INSTRUCTIONS and shift_frames name last-pixel planting and a stale catalog", () => {
+test("instructions and shift_frames name last-pixel planting and a stale catalog", () => {
   const shift = toolDefinitions().find((entry) => entry.name === "xsxb_shift_frames");
+  const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
   assert.ok(shift, "xsxb_shift_frames is a catalog tool");
-  for (const [label, text] of [
-    ["INSTRUCTIONS", INSTRUCTIONS],
-    ["xsxb_shift_frames", shift.description],
-  ]) {
-    assert.match(text, /y=-1/, `${label} must name last-pixel group y=-1`);
-    assert.match(
-      text,
-      /do not plant[^.]{0,80}0,0|not plant[^.]{0,80}0,0/,
-      `${label} must forbid planting to 0,0`,
-    );
-    assert.match(text, /stale/, `${label} must call a missing shift_frames a stale catalog`);
-    assert.match(text, /reload/i, `${label} must say reload the xsxb MCP server`);
-    assert.match(
-      text,
-      /ignores connected bright slash/,
-      `${label} must say feetY ignores connected slash/glow`,
-    );
-  }
-  assert.match(INSTRUCTIONS, /cells\[row\]\[col\]/, "INSTRUCTIONS must point at the 2d grid.cells lookup");
-  assert.match(INSTRUCTIONS, /do not OCR/i, "INSTRUCTIONS must say not to OCR overlay digits");
-  assert.match(INSTRUCTIONS, /xsxb_analyze/, "INSTRUCTIONS must use one-pass analyze after import");
+  assert.match(INSTRUCTIONS, /y=-1/);
+  assert.match(INSTRUCTIONS, /not 0,0/);
+  assert.match(shift.description, /stale/);
+  assert.match(shift.description, /reload/i);
+  assert.match(plant.description, /ignores connected bright slash/);
+  assert.match(shift.description, /y=-1/);
+  assert.match(shift.description, /never 0,0/);
+  assert.match(INSTRUCTIONS, /do not OCR/i, "instructions must say not to OCR overlay digits");
+  assert.match(INSTRUCTIONS, /xsxb_analyze/, "instructions must use one-pass analyze after import");
   assert.match(
     INSTRUCTIONS,
     /do not export_sheet every candidate|preview\.path/i,
-    "INSTRUCTIONS must not send agents through per-candidate sheets by default",
+    "instructions must not send agents through per-candidate sheets by default",
   );
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
-  assert.match(sheet.description, /cells\[row\]\[col\]/);
-  assert.match(sheet.description, /do not OCR/i);
+  assert.match(sheet.description, /group cells/);
+  assert.match(sheet.description, /grid=false/);
 });
 
-test("INSTRUCTIONS and skill name session process: goal, todo, check after each step", () => {
-  assert.match(INSTRUCTIONS, /one sentence|user goal/i, "INSTRUCTIONS must start from the stated user goal");
-  assert.match(INSTRUCTIONS, /\btodo\b/i, "INSTRUCTIONS must require an ordered todo for multi-step work");
-  assert.match(INSTRUCTIONS, /after each/i, "INSTRUCTIONS must check after each mutating step");
+test("instructions and skill name session process: goal, todo, check after each step", () => {
+  assert.match(INSTRUCTIONS, /one sentence|user goal/i, "instructions must start from the stated user goal");
+  assert.match(INSTRUCTIONS, /\btodo\b/i, "instructions must require an ordered todo for multi-step work");
+  assert.match(INSTRUCTIONS, /after each/i, "instructions must check after each mutating step");
   assert.match(
     INSTRUCTIONS,
     /stop and fix|do not continue the playbook/i,
-    "INSTRUCTIONS must stop the playbook when the eye fails",
+    "instructions must stop the playbook when the eye fails",
   );
   const skill = fs.readFileSync(path.join(__dirname, "../../skills/xsxb-frame-tuner/SKILL.md"), "utf8");
   assert.match(skill, /MCP 工程流程/);
@@ -200,99 +189,38 @@ test("INSTRUCTIONS and skill name session process: goal, todo, check after each 
   assert.match(skill, /preview\.path/);
 });
 
-test("INSTRUCTIONS and cutout/sheet name black plates and magenta look previews", () => {
+test("instructions and cutout/sheet name black plates and magenta look previews", () => {
   const cutout = toolDefinitions().find((entry) => entry.name === "xsxb_cutout");
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.match(
     INSTRUCTIONS,
     /white or black|black or white|white\/black|black\/white|black plates/i,
-    "INSTRUCTIONS must name generated black plates, not only white",
+    "instructions must name generated black plates, not only white",
   );
   assert.match(cutout.description, /preview\.path/, "xsxb_cutout must send the eye to preview.path");
   assert.match(cutout.description, /magenta/i, "xsxb_cutout preview is a magenta flatten");
   assert.match(cutout.description, /black/i, "xsxb_cutout must name generated black plates");
-  assert.match(
-    sheet.description,
-    /canvas origin|below feet|feetY below|full canvas/i,
-    "human sheets must not plant-crop pixels below feetY",
-  );
+  assert.match(sheet.description, /grid=false/);
+  assert.match(sheet.description, /normalize=none\|feet preserves scale/);
 });
 
-test("INSTRUCTIONS and trail/place/cutout name the crescent pixel-layer playbook", () => {
+test("concise tools retain routing constraints and workflow docs retain the crescent playbook", () => {
   const trail = toolDefinitions().find((entry) => entry.name === "xsxb_add_attack_trail");
   const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
   const cutout = toolDefinitions().find((entry) => entry.name === "xsxb_cutout");
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.ok(trail && place && cutout && gif && sheet);
-  for (const [label, text] of [["xsxb_add_attack_trail", trail.description]]) {
-    assert.match(text, /月牙/, `${label} must name 月牙`);
-    assert.match(text, /像素层/, `${label} must name 像素层`);
-    assert.match(text, /7字/, `${label} must name the 7字 failure`);
-    assert.match(text, /smooth arc/, `${label} must say when the mesh is allowed`);
-    assert.match(
-      text,
-      /do not default to (that mesh|Hermite)/i,
-      `${label} must forbid Hermite mesh as the default on a polyline path`,
-    );
-    assert.match(text, /do not hardcode red/i, `${label} must keep smear color generic, not plunger-red`);
-    assert.match(text, /smear color|sample.{0,80}color/i, `${label} must sample smear color`);
-    assert.match(text, /上挑/, `${label} must still name 上挑 as something you can read from frames`);
-    assert.match(
-      text,
-      /trace the striking-mass|trace.{0,60}striking-mass/i,
-      `${label} must read the smear arc from this clip's weapon motion`,
-    );
-    assert.doesNotMatch(
-      text,
-      /high→forward→down|chop bows high/i,
-      `${label} must not ship a canned chop/挑 arc recipe`,
-    );
-    assert.match(
-      text,
-      /start and end cells|lock per-frame start/i,
-      `${label} must lock smear start/end cells before painting`,
-    );
-    assert.match(
-      text,
-      /do not pin the head on the striking/i,
-      `${label} must not pin the smear head on the weapon`,
-    );
-    assert.match(
-      text,
-      /xsxb_plan_smear/,
-      `${label} must compile a clip-specific smear brief before painting`,
-    );
-    assert.match(text, /skeleton/, `${label} must treat the generic playbook as a skeleton`);
-    assert.match(text, /receipt\.brief|clip-specific prompt/i, `${label} must execute the compiled brief`);
-    assert.match(text, /layer behind/i, `${label} must keep the weapon readable via layer behind`);
-    assert.match(text, /hairline|not overlapping the weapon/i, `${label} must keep smear off the weapon`);
-    assert.doesNotMatch(text, /one gap off/, `${label} must not tell the agent to skip a full grid cell`);
-    assert.doesNotMatch(text, /head at the current striking mass/, `${label} must not pin onto the cup`);
-    assert.match(text, /crescent-trail-v4/, `${label} must cite the validated smear reference`);
-    assert.match(
-      text,
-      /grid=false|grid: false/i,
-      `${label} must inspect human sheets without the origin overlay`,
-    );
-  }
-  assert.match(place.description, /月牙/, "xsxb_place_image must cross-ref the 月牙 playbook");
-  assert.match(place.description, /xsxb_add_attack_trail/, "xsxb_place_image must point away from the mesh");
-  assert.doesNotMatch(
-    place.description,
-    /head at the current striking mass/,
-    "xsxb_place_image must not pin the smear onto the cup",
-  );
-  assert.match(cutout.description, /月牙/, "xsxb_cutout must cross-ref the 月牙 playbook");
+  assert.match(trail.description, /smooth_arc only for truly curved motion/);
+  assert.match(trail.description, /pixel-layer crescents belong to place_image/);
+  assert.match(place.description, /require overlay_id/);
+  assert.match(place.description, /xsxb_plan_place/);
+  assert.match(place.description, /output_path stays inside XSXB root/);
   assert.match(cutout.description, /protected_colors/, "xsxb_cutout must protect smear colors");
-  assert.match(
-    cutout.description,
-    /do not hardcode red|smear color|striking mass/i,
-    "xsxb_cutout must not treat red as the only VFX color",
-  );
-  assert.doesNotMatch(cutout.description, /protect the red/, "xsxb_cutout must not hardcode protect-the-red");
+  assert.equal(cutout.inputSchema.properties.protected_colors.type, "array");
+  assert.equal(cutout.inputSchema.properties.protected_colors.items.type, "string");
   assert.match(gif.description, /export_sheet|sheet/, "xsxb_export_gif must send crescent QA to a sheet");
-  assert.match(sheet.description, /月牙|7字/, "xsxb_export_sheet must be the crescent vs 7字 eye check");
+  assert.match(sheet.description, /grid=false/);
   const skillRoot = path.join(__dirname, "../../skills/xsxb-frame-tuner");
   const skill = fs.readFileSync(path.join(skillRoot, "SKILL.md"), "utf8");
   const workflows = fs.readFileSync(path.join(skillRoot, "references/media-and-tuning-workflows.md"), "utf8");
@@ -423,6 +351,46 @@ test("STDIO transport answers unparsable lines and keeps serving the next reques
   assert.deepEqual(responses[1].result, {});
 });
 
+test("STDIO transport answers ping without waiting behind a queued business call", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = "";
+  output.on("data", (chunk) => {
+    text += chunk.toString();
+  });
+  let release;
+  const blocked = new Promise((resolve) => {
+    release = resolve;
+  });
+  const lines = startServer({
+    input,
+    output,
+    service: {
+      tools: toolDefinitions(),
+      call: async () => {
+        await blocked;
+        return { ok: true };
+      },
+    },
+  });
+
+  input.write(
+    `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "xsxb_list_projects", arguments: {} },
+    })}\n`,
+  );
+  input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(text.trim()), { jsonrpc: "2.0", id: 2, result: {} });
+
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  lines.close();
+});
+
 test("STDIO server accepts newline-delimited JSON-RPC", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
@@ -551,23 +519,23 @@ test("XSXB MCP service executes the complete mutation workflow", async () => {
     assert.equal(animation.generatedFrameCount, 3);
     assert.equal(animation.allFramesGenerated, true);
 
-    const trail = await current.service.call("xsxb_add_attack_trail");
+    const trail = await current.service.call("xsxb_add_attack_trail", { sync: true });
     assert.equal(trail.segment.sticks.length, 2);
     assert.equal(trail.sync.ok, true);
 
     const spark = path.join(current.root, "spark.png");
     fs.writeFileSync(spark, ONE_PIXEL_PNG);
-    const attachment = await current.service.call("xsxb_add_attachment", { file_path: spark });
+    const attachment = await current.service.call("xsxb_add_attachment", { file_path: spark, sync: true });
     assert.equal(attachment.binding.key, "mcp_imports/source:0");
     assert.equal(attachment.sync.imageAttachmentCount, 1);
 
     const hit = path.join(current.root, "hit.wav");
     fs.writeFileSync(hit, createTestWav());
-    const sfx = await current.service.call("xsxb_add_sfx", { file_path: hit });
+    const sfx = await current.service.call("xsxb_add_sfx", { file_path: hit, sync: true });
     assert.equal(sfx.binding.type, "audio/wav");
     assert.equal(sfx.sync.audioCount, 1);
 
-    const reorganized = await current.service.call("xsxb_reorganize_frames");
+    const reorganized = await current.service.call("xsxb_reorganize_frames", { dry_run: false });
     assert.equal(reorganized.outputFrameCount, 3);
     assert.equal(reorganized.identityOrder, true);
 
@@ -1106,6 +1074,7 @@ test("reorganize duplicated frames receive unique ids", async () => {
     const reorganized = await current.service.call("xsxb_reorganize_frames", {
       animation_id: "walk",
       order: [0, 0, 1],
+      dry_run: false,
       basis_snapshot_id: observation.observation.snapshotId,
       sync: false,
     });

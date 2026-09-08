@@ -114,59 +114,67 @@ test("a valid argument set passes", () => {
   );
 });
 
-test("attack-trail stick schema names blade edges, layer, and reverseDirection", () => {
+test("attack-trail catalog keeps its purpose, motion constraint, and stick interface", () => {
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_add_attack_trail");
   const stick = tool.inputSchema.properties.sticks.items;
-  assert.match(tool.description, /blade|刀刃/i);
-  assert.match(tool.description, /layer/i);
-  assert.match(tool.description, /export_gif|GIF/i);
-  assert.match(tool.description, /bake/i);
-  assert.doesNotMatch(tool.description, /do not bake/i);
-  assert.match(tool.description, /月牙/);
-  assert.match(tool.description, /像素层/);
-  assert.match(tool.description, /7字/);
-  assert.match(tool.description, /smooth arc/);
-  assert.match(tool.description, /do not default to (that mesh|Hermite)/i);
-  assert.match(tool.description, /do not hardcode red/i);
-  assert.match(tool.description, /上挑/);
-  assert.match(tool.description, /trace the striking-mass|trace.{0,60}striking-mass/i);
-  assert.doesNotMatch(tool.description, /high→forward→down|chop bows high/i);
-  assert.match(tool.description, /do not pin the head on the striking/i);
-  assert.match(tool.description, /xsxb_plan_smear/);
-  assert.doesNotMatch(tool.description, /one gap off/);
-  assert.doesNotMatch(tool.description, /head at the current striking mass/);
+  assert.match(tool.description, /attack-trail/i);
+  assert.match(tool.description, /blade-edge/i);
+  assert.match(tool.description, /smooth_arc only for truly curved motion/);
+  assert.match(tool.description, /pixel-layer crescents belong to place_image/);
+  assert.deepEqual(tool.inputSchema.properties.path_kind.enum, ["polyline", "smooth_arc"]);
+  assert.equal(stick.type, "object");
+  assert.equal(stick.properties.frame.type, "integer");
+  assert.match(stick.properties.top.description, /blade tip/i);
+  assert.match(stick.properties.bottom.description, /blade grip/i);
+  assert.deepEqual(stick.properties.layer.enum, ["behind", "front"]);
+  assert.equal(stick.properties.reverseDirection.type, "boolean");
+});
+
+test("export catalog describes previews and preserves sheet scale and grid options", () => {
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.match(gif.description, /trail/i);
-  assert.match(sheet.description, /trail/i);
+  assert.match(sheet.description, /contact sheet PNG/i);
+  assert.match(sheet.description, /without changing source frames/i);
+  assert.match(sheet.description, /normalize=none\|feet preserves scale/);
+  assert.match(sheet.description, /normalize=cell stretches/);
   assert.equal(gif.annotations.readOnlyHint, false, "GIF export writes a file");
   assert.equal(sheet.annotations.readOnlyHint, false, "sheet export writes a file");
-  const shift = toolDefinitions().find((entry) => entry.name === "xsxb_shift_frames");
-  assert.match(shift.description, /positive dy/i);
-  assert.match(shift.description, /export_sheet|inspectFeet/i);
-  assert.match(shift.description, /from|group/i);
-  assert.match(shift.description, /y=-1/);
-  assert.match(shift.description, /do not plant[^.]{0,80}0,0/);
-  assert.match(shift.description, /ignores connected bright slash/);
-  assert.match(shift.description, /stale/);
-  assert.match(shift.inputSchema.properties.frames.items.properties.to.description, /y=-1/);
-  assert.equal(shift.inputSchema.required.includes("frames"), true);
-  assert.ok(shift.inputSchema.properties.frames.items.properties.from);
-  assert.ok(shift.inputSchema.properties.frames.items.properties.to);
-  assert.ok(sheet.inputSchema.properties.grid_density);
-  assert.ok(sheet.inputSchema.properties.grid_divs);
-  assert.ok(sheet.inputSchema.properties.grid_scope);
+  assert.deepEqual(sheet.inputSchema.properties.normalize.enum, ["none", "feet", "height", "cell"]);
+  assert.equal(sheet.inputSchema.properties.normalize.default, "none");
+  assert.equal(sheet.inputSchema.properties.grid.type, "boolean");
+  assert.equal(sheet.inputSchema.properties.grid_divs.type, "string");
   assert.deepEqual(sheet.inputSchema.properties.grid_density.enum, ["sparse", "normal", "dense"]);
   assert.deepEqual(sheet.inputSchema.properties.grid_scope.enum, ["canvas", "subject"]);
+});
+
+test("shift catalog retains translation constraints and frame coordinate inputs", () => {
+  const shift = toolDefinitions().find((entry) => entry.name === "xsxb_shift_frames");
+  assert.match(shift.description, /without resampling or scaling/i);
+  assert.match(shift.description, /positive dy moves down/i);
+  assert.match(shift.description, /overlay group units/i);
+  assert.match(shift.description, /y=-1/);
+  assert.match(shift.description, /never 0,0/);
+  assert.match(shift.inputSchema.properties.frames.items.properties.to.description, /y=-1/);
+  assert.deepEqual(shift.inputSchema.required, ["frames"]);
+  assert.ok(shift.inputSchema.properties.frames.items.properties.from);
+  assert.ok(shift.inputSchema.properties.frames.items.properties.to);
+  assert.equal(shift.inputSchema.properties.frames.items.properties.dx.type, "integer");
+  assert.equal(shift.inputSchema.properties.frames.items.properties.dy.type, "integer");
+});
+
+test("plant_feet and shift_frames retain planting observation and stale-catalog recovery", () => {
+  const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
+  const shift = toolDefinitions().find((entry) => entry.name === "xsxb_shift_frames");
+  assert.match(plant.description, /lock height with xsxb_register_clip/);
+  assert.match(plant.description, /metrics\.feetY is the boot sole and ignores connected bright slash/);
+  assert.match(shift.description, /stale catalogs should be reloaded/);
+});
+
+test("attachment schema accepts a hand coordinate and handle fraction", () => {
   const attach = toolDefinitions().find((entry) => entry.name === "xsxb_add_attachment");
   assert.ok(attach.inputSchema.properties.hand);
   assert.ok(attach.inputSchema.properties.t);
-  assert.equal(stick.type, "object");
-  assert.ok(stick.properties.frame);
-  assert.ok(stick.properties.top);
-  assert.ok(stick.properties.bottom);
-  assert.deepEqual(stick.properties.layer.enum, ["behind", "front"]);
-  assert.equal(stick.properties.reverseDirection.type, "boolean");
 });
 
 test("unknown grid overlay argument names the closest declared name", () => {

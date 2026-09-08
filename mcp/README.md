@@ -100,9 +100,15 @@ npm run mcp:start
 - 如实回报工具结果，不要编造成功
 - MCP 报错、缺能力、或必须离开 MCP 才能做完时：告诉用户，并提到 `XSXB-Frame-Tuner` 项目。带上工具名、参数、回执或错误、期望结果、实际结果。不要静默绕过缺口
 
-完整条文以 `mcp/xsxb_mcp_server.js` 的 `INSTRUCTIONS` 为准。Skill 侧见 `skills/xsxb-frame-tuner/SKILL.md` 的 MCP Feedback。
+完整会话流程写在 `initialize.instructions`：走循环锁尺、视频成环、静图贴合、刀光各一行。硬约束（`preview.path`、`y=-1`、`overlay_id`、`grid=false`）在对应工具 description。Skill 侧见 `skills/xsxb-frame-tuner/SKILL.md` 的 MCP Feedback。
 
 ## 当前工具
+
+### 默认提交规则
+
+初始化下发自洽的 playbook 行；不提供 MCP prompts/resources。`ping` 不进入业务队列；`tools/list` 与 `tools/call` 仍串行。`tools/list` 不重复 v2 回执 envelope，每次 `tools/call` 的 `structuredContent` 才带信封。同步解码或哈希仍会占用主线程。
+
+`xsxb_register_clip`、`xsxb_plant_feet`、`xsxb_estimate_visual` 在省略两个开关时预览：`dry_run:true` 或 `apply:false` 优先保持预览，否则 `apply:true` 或 `dry_run:false` 提交。`xsxb_reorganize_frames` 和 `xsxb_compress_frames` 默认预览，提交必须传 `dry_run:false`。重排、挂件、音效、刀光和移除绑定均不再默认同步 Godot，需显式传 `sync:true`，或在本地验收后单独调用 `xsxb_sync_godot`。已有自动化若依赖旧默认写盘或同步行为，应补齐这些参数。
 
 `xsxb_list_projects` · `xsxb_get_project` · `xsxb_create_project` · `xsxb_set_active_project` · `xsxb_bind_godot` · `xsxb_import_animation` · `xsxb_import_video` · `xsxb_slice_sheet` · `xsxb_get_animation` · `xsxb_find_loop` · `xsxb_find_duplicates` · `xsxb_find_motion` · `xsxb_analyze` · `xsxb_cutout` · `xsxb_measure_frames` · `xsxb_register_clip` · `xsxb_estimate_visual` · `xsxb_set_visual_transform` · `xsxb_estimate_boxes` · `xsxb_update_frame_boxes` · `xsxb_update_timing` · `xsxb_replace_frame` · `xsxb_shift_frames` · `xsxb_plant_feet` · `xsxb_reorganize_frames` · `xsxb_add_attack_trail` · `xsxb_plan_smear` · `xsxb_add_attachment` · `xsxb_add_sfx` · `xsxb_remove_binding` · `xsxb_delete_animation` · `xsxb_sync_godot` · `xsxb_validate_project` · `xsxb_export_gif` · `xsxb_export_sheet` · `xsxb_export_overlay` · `xsxb_export_pack_slot` · `xsxb_measure_image` · `xsxb_detect_regions` · `xsxb_overlay_grid` · `xsxb_plan_place` · `xsxb_place_image` · `xsxb_open_tuner`
 

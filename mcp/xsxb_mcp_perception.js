@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { connectedHandCandidates } = require("./xsxb_mcp_hand_candidates");
 
 const ALPHA_VISIBLE = 16;
 const PROFILE_VERSION = "code-perception-v1";
@@ -342,6 +343,16 @@ function analyzeFrame(frame, options = {}) {
         provenance: ["code_perception", "color_features"],
       });
     }
+  }
+  if (requested.has("hand") && subject) {
+    internalCandidates.push(
+      ...connectedHandCandidates(
+        { ...frame, data: foreground.data },
+        subject,
+        connected.labels,
+        connectedComponents,
+      ),
+    );
   }
   if (requested.has("hand")) globalAmbiguities.push("hand_requires_semantic_grounding");
   if (requested.has("text")) globalAmbiguities.push("text_requires_ocr");

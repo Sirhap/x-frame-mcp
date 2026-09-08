@@ -7,11 +7,11 @@ const path = require("node:path");
 const test = require("node:test");
 const { createProjectStore } = require("../project_store");
 const { MCP_TOOL_NAMES, createXsxbMcpService, toolDefinitions } = require("../xsxb_mcp_service");
+const { INSTRUCTIONS } = require("../xsxb_mcp_server");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { measureSpriteGeometry } = require("../xsxb_mcp_lock");
 const { resolveOverlayCell } = require("../xsxb_mcp_plant");
 const { canvasToGroup } = require("../xsxb_mcp_visual_qa");
-const { INSTRUCTIONS } = require("../xsxb_mcp_server");
 
 const ICE = Object.freeze([84, 190, 251, 255]);
 const BOOT = Object.freeze([210, 36, 42, 255]);
@@ -142,12 +142,13 @@ test("catalog contains xsxb_plant_feet immediately after xsxb_shift_frames", () 
   assert.deepEqual(names, [...MCP_TOOL_NAMES]);
 });
 
-test("INSTRUCTIONS name walk-loop plant to y=-1 and overlay cell ids", () => {
+test("instructions and plant_feet name walk-loop plant to y=-1 and overlay cell ids", () => {
+  const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
   assert.match(INSTRUCTIONS, /xsxb_plant_feet/);
   assert.match(INSTRUCTIONS, /y=-1/);
-  assert.match(INSTRUCTIONS, /do not plant[^.]{0,80}0,0|not plant[^.]{0,80}0,0/);
-  assert.match(INSTRUCTIONS, /cell:E5|cell ids/i);
-  assert.match(INSTRUCTIONS, /xsxb_slice_sheet/);
+  assert.match(INSTRUCTIONS, /not 0,0/);
+  assert.match(plant.description, /cell:E5|cell ids|overlay cell/i);
+  assert.ok(MCP_TOOL_NAMES.includes("xsxb_slice_sheet"));
 });
 
 test("apply plants opaque soles onto the last pixel row (±1)", async () => {

@@ -35,6 +35,46 @@ async function fixture(run) {
   }
 }
 
+test("public edits prune automatic history only after commit and keep the latest undo", async () =>
+  fixture(async ({ call }) => {
+    const previous = process.env.XSXB_AUTO_REVISION_LIMIT;
+    process.env.XSXB_AUTO_REVISION_LIMIT = "1";
+    try {
+      const manual = await call("xsxb_save_revision", { label: "keep original" });
+      let lastEdit;
+      for (const duration of [2, 3, 4]) lastEdit = await call("xsxb_update_timing", { frame: 0, duration });
+      assert.ok(lastEdit.retention.removedRevisionIds.length > 0);
+      let history = (await call("xsxb_list_revisions")).revisions;
+      assert.equal(history.filter((r) => r.purpose === "pre_edit").length, 1);
+      assert.ok(history.some((r) => r.revisionId === manual.revisionId));
+      const before = history.map((r) => r.revisionId);
+      await assert.rejects(call("xsxb_update_timing", { frame: 999, duration: 5 }));
+      await call("xsxb_manage_animation", { action: "copy", target_animation_id: "copy" });
+      assert.deepEqual(
+        (await call("xsxb_list_revisions")).revisions.map((r) => r.revisionId),
+        before,
+      );
+      const copied = await call("xsxb_manage_animation", {
+        action: "copy",
+        target_animation_id: "copy",
+        dry_run: false,
+      });
+      assert.ok(copied.retention.removedRevisionIds.includes(lastEdit.revisionId));
+      history = (await call("xsxb_list_revisions")).revisions;
+      assert.equal(history[0].revisionId, copied.revisionId);
+      const undone = await call("xsxb_undo", { dry_run: false });
+      assert.equal(undone.restored, true);
+      assert.ok(
+        (await call("xsxb_list_revisions")).revisions.some(
+          (r) => r.revisionId === undone.safetyRevisionId && r.protection.retained,
+        ),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.XSXB_AUTO_REVISION_LIMIT;
+      else process.env.XSXB_AUTO_REVISION_LIMIT = previous;
+    }
+  }));
+
 test("checkpoint compare restore and undo preserve bytes, metadata and attachment assets", async () =>
   fixture(async ({ call, paths }) => {
     const state = await call("xsxb_get_animation"),

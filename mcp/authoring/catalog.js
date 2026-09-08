@@ -13,13 +13,30 @@ const range = {
   start_frame: { type: "integer", minimum: 0 },
   end_frame: { type: "integer", minimum: 0 },
 };
+const EFFECTS = {
+  xsxb_save_revision: { title: "Save revision", destructiveHint: false, idempotentHint: false },
+  xsxb_list_revisions: { title: "List revisions", destructiveHint: false, idempotentHint: true },
+  xsxb_compare_revisions: { title: "Compare revisions", destructiveHint: false, idempotentHint: false },
+  xsxb_restore_revision: { title: "Restore revision", destructiveHint: true, idempotentHint: false },
+  xsxb_undo: { title: "Undo authoring edit", destructiveHint: true, idempotentHint: false },
+  xsxb_manage_animation: { title: "Manage animation", destructiveHint: true, idempotentHint: false },
+  xsxb_resize_canvas: { title: "Resize canvas", destructiveHint: true, idempotentHint: false },
+  xsxb_check_animation: { title: "Check animation", destructiveHint: false, idempotentHint: false },
+  xsxb_interpolate_attachment: {
+    title: "Interpolate attachment",
+    destructiveHint: true,
+    idempotentHint: false,
+  },
+};
 /** Defines a closed public authoring command. */
 function tool(name, description, properties, required = [], readOnly = false) {
+  const { title, ...effects } = EFFECTS[name];
   return {
     name,
+    title,
     description,
     inputSchema: { type: "object", properties, required, additionalProperties: false },
-    annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: false },
+    annotations: { readOnlyHint: readOnly, ...effects },
   };
 }
 /** Returns the cohesive authoring extension catalog. */

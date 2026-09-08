@@ -7,8 +7,8 @@ const path = require("node:path");
 const test = require("node:test");
 const { createProjectStore } = require("../project_store");
 const { MCP_TOOL_NAMES, createXsxbMcpService, toolDefinitions } = require("../xsxb_mcp_service");
-const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { INSTRUCTIONS } = require("../xsxb_mcp_server");
+const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 
 /**
  * Writes one RGBA pixel.
@@ -670,7 +670,7 @@ test("export_pack_slot copies frames into a game-pack destination", async () => 
   }
 });
 
-test("INSTRUCTIONS lead with measure/register and demote smear for walk loops", () => {
+test("instructions lead with measure/register and demote smear for walk loops", () => {
   assert.match(INSTRUCTIONS, /xsxb_measure_frames/);
   assert.match(INSTRUCTIONS, /xsxb_register_clip/);
   assert.match(INSTRUCTIONS, /normalize/);

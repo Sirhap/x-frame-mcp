@@ -16,6 +16,7 @@ const {
   booleanFlag,
 } = require("./xsxb_mcp_arguments");
 const { measureLongAxis } = require("./xsxb_mcp_visual_qa");
+const { resolveRegionAnchor, resolveOcclusion, compositeOccludedObject, placementClipping } = require("./xsxb_mcp_place_occlusion");
 
 const DEFAULT_GRID = 8;
 const GRID_MIN = 2;
@@ -1044,8 +1045,10 @@ function overlayGridImage(args = {}, options = {}) {
  * @param {{data:Uint8ClampedArray,width:number,height:number}|null} [image] Target image (required for snap).
  * @returns {{x:number,y:number,resolved:object}} Point plus provenance.
  */
-function resolveTargetAnchor(anchor, image = null) {
+function resolveTargetAnchor(anchor, image = null, context = {}) {
   if (!anchor || typeof anchor !== "object") throw new Error("target_anchor is required.");
+  const regionPoint = resolveRegionAnchor(anchor, context.sourcePath, context.root, "target_anchor");
+  if (regionPoint) return regionPoint;
   requireKnownKeys(
     anchor,
     ["view", "cells", "derive", "snap", "nudge", "x_from", "y_from", "overlay_id"],
@@ -1155,8 +1158,10 @@ function resolveTargetAnchor(anchor, image = null) {
  * @param {{data:Uint8ClampedArray,width:number,height:number}} image Object image.
  * @returns {{x:number,y:number,bbox?:object}} Point.
  */
-function resolveObjectAnchor(anchor, image) {
+function resolveObjectAnchor(anchor, image, context = {}) {
   if (!anchor || typeof anchor !== "object") throw new Error("object_anchor is required.");
+  const regionPoint = resolveRegionAnchor(anchor, context.sourcePath, context.root, "object_anchor");
+  if (regionPoint) return regionPoint;
   requireKnownKeys(
     anchor,
     ["mode", "view", "cells", "derive", "snap", "measure_t", "overlay_id"],
@@ -1412,8 +1417,7 @@ function buildPlaceVerify(spec) {
     !snapMode || footEdge || pixelOpaqueAt(spec.image, spec.targetPoint.x, spec.targetPoint.y);
   let coverOk = true;
   if (spec.layer === "under_target") {
-    const box = targetCoverBox(spec.anchor);
-    coverOk = box.x2 > box.x1 && box.y2 > box.y1;
+    coverOk = Boolean(spec.occlusion?.mask?.some((alpha) => alpha > 0));
   }
   const checks = [
     { id: "anchor_mapped", ok: true },
@@ -1423,7 +1427,7 @@ function buildPlaceVerify(spec) {
   let status = "confirmed";
   if (!spec.wantVerify) status = "unverified";
   else if (!checks.every((check) => check.ok)) status = "unverifiable";
-  return { status, checks };
+  return { status, scope: "geometry", visual_status: "not_assessed", checks };
 }
 
 /**
@@ -1467,12 +1471,12 @@ function placeImageOnTarget(args = {}, options = {}) {
   warnMissingOverlayId(args.object_anchor, "object_anchor", warnings);
   const target = decodePngRgba(targetPath);
   const object = decodePngRgba(objectPath);
-  const targetPoint = resolveTargetAnchor(args.target_anchor, target);
-  const objectPoint = resolveObjectAnchor(args.object_anchor, object);
+  const targetPoint = resolveTargetAnchor(args.target_anchor, target, { sourcePath: targetPath, root });
+  const objectPoint = resolveObjectAnchor(args.object_anchor, object, { sourcePath: objectPath, root });
   const bbox = objectPoint.bbox || opaqueBBox(object.data, object.width, object.height);
   const scaled = resolveScale(args.scale, bbox);
   const origin = placementOrigin(targetPoint, objectPoint, scaled.value);
-  const dest = new Uint8ClampedArray(target.data);
+  const objectLayer = new Uint8ClampedArray(target.data.length);
   const mapped = {
     x: origin.left + objectPoint.x * scaled.value,
     y: origin.top + objectPoint.y * scaled.value,
@@ -1483,21 +1487,9 @@ function placeImageOnTarget(args = {}, options = {}) {
       `Mapped object anchor (${mapped.x}, ${mapped.y}) missed target (${targetPoint.x}, ${targetPoint.y}).`,
     );
   }
-  if (rotation === 0) {
-    blitScaled(
-      dest,
-      target.width,
-      target.height,
-      object.data,
-      object.width,
-      object.height,
-      origin.left,
-      origin.top,
-      scaled.value,
-    );
-  } else {
+  // Inverse mapping samples each destination once, including fractional scales.
     blitRotated(
-      dest,
+      objectLayer,
       target.width,
       target.height,
       object.data,
@@ -1509,12 +1501,9 @@ function placeImageOnTarget(args = {}, options = {}) {
       mapped,
       rotation,
     );
-  }
-  if (layer === "behind") {
-    restoreOpaqueTarget(dest, target.data, target.width, target.height, null);
-  } else if (layer === "under_target") {
-    restoreOpaqueTarget(dest, target.data, target.width, target.height, targetCoverBox(args.target_anchor));
-  }
+  const occlusion = resolveOcclusion(args.occlusion, target, targetPath, root, layer, targetPoint.region, () => targetCoverBox(args.target_anchor));
+  const composite = compositeOccludedObject(target, objectLayer, occlusion);
+  const dest = composite.data;
   const outputPath = resolveOutputPath(args, { root, artifactDir, inputPath: targetPath, suffix: "_placed" });
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, encodePngRgba(dest, target.width, target.height));
@@ -1544,6 +1533,7 @@ function placeImageOnTarget(args = {}, options = {}) {
     anchor: args.target_anchor,
     scaleWarning: scaled.warning,
     wantVerify,
+    occlusion,
   });
   return {
     output_path: outputPath,
@@ -1553,7 +1543,9 @@ function placeImageOnTarget(args = {}, options = {}) {
     layer,
     target: { x: targetPoint.x, y: targetPoint.y },
     resolved: targetPoint.resolved,
-    object_anchor: { x: objectPoint.x, y: objectPoint.y },
+    object_anchor: { x: objectPoint.x, y: objectPoint.y, resolved: objectPoint.resolved },
+    occlusion: composite.receipt,
+    clipping: placementClipping(opaqueBBox(object.data, object.width, object.height), objectPoint, targetPoint, scaled.value, rotation, target),
     mapped,
     left: origin.left,
     top: origin.top,

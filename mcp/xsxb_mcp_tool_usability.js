@@ -777,6 +777,7 @@ animations = [{
     const orderArgs = { animation_id: "walk", order: [1, 0], sync: false };
     await assert.rejects(fixture.call("xsxb_reorganize_frames", orderArgs), { code: "MISSING_SNAPSHOT" });
     const reversed = await fixture.call("xsxb_reorganize_frames", {
+      dry_run: false,
       animation_id: "walk",
       basis_snapshot_id: observed.observation.snapshotId,
       order: [1, 0],
@@ -912,7 +913,7 @@ animations = [{
       animation_id: "walk",
       dry_run: true,
     });
-    const written = await fixture.call("xsxb_compress_frames", { animation_id: "walk" });
+    const written = await fixture.call("xsxb_compress_frames", { animation_id: "walk", dry_run: false });
     if (
       preview.frameCount !== 2 ||
       written.frameCount !== 2 ||

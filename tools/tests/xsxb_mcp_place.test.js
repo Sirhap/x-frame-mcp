@@ -695,29 +695,32 @@ test("output_path must stay inside the service root", async () => {
   }
 });
 
-test("INSTRUCTIONS tell the agent to report cell ids and crop_from to refine", () => {
+test("overlay_grid and still-place instructions name cell ids and crop_from", () => {
+  const overlay = toolDefinitions().find((entry) => entry.name === "xsxb_overlay_grid");
   assert.match(INSTRUCTIONS, /xsxb_overlay_grid/);
   assert.match(INSTRUCTIONS, /xsxb_place_image/);
-  assert.match(INSTRUCTIONS, /cell ids|A1/i);
-  assert.match(INSTRUCTIONS, /crop_from/);
-  assert.match(INSTRUCTIONS, /eye/i);
-  assert.match(INSTRUCTIONS, /layer/);
-  assert.match(INSTRUCTIONS, /under_target/);
+  assert.match(overlay.description, /cell ids|A1/i);
+  assert.match(overlay.description, /crop_from/);
+  assert.match(overlay.description, /eye/i);
 });
 
-test("INSTRUCTIONS and place_image require physical held-object pose", () => {
+test("place_image description retains the physical held-object placement workflow", () => {
+  const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
+  assert.match(place.description, /source-upright/i, "must reject leaving rotation 0");
+  assert.match(place.description, /forearm/, "must align the shaft with the pose");
+  assert.match(place.description, /does not redraw a hand/i, "must state the hand-redrawing limitation");
+  assert.match(place.description, /from the body span/, "must explain the physical scale reference");
+  assert.match(place.description, /clipped heads need padding|pad/i);
+});
+
+test("place_image catalog retains compositing purpose and placement constraints", () => {
   const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
   assert.ok(place, "xsxb_place_image is a catalog tool");
-  for (const [label, text] of [
-    ["INSTRUCTIONS", INSTRUCTIONS],
-    ["xsxb_place_image", place.description],
-  ]) {
-    assert.match(text, /source-upright|generated upright/i, `${label} must reject leaving rotation 0`);
-    assert.match(text, /forearm/, `${label} must align the shaft with the forearm`);
-    assert.match(text, /does not redraw/i, `${label} must say place_image does not redraw a hand`);
-    assert.match(text, /body span/, `${label} must scale from the body span`);
-    assert.match(text, /clips/, `${label} must say what to do when the head clips`);
-  }
+  assert.match(place.description, /composite one PNG onto another/i);
+  assert.match(place.description, /cell or alpha anchors/);
+  assert.match(place.description, /require overlay_id/);
+  assert.match(place.description, /does not redraw a hand/i);
+  assert.match(place.description, /output_path stays inside XSXB root/);
 });
 
 test("exported overlayGridImage paints speakable ids without a 0–1000 axis", () => {
@@ -1143,15 +1146,19 @@ test("target_anchor rejects freehand x,y without cells", async () => {
   }
 });
 
-test("INSTRUCTIONS mention snap and MCP-resolved coordinates", () => {
-  assert.match(INSTRUCTIONS, /snap/i);
-  assert.match(INSTRUCTIONS, /resolved|verify_overlay/i);
-  assert.match(INSTRUCTIONS, /overlay_id/);
-  assert.match(INSTRUCTIONS, /plan_id/);
-  assert.match(INSTRUCTIONS, /alpha_centroid/);
+test("plan_place and overlay stamps describe snapped anchors", () => {
+  const plan = toolDefinitions().find((entry) => entry.name === "xsxb_plan_place");
   const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
-  assert.match(place.description, /snap/);
-  assert.match(place.inputSchema.properties.target_anchor.properties.snap.type, /string/);
+  assert.match(plan.description, /snap/i);
+  assert.match(plan.description, /alpha_centroid/);
+  assert.match(INSTRUCTIONS, /overlay_id/);
+  assert.match(place.description, /overlay_id/);
+});
+
+test("place and overlay schemas expose snapped anchors and observation stamps", () => {
+  const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
+  assert.equal(place.inputSchema.properties.target_anchor.properties.snap.type, "string");
+  assert.equal(place.inputSchema.properties.object_anchor.properties.snap.type, "string");
   assert.equal(place.inputSchema.properties.target_anchor.properties.overlay_id.type, "string");
   assert.equal(place.inputSchema.properties.object_anchor.properties.overlay_id.type, "string");
   assert.equal(place.inputSchema.properties.plan_id.type, "string");

@@ -6,6 +6,7 @@ const { walkFiles, requireId } = require("./common");
 const { withFileTransaction } = require("../lib/file_transaction");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { renderContactSheet } = require("../xsxb_mcp_visual_qa");
+const { pruneRevisions } = require("./revision_retention");
 
 /** Hashes exact file bytes, including PNG encoding and alpha. */
 function digest(bytes) {
@@ -60,7 +61,13 @@ function createRevisionStore(context) {
     return files.filter((entry) => fs.existsSync(entry.target)).sort((a, b) => a.key.localeCompare(b.key));
   }
   /** Saves exact bytes before a user edit; partially written snapshots are never listed. */
-  function save(project, label = "checkpoint", automatic = false, tolerateMissing = false) {
+  function save(
+    project,
+    label = "checkpoint",
+    automatic = false,
+    tolerateMissing = false,
+    purpose = automatic ? "pre_edit" : "manual",
+  ) {
     lastTick = Math.max(Date.now(), lastTick + 1);
     const id = `rev_${lastTick}_${crypto.randomBytes(5).toString("hex")}`;
     const base = directory(project),
@@ -82,11 +89,15 @@ function createRevisionStore(context) {
         createdAt: new Date().toISOString(),
         label: String(label).slice(0, 160),
         automatic,
+        purpose,
+        protection: { retained: purpose !== "pre_edit" || !automatic, reason: purpose },
         files,
       };
       fs.writeFileSync(path.join(staging, "revision.json"), JSON.stringify(snapshot, null, 2));
       fs.renameSync(staging, destination);
-      return summary(snapshot);
+      const result = summary(snapshot);
+      if (!automatic) result.retention = prune(project);
+      return result;
     } catch (error) {
       fs.rmSync(staging, { recursive: true, force: true });
       throw error;
@@ -99,6 +110,8 @@ function createRevisionStore(context) {
       label: snapshot.label,
       createdAt: snapshot.createdAt,
       automatic: snapshot.automatic,
+      purpose: snapshot.purpose || "legacy",
+      protection: snapshot.protection || { retained: true, reason: "legacy" },
       fileCount: snapshot.files.length,
       bytes: snapshot.files.reduce((sum, f) => sum + f.size, 0),
     };
@@ -238,7 +251,13 @@ function createRevisionStore(context) {
       dryRun: args.dry_run !== false,
     };
     if (result.dryRun) return result;
-    result.safetyRevisionId = save(project, `before restore ${snapshot.id}`, true, true).revisionId;
+    result.safetyRevisionId = save(
+      project,
+      `before restore ${snapshot.id}`,
+      true,
+      true,
+      "restore_safety",
+    ).revisionId;
     withFileTransaction((transaction) => {
       for (const job of jobs) {
         fs.mkdirSync(path.dirname(job.target), { recursive: true });
@@ -246,12 +265,13 @@ function createRevisionStore(context) {
       }
       for (const entry of removed) transaction.removeFile(entry.target);
     });
-    return { ...result, restored: true };
+    return { ...result, restored: true, retention: prune(project, { protectedRevisionIds: [snapshot.id] }) };
   }
   /** Removes an automatic checkpoint only when the attempted operation changed no file. */
   function discardUnchanged(project, id) {
     const snapshot = read(project, id);
-    if (!snapshot.automatic) return false;
+    if (!snapshot.automatic || snapshot.purpose !== "pre_edit" || snapshot.protection?.retained !== false)
+      return false;
     const current = currentFiles(project, true);
     if (current.length !== snapshot.files.length) return false;
     const byKey = new Map(current.map((entry) => [entry.key, entry]));
@@ -265,6 +285,10 @@ function createRevisionStore(context) {
     fs.rmSync(path.join(directory(project), id), { recursive: true, force: true });
     return true;
   }
-  return { save, list, compare, restore, discardUnchanged };
+  /** Runs bounded cleanup after a successful mutation, preserving caller-owned undo checkpoints. */
+  function prune(project, options) {
+    return pruneRevisions(directory(project), project.id, options);
+  }
+  return { save, list, compare, restore, discardUnchanged, prune };
 }
 module.exports = { createRevisionStore };

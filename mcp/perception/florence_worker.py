@@ -65,9 +65,10 @@ def run_task(
     dtype: torch.dtype,
     image: Image.Image,
     task: str,
+    query: str = "",
 ) -> dict[str, Any]:
     """Run one supported Florence task and return its parsed structured output."""
-    inputs = processor(text=task, images=image, return_tensors="pt")
+    inputs = processor(text=task + query, images=image, return_tensors="pt")
     moved = {}
     for key, value in inputs.items():
         if not hasattr(value, "to"):
@@ -103,6 +104,20 @@ def detect(
             detections.append(
                 {"frame": frame, "bbox": restore_box(bbox, image.size, source_size), "label": label}
             )
+        if "hand" in targets:
+            # Dense captions often stop at the character. Ask for the local
+            # anatomy explicitly; the JS adapter still requires pixel grounding.
+            hands = run_task(
+                processor, model, device, dtype, image,
+                "<CAPTION_TO_PHRASE_GROUNDING>", "hands. fists.",
+            )
+            for bbox, label in zip(hands.get("bboxes", []), hands.get("labels", [])):
+                detections.append({
+                    "frame": frame,
+                    "bbox": restore_box(bbox, image.size, source_size),
+                    "label": label,
+                    "task": "hand_grounding",
+                })
         if "text" in targets:
             ocr = run_task(processor, model, device, dtype, image, "<OCR_WITH_REGION>")
             for bbox, label in zip(ocr.get("quad_boxes", []), ocr.get("labels", [])):

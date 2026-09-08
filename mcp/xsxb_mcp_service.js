@@ -18,6 +18,7 @@ const { frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator"
 const { importAnimation, reorganizeAnimation } = require("./lib/frame_organizer");
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
+const { shouldCommit } = require("./xsxb_mcp_commit");
 const { frameIndexes } = require("./authoring/common");
 const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
@@ -1769,7 +1770,7 @@ function createXsxbMcpService(options = {}) {
       targetHeight,
       { zoomRatio, equalize },
     );
-    const apply = booleanFlag(args.apply);
+    const apply = shouldCommit(args);
     if (apply) {
       const paths = projectStore.projectPaths(project);
       const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);
@@ -1789,6 +1790,7 @@ function createXsxbMcpService(options = {}) {
       groupScale: estimated.groupScale,
       zoomRatio,
       applied: apply,
+      dryRun: !apply,
       zoomFrameCount: estimated.frames.filter((frame) => frame.reason === "zoom").length,
       frames: estimated.frames.map((frame, index) => ({
         ...frame,
@@ -1904,7 +1906,7 @@ function createXsxbMcpService(options = {}) {
       reference,
       referenceFrame,
     });
-    const apply = booleanFlag(args.apply) && !booleanFlag(args.dry_run);
+    const apply = shouldCommit(args);
     if (apply) {
       withFileTransaction((transaction) => {
         frames.forEach((frame, index) => {
@@ -2688,7 +2690,7 @@ function createXsxbMcpService(options = {}) {
       useMesh: trailUsesHermiteMesh(written || segment),
       ...summarizeAttackTrailSticks(written?.sticks || []),
       warnings,
-      sync: synchronize(project, booleanFlag(args.sync, true)),
+      sync: synchronize(project, booleanFlag(args.sync)),
     };
   }
 
@@ -2792,7 +2794,7 @@ function createXsxbMcpService(options = {}) {
     const base = {
       projectId: project.id,
       bindingCount: next.length,
-      sync: synchronize(project, booleanFlag(args.sync, true)),
+      sync: synchronize(project, booleanFlag(args.sync)),
     };
     if (!batch) return { ...base, binding: added[0], space: "group" };
     return {
@@ -2838,7 +2840,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       binding: { ...binding, data: `[${mime} omitted]` },
       bindingCount: next.length,
-      sync: synchronize(project, booleanFlag(args.sync, true)),
+      sync: synchronize(project, booleanFlag(args.sync)),
     };
   }
 
@@ -2929,13 +2931,14 @@ function createXsxbMcpService(options = {}) {
       removed: removed.map(summarize),
       removedCount: removed.length,
       remainingCount,
-      sync: synchronize(project, dryRun ? false : booleanFlag(args.sync, true)),
+      sync: synchronize(project, dryRun ? false : booleanFlag(args.sync)),
     };
   }
 
   async function reorganizeFrames(args = {}) {
     const { project, profile, animation } = animationFor(args);
     const frames = animation.frames || [];
+    const dryRun = booleanFlag(args.dry_run, true);
     let order = Array.isArray(args.order) ? args.order.map(Number) : frames.map((_, index) => index);
     if (String(args.loop_endpoint || "none") === "duplicate_first" && frames.length) {
       order = [...order, 0];
@@ -2948,29 +2951,33 @@ function createXsxbMcpService(options = {}) {
         `Frame order must contain valid source indexes between 0 and ${Math.max(0, frames.length - 1)}.`,
       );
     }
-    const result = reorganizeAnimation({
-      root,
-      projectStore,
-      project,
-      profileId: profile.id,
-      animationId: String(animation.id || animation.name),
-      items: order.map((sourceIndex) => ({
-        sourceIndex,
-        sourcePath: frames[sourceIndex].path,
-        frameId: frames[sourceIndex].id,
-      })),
-    });
+    const result = dryRun
+      ? { frameCount: order.length }
+      : reorganizeAnimation({
+          root,
+          projectStore,
+          project,
+          profileId: profile.id,
+          animationId: String(animation.id || animation.name),
+          items: order.map((sourceIndex) => ({
+            sourceIndex,
+            sourcePath: frames[sourceIndex].path,
+            frameId: frames[sourceIndex].id,
+          })),
+        });
     return {
       projectId: project.id,
       profileId: profile.id,
       animationId: String(animation.id || animation.name),
+      dryRun,
       inputFrameCount: frames.length,
       outputFrameCount: result.frameCount,
       order,
-      identityOrder: order.every((sourceIndex, index) => sourceIndex === index),
+      identityOrder:
+        order.length === frames.length && order.every((sourceIndex, index) => sourceIndex === index),
       fps: Number(animation.fps || 0),
       targetDirectory: result.targetDir,
-      sync: synchronize(project, booleanFlag(args.sync, true)),
+      sync: synchronize(project, !dryRun && booleanFlag(args.sync)),
     };
   }
 
@@ -3119,7 +3126,7 @@ function createXsxbMcpService(options = {}) {
     } else {
       indexes = args.frames.map((value) => requireFrameIndex(value, lastIndex));
     }
-    const apply = booleanFlag(args.apply) && !booleanFlag(args.dry_run);
+    const apply = shouldCommit(args);
     const receipts = [];
     let sizeChanged = false;
     withFileTransaction((transaction) => {
@@ -3180,7 +3187,7 @@ function createXsxbMcpService(options = {}) {
     const startFrame = args.start_frame === undefined ? 0 : requireFrameIndex(args.start_frame, lastIndex);
     const endFrame = args.end_frame === undefined ? lastIndex : requireFrameIndex(args.end_frame, lastIndex);
     if (endFrame < startFrame) throw new Error("end_frame must be greater than or equal to start_frame.");
-    const dryRun = booleanFlag(args.dry_run);
+    const dryRun = booleanFlag(args.dry_run, true);
     const receipts = [];
     for (let index = startFrame; index <= endFrame; index += 1) {
       const rawPath = String(frames[index].path || "");
@@ -3777,7 +3784,10 @@ function createXsxbMcpService(options = {}) {
     xsxb_open_tuner: openTuner,
   };
 
-  const tools = toolDefinitions();
+  // Keep the receipt envelope on internal definitions for tests. tools/list
+  // omits it because every tools/call already returns the v2 receipt.
+  const catalogTools = toolDefinitions();
+  const tools = catalogTools.map(({ outputSchema, ...tool }) => tool);
   const schemas = new Map(tools.map((tool) => [tool.name, tool.inputSchema]));
   const definitions = new Map(tools.map((tool) => [tool.name, tool]));
 
@@ -3876,13 +3886,20 @@ function createXsxbMcpService(options = {}) {
    */
   async function callMcpUnlocked(name, args = {}) {
     const callArgs = callArguments(name, args);
+    // Cache the expensive full-frame digest for this request. Observation
+    // checks and receipt assembly should share one pass over all PNG frames.
+    let cachedAnimationObservation;
+    const getAnimationObservation = () => {
+      if (!cachedAnimationObservation) cachedAnimationObservation = animationObservation(callArgs);
+      return cachedAnimationObservation;
+    };
     requireStillOverlayBasis(name, callArgs);
     if (name === "xsxb_reorganize_frames" && Array.isArray(callArgs.order)) {
-      assertObservation(callArgs.basis_snapshot_id, animationObservation(callArgs), "frame reorganization");
+      assertObservation(callArgs.basis_snapshot_id, getAnimationObservation(), "frame reorganization");
     }
     const animationWriteTools = new Set(["xsxb_cutout"]);
     if (animationWriteTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths) {
-      assertObservation(callArgs.basis_snapshot_id, animationObservation(callArgs), `${name} observation`);
+      assertObservation(callArgs.basis_snapshot_id, getAnimationObservation(), `${name} observation`);
     }
     const cellDerivedTools = new Set([
       "xsxb_update_frame_boxes",
@@ -3892,11 +3909,7 @@ function createXsxbMcpService(options = {}) {
       "xsxb_add_attachment",
     ]);
     if (cellDerivedTools.has(name) && containsCellToken(cellCoordinateArguments(name, callArgs))) {
-      assertObservation(
-        callArgs.basis_snapshot_id,
-        animationObservation(callArgs),
-        `${name} cell coordinates`,
-      );
+      assertObservation(callArgs.basis_snapshot_id, getAnimationObservation(), `${name} cell coordinates`);
     }
     const observationTools = new Set([
       "xsxb_get_animation",
@@ -3909,15 +3922,16 @@ function createXsxbMcpService(options = {}) {
     ]);
     const beforeObservation =
       observationTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths
-        ? animationObservation(callArgs)
+        ? getAnimationObservation()
         : null;
+    const readOnlyObservation = Boolean(beforeObservation);
     const checkpoint = authoring.checkpoint(name, callArgs);
     let raw;
     let revisionId;
     try {
       raw = await handlers[name](callArgs);
     } finally {
-      revisionId = authoring.finishCheckpoint(checkpoint);
+      revisionId = authoring.finishCheckpoint(checkpoint, { succeeded: raw !== undefined, result: raw });
     }
     if (revisionId && raw && typeof raw === "object") raw.revisionId = revisionId;
     const definition = definitions.get(name);
@@ -3933,13 +3947,18 @@ function createXsxbMcpService(options = {}) {
       );
     }
     if (animationWriteTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths) {
-      observation = animationObservation(callArgs);
+      // Mutations invalidate the preflight digest; compute a fresh receipt
+      // observation after the handler has committed its changes.
+      cachedAnimationObservation = undefined;
+      observation = getAnimationObservation();
     } else if (!observation && beforeObservation) {
-      const afterObservation = animationObservation(callArgs);
-      assertObservation(beforeObservation.snapshotId, afterObservation, `${name} observation`);
+      if (!readOnlyObservation) {
+        const afterObservation = getAnimationObservation();
+        assertObservation(beforeObservation.snapshotId, afterObservation, `${name} observation`);
+      }
       observation = beforeObservation;
     }
-    if (observation && typeof metadata.revalidate === "function") {
+    if (observation && typeof metadata.revalidate === "function" && !readOnlyObservation) {
       assertObservation(observation.snapshotId, metadata.revalidate(), `${name} observation`);
     }
     let verification = metadata.verification || null;

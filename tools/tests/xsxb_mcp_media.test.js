@@ -322,7 +322,10 @@ test("compress_frames reencodes stored PNGs losslessly and dry_run does not writ
     assert.ok(preview.savedBytes > 0);
     assert.equal(fs.statSync(firstPath).size, sizeBefore);
     const originalPixels = decodePngRgba(firstPath).data;
-    const written = await current.service.call("xsxb_compress_frames", { animation_id: "walk" });
+    const written = await current.service.call("xsxb_compress_frames", {
+      animation_id: "walk",
+      dry_run: false,
+    });
     assert.ok(written.rewritten >= 1);
     assert.ok(written.bytesAfter < written.bytesBefore);
     assert.deepEqual(
@@ -331,7 +334,10 @@ test("compress_frames reencodes stored PNGs losslessly and dry_run does not writ
       "pixels stay identical",
     );
     assert.ok(fs.statSync(firstPath).size < sizeBefore);
-    const again = await current.service.call("xsxb_compress_frames", { animation_id: "walk" });
+    const again = await current.service.call("xsxb_compress_frames", {
+      animation_id: "walk",
+      dry_run: false,
+    });
     assert.equal(again.rewritten, 0);
   } finally {
     current.cleanup();
@@ -352,6 +358,7 @@ test("compress_frames start_frame/end_frame only rewrites the selected slice", a
     const secondBefore = fs.statSync(secondPath).size;
     const written = await current.service.call("xsxb_compress_frames", {
       animation_id: "walk",
+      dry_run: false,
       start_frame: 1,
       end_frame: 1,
     });

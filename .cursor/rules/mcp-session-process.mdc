@@ -10,4 +10,4 @@ alwaysApply: true
 - 开工：一句话目标 + 当前项目/动画 + 选哪条 playbook。
 - 多步：有序 todo。做完一项勾掉。
 - 每步 check：打开 `preview.path` / overlay / gif，不要只看回执。眼睛不过就停。
-- 改 MCP 代码仍走 `AGENTS.md`（先失败测试，再 `npm run check:mcp`），那是仓库工程，不是 MCP 工具 playbook。
+- 改 MCP 代码仍走 `AGENTS.md`（先失败测试，再 `npm run check:mcp`），然后按「重载 xsxb MCP」删加 mcp.json。那是仓库工程，不是 MCP 工具 playbook。

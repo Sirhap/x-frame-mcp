@@ -11,6 +11,9 @@ const { encodePngRgba } = require("./xsxb_mcp_cutout");
 const { resolveMcpArtifactPath } = require("./xsxb_mcp_arguments");
 const { analyzeRegions } = require("./xsxb_mcp_perception");
 const { resolveGridSpec } = require("./xsxb_mcp_visual_qa");
+const { persistPerceptionRegions } = require("./xsxb_mcp_region_store");
+const { perceptionTargetStatus } = require("./xsxb_mcp_perception_status");
+const { assertObservation } = require("./xsxb_mcp_observation");
 
 const COLORS = Object.freeze({
   subject: Object.freeze([70, 220, 120, 255]),
@@ -131,22 +134,24 @@ function groundingOverlap(modelBox, component) {
 const SUBJECT_LABEL = /person|character|human|figure|warrior|hero|dog|animal|cat|bird|人物|角色|人形|狗/iu;
 const WEAPON_LABEL = /sword|blade|weapon|spear|gun|axe|bow|staff|shield|剑|刀|武器/iu;
 const ACCESSORY_LABEL = /sunglasses|glasses|goggles|hat|helmet|tie|crown|mask|necktie/iu;
+const HAND_LABEL = /hand|fist|palm|手|拳/iu;
 
 /**
  * Classifies a Florence caption into a code hypothesis family.
  * @param {string} label Model caption.
- * @returns {"subject"|"weapon"|"accessory"|"other"}
+ * @returns {"subject"|"weapon"|"accessory"|"hand"|"other"}
  */
 function labelKind(label) {
   if (SUBJECT_LABEL.test(label)) return "subject";
   if (WEAPON_LABEL.test(label)) return "weapon";
+  if (HAND_LABEL.test(label)) return "hand";
   if (ACCESSORY_LABEL.test(label)) return "accessory";
   return "other";
 }
 
 /**
  * Scores how well a caption family belongs on one code hypothesis.
- * @param {"subject"|"weapon"|"accessory"|"other"} kind Caption family.
+ * @param {"subject"|"weapon"|"accessory"|"hand"|"other"} kind Caption family.
  * @param {string} hypothesis Code hypothesis.
  * @returns {number} Higher is a better home.
  */
@@ -154,6 +159,7 @@ function labelAffinity(kind, hypothesis) {
   if (kind === "subject" && hypothesis === "subject") return 2;
   if (kind === "weapon" && hypothesis === "elongated_attachment") return 2;
   if (kind === "accessory" && hypothesis !== "subject") return 1;
+  if (kind === "hand" && hypothesis === "contact_point") return 2;
   return 0;
 }
 
@@ -198,12 +204,22 @@ function fuseFlorence(code, response) {
     const kind = labelKind(label);
     const matches = [];
     code.internalCandidates.forEach((candidate, index) => {
+      // A caption on the body is not evidence for a hand. Conversely, a hand
+      // box must not be swallowed by the containing full-subject candidate.
+      if ((kind === "hand") !== (candidate.hypothesis === "contact_point")) return;
       const candidateFrame = Number.isInteger(Number(code.candidates[index]?.frame))
         ? Number(code.candidates[index].frame)
         : 0;
       if (candidateFrame !== detectionFrame) return;
       const overlap = groundingOverlap(detection.bbox, candidate.component);
       if (overlap < 0.25) return;
+      if (kind === "hand") {
+        const box = candidate.component;
+        const modelArea = (detection.bbox[2] - detection.bbox[0]) * (detection.bbox[3] - detection.bbox[1]);
+        const codeArea = (box.maxX - box.minX + 1) * (box.maxY - box.minY + 1);
+        const intersection = overlap * modelArea;
+        if (intersection / (modelArea + codeArea - intersection) < 0.2) return;
+      }
       matches.push({
         index,
         overlap,
@@ -286,6 +302,7 @@ async function detectRegions(args, context) {
         throw error;
       }
       effect = "partial";
+      model = { provider: "florence-2-base-ft", error: "Model unavailable", code: "MODEL_UNAVAILABLE" };
       escalation = { target: "agent_visual", reason: "model_unavailable" };
     } else {
       try {
@@ -294,9 +311,12 @@ async function detectRegions(args, context) {
         model = fused.model;
         route = "local_florence";
         candidates = fused.candidates;
-        const semanticResolved = candidates.some((candidate) => candidate.semanticLabel);
-        effect = semanticResolved || !code.needsModel ? "confirmed" : "partial";
-        if (!semanticResolved && code.needsModel) {
+        const targetStatus = perceptionTargetStatus(targets, candidates);
+        const allResolved = Object.values(targetStatus).every((target) =>
+          target.status.endsWith("_confirmed"),
+        );
+        effect = allResolved ? "confirmed" : "partial";
+        if (!allResolved) {
           escalation = { target: "agent_visual", reason: "code_ambiguity" };
         }
       } catch (error) {
@@ -306,6 +326,9 @@ async function detectRegions(args, context) {
         escalation = { target: "agent_visual", reason: "model_failed" };
       }
     }
+  }
+  if (typeof context.revalidate === "function") {
+    assertObservation(context.observation.snapshotId, await context.revalidate(), "perception source");
   }
   const overlayFrame = context.frames[0];
   const overlayPath = resolveMcpArtifactPath(args.output_path, {
@@ -343,10 +366,16 @@ async function detectRegions(args, context) {
       overlayFrame.height,
     ),
   );
+  candidates = persistPerceptionRegions(code, candidates, context);
+  const targetStatus = perceptionTargetStatus(targets, candidates);
+  const allResolved = Object.values(targetStatus).every((target) => target.status.endsWith("_confirmed"));
+  effect = allResolved ? "confirmed" : candidates.length ? "partial" : "unverifiable";
+  if (!allResolved && !escalation) escalation = { target: "agent_visual", reason: "unresolved_targets" };
   const data = {
     profileVersion: code.profileVersion,
     provider: route === "local_florence" ? "florence" : "code",
     targets,
+    targetStatus,
     candidates,
     ambiguities: code.ambiguities,
     sampledFrames: code.sampledFrames,
@@ -360,7 +389,7 @@ async function detectRegions(args, context) {
       revalidate: context.revalidate,
       execution: { effect, route, artifacts: [{ kind: "overlay", path: overlayPath }] },
       verification: {
-        status: candidates.length && !code.ambiguities.length ? "satisfied" : "unknown",
+        status: allResolved ? "satisfied" : "unknown",
         checks: ["source_unchanged", "candidate_geometry_bounded"],
         evidence: ["code_perception"],
       },

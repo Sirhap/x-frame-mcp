@@ -4,11 +4,37 @@ const { createAnimationManager } = require("./animation_management");
 const { createCanvasTool } = require("./canvas");
 const { createQualityTool } = require("./quality");
 const { createAttachmentInterpolation } = require("./attachment_interpolation");
+const { shouldCommit } = require("../xsxb_mcp_commit");
 
 /** Connects domain modules to the existing project selection and synchronization seams. */
 function createAuthoringTools(context) {
   const revisions = createRevisionStore(context);
   const project = (args) => context.registryProject(args.project_id, false);
+  /**
+   * Prunes after a committed edit and reports cleanup without masking the edit.
+   * @param {object} selectedProject Project owning the checkpoints.
+   * @param {object} result Successful local edit result.
+   * @param {string} revisionId Recovery checkpoint to retain.
+   * @returns {void}
+   */
+  function retainHistory(selectedProject, result, revisionId) {
+    const retention = revisions.prune(selectedProject, { protectedRevisionIds: [revisionId] });
+    if (result && typeof result === "object") result.retention = retention;
+    for (const warning of retention.warnings) process.emitWarning(warning);
+  }
+  /**
+   * Applies retention to authoring handlers which create their own checkpoints.
+   * @param {Function} handler Synchronous authoring handler.
+   * @returns {Function} Handler with post-commit cleanup.
+   */
+  function withRetention(handler) {
+    return (args) => {
+      const result = handler(args);
+      if (result.revisionId && result.dryRun === false)
+        retainHistory(project(args), result, result.revisionId);
+      return result;
+    };
+  }
   /** Restores a checkpoint and optionally synchronizes the restored local state. */
   function restore(args) {
     const p = project(args),
@@ -35,10 +61,10 @@ function createAuthoringTools(context) {
       if (!id) throw new Error("No revision to undo to.");
       return restore({ ...args, revision_id: id });
     },
-    xsxb_manage_animation: createAnimationManager(context, revisions),
-    xsxb_resize_canvas: createCanvasTool(context, revisions),
+    xsxb_manage_animation: withRetention(createAnimationManager(context, revisions)),
+    xsxb_resize_canvas: withRetention(createCanvasTool(context, revisions)),
     xsxb_check_animation: createQualityTool(context),
-    xsxb_interpolate_attachment: createAttachmentInterpolation(context, revisions),
+    xsxb_interpolate_attachment: withRetention(createAttachmentInterpolation(context, revisions)),
   };
   const checkpointTools = new Set([
     "xsxb_import_video",
@@ -66,19 +92,21 @@ function createAuthoringTools(context) {
       return null;
     if (
       ["xsxb_register_clip", "xsxb_plant_feet", "xsxb_estimate_visual"].includes(name) &&
-      args.apply !== true
+      !shouldCommit(args)
     )
       return null;
+    if (name === "xsxb_reorganize_frames" && args.dry_run !== false) return null;
     const p = context.registryProject(args.project_id, false);
     return { project: p, revisionId: revisions.save(p, `before ${name}`, true, true).revisionId };
   }
   /** Keeps undo history focused on operations that actually changed authoring files. */
-  function finishCheckpoint(checkpoint) {
+  function finishCheckpoint(checkpoint, options = {}) {
     if (!checkpoint) return null;
     try {
-      return revisions.discardUnchanged(checkpoint.project, checkpoint.revisionId)
-        ? null
-        : checkpoint.revisionId;
+      if (revisions.discardUnchanged(checkpoint.project, checkpoint.revisionId)) return null;
+      if (options.succeeded === true)
+        retainHistory(checkpoint.project, options.result, checkpoint.revisionId);
+      return checkpoint.revisionId;
     } catch (error) {
       process.emitWarning(`Checkpoint cleanup deferred: ${error.message}`);
       return checkpoint.revisionId;

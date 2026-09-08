@@ -87,7 +87,15 @@ function whitePlateBody() {
   return { data, width, height };
 }
 
-test("every advertised tool declares the closed v2 receipt output schema", () => {
+test("tools/list omits the receipt envelope; each tools/call still returns v2", () => {
+  const service = createXsxbMcpService({ florenceDetectImpl: null });
+  try {
+    for (const tool of service.tools) {
+      assert.equal(tool.outputSchema, undefined, tool.name);
+    }
+  } finally {
+    service.close();
+  }
   for (const tool of toolDefinitions()) {
     assert.equal(tool.outputSchema.type, "object", tool.name);
     assert.deepEqual(tool.outputSchema.required, [
@@ -655,6 +663,7 @@ test("animation-derived writes require a current content-addressed snapshot", as
     });
     assert.match(analyzed.observation.snapshotId, /^obs_v1_[0-9a-f]{24}$/);
     await service.callMcp("xsxb_reorganize_frames", {
+      dry_run: false,
       project_id: "snapshot",
       profile_id: "mcp_imports",
       animation_id: "walk",
@@ -704,6 +713,7 @@ test("animation-derived writes require a current content-addressed snapshot", as
     await assert.rejects(
       () =>
         service.callMcp("xsxb_reorganize_frames", {
+          dry_run: false,
           project_id: "snapshot",
           profile_id: "mcp_imports",
           animation_id: "walk",

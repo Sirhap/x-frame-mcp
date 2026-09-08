@@ -331,7 +331,7 @@ test("omitted proposed fields persist as null except default snap alpha_centroid
   }
 });
 
-test("INSTRUCTIONS and skill path mention xsxb_plan_place before place", () => {
+test("instructions and skill path mention xsxb_plan_place before place", () => {
   assert.match(INSTRUCTIONS, /xsxb_plan_place/);
   assert.match(INSTRUCTIONS, /图度|physics|read.*plan|plan_place/i);
   const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
