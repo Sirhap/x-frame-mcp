@@ -1,12 +1,12 @@
 {
-  "name": "x-frame-mcp",
+  "name": "x-frame",
   "version": "0.2.0",
   "description": "Standalone XSXB MCP server for local frame animation, cutout, and Godot handoff.",
   "private": true,
   "license": "MIT",
   "type": "commonjs",
   "bin": {
-    "x-frame-mcp": "mcp/xsxb_mcp_server.js"
+    "x-frame": "mcp/xsxb_mcp_server.js"
   },
   "scripts": {
     "start": "node mcp/xsxb_mcp_server.js",

@@ -106,19 +106,6 @@ function exportFrameDurationSeconds(frame, playbackOverride, fps) {
 }
 
 /**
- * Parses a TCP port for the Tuner, including values taken from process.env.
- * @param {unknown} value Raw port.
- * @returns {number} Integer port in 1–65535.
- */
-function requireTunerPort(value) {
-  const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Tuner port must be an integer from 1 to 65535. Received: ${value}`);
-  }
-  return port;
-}
-
-/**
  * Parses a tuner-group point. Accepts {x,y}, "x,y", or [x,y].
  * @param {unknown} value Raw point.
  * @param {string} [label="point"] Error label.
@@ -458,7 +445,6 @@ module.exports = {
   resolveExportFps,
   exportFrameDurationSeconds,
   requireGroupPoint,
-  requireTunerPort,
   requireFrameIndex,
   resolveImportSource,
   sliceExtractedFrames,

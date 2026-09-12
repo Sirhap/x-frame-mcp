@@ -2,17 +2,16 @@
 
 /**
  * The external processes the MCP tools drive: FFmpeg for frame extraction and
- * GIF encoding, and the local Tuner server process.
+ * GIF encoding.
  *
  * Isolated from the service so the handlers stay readable and every subprocess
  * invocation can be swapped for a stub in tests.
  */
 
 const fs = require("node:fs");
-const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
-const { execFile, spawn } = require("node:child_process");
+const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const execFileAsync = promisify(execFile);
@@ -149,99 +148,9 @@ function createTestWav(options = {}) {
   return buffer;
 }
 
-/**
- * Probes whether the Tuner HTTP port answers.
- * @param {string} url Workspace URL.
- * @returns {Promise<boolean>} True when the server responds.
- */
-function probeTunerUrl(url) {
-  return new Promise((resolve) => {
-    const request = http.get(url, { timeout: 800 }, (response) => {
-      response.resume();
-      resolve(Number(response.statusCode) >= 200 && Number(response.statusCode) < 500);
-    });
-    request.on("error", () => resolve(false));
-    request.on("timeout", () => {
-      request.destroy();
-      resolve(false);
-    });
-  });
-}
-
-/**
- * Resolves the Tuner HTTP server script without requiring this repo to contain the UI.
- * @param {{root:string}} options Launch options.
- * @returns {string} Absolute path to `tools/animation_tuner/server.js`.
- */
-function resolveTunerServer(options) {
-  const candidates = [
-    process.env.XSXB_TUNER_SERVER,
-    process.env.XSXB_TUNER_ROOT
-      ? path.join(process.env.XSXB_TUNER_ROOT, "tools/animation_tuner/server.js")
-      : "",
-    path.join(options.root, "tools/animation_tuner/server.js"),
-    path.join(__dirname, "../tools/animation_tuner/server.js"),
-  ].filter(Boolean);
-  for (const script of candidates) {
-    const resolved = path.resolve(script);
-    if (fs.existsSync(resolved)) return resolved;
-  }
-  const error = new Error(
-    "xsxb_open_tuner needs XSXB-Frame-Tuner. Set XSXB_TUNER_ROOT to that repo, or XSXB_ROOT to a workspace that contains tools/animation_tuner/server.js.",
-  );
-  error.code = "XSXB_TUNER_MISSING";
-  throw error;
-}
-
-/**
- * Spawns the Tuner Node server detached.
- * @param {{root:string,port:number,host:string}} options Launch options.
- * @returns {{pid:number}} Child process id.
- */
-function launchTunerProcess(options) {
-  const script = resolveTunerServer(options);
-  const child = spawn(process.execPath, [script], {
-    env: {
-      ...process.env,
-      XSXB_ROOT: options.root,
-      PORT: String(options.port),
-      HOST: options.host,
-      XSXB_HOST: options.host,
-    },
-    detached: true,
-    stdio: "ignore",
-  });
-  child.on("error", () => {
-    // Detached spawn failures must not become unhandled errors on the MCP host.
-  });
-  child.unref();
-  return { pid: child.pid };
-}
-
-/**
- * Waits until the Tuner answers or the attempt budget runs out.
- * @param {Function} probe Probe function.
- * @param {string} url Workspace URL.
- * @param {number} [attempts=20] Poll count.
- * @returns {Promise<boolean>} True when ready.
- */
-async function waitForTuner(probe, url, attempts = 20) {
-  for (let index = 0; index < attempts; index += 1) {
-    if (await probe(url)) return true;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 150);
-    });
-  }
-  return false;
-}
-
 module.exports = {
   createTestWav,
   encodeGifWithFfmpeg,
   extractVideoFrames,
-  launchTunerProcess,
-  probeTunerUrl,
   videoExtractFfmpegArgs,
-  resolveTunerServer,
-  waitForTuner,
 };

@@ -6,6 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { encodePngRgba } = require("./xsxb_mcp_cutout");
 const { trailUsesHermiteMesh } = require("./xsxb_mcp_plant");
+const { drawSweepLayer, sweepSegments } = require("./xsxb_mcp_sweep");
 const { createSoftwareDom, SoftwareImage } = require("./lib/xsxb_software_canvas");
 const {
   attachmentOwnerPlacement,
@@ -30,6 +31,7 @@ function usableTrailSegments(trails, bindingKey) {
       segment &&
       segment.enabled !== false &&
       segment.generated !== false &&
+      segment.renderMode !== "sweep" &&
       trailUsesHermiteMesh(segment) &&
       Array.isArray(segment.sticks) &&
       segment.sticks.length >= 2,
@@ -228,8 +230,9 @@ function loadPngImage(filePath) {
 async function compositeAttackTrails(job) {
   const framePaths = Array.isArray(job.framePaths) ? job.framePaths : [];
   const bindingKey = String(job.bindingKey || "");
-  const segments = usableTrailSegments(job.trails, bindingKey);
-  const trailIds = segments.map((segment) => String(segment.id));
+  const meshSegments = usableTrailSegments(job.trails, bindingKey);
+  const temporalSweeps = sweepSegments(job.trails, bindingKey);
+  const trailIds = [...meshSegments, ...temporalSweeps].map((segment) => String(segment.id));
   const empty = {
     framePaths,
     bakedTrails: false,
@@ -253,14 +256,14 @@ async function compositeAttackTrails(job) {
   const attachmentIds = [
     ...new Set(frameAttachments.flat().map((entry) => String(entry.id || entry.name || "attachment"))),
   ];
-  if (!segments.length && !attachmentIds.length) return empty;
+  if (!meshSegments.length && !temporalSweeps.length && !attachmentIds.length) return empty;
   const first = framePaths[0];
   if (!fs.existsSync(first)) throw new Error(`Cannot composite trails: missing frame ${first}`);
   const fps = Number(job.fps) > 0 ? Number(job.fps) : 12;
   const durations = Array.isArray(job.durations) && job.durations.length ? job.durations : [];
   const [profileId, animationId] = bindingKey.split("/");
   const textureByPath = {};
-  for (const segment of segments) {
+  for (const segment of meshSegments) {
     const requested = segment.texture?.path || job.trails?.presetTexture?.path || FALLBACK_TEXTURE;
     const absolute = resolveTextureFile(requested, job.root);
     textureByPath[segment.texture?.path || requested] = dataUrl(absolute);
@@ -336,7 +339,7 @@ async function compositeAttackTrails(job) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-trail-preview-"));
   try {
     let editor = null;
-    if (segments.length) {
+    if (meshSegments.length) {
       const AttackTrailEditor = loadAttackTrailEditor();
       editor = new AttackTrailEditor({
         ctx,
@@ -386,9 +389,11 @@ async function compositeAttackTrails(job) {
       ctx.clearRect(0, 0, width, height);
       drawFrameAttachments("below", index);
       editor?.drawLayer("behind", selectedFrame, 1);
+      drawSweepLayer(ctx, temporalSweeps, elapsed, frameDurations, origin, "behind");
       ctx.drawImage(heroes[index], 0, 0);
       drawFrameAttachments("above", index);
       editor?.drawLayer("front", selectedFrame, 1);
+      drawSweepLayer(ctx, temporalSweeps, elapsed, frameDurations, origin, "front");
       const pixels = ctx.getImageData(0, 0, width, height).data;
       const filePath = path.join(tempDir, `frame_${String(index + 1).padStart(4, "0")}.png`);
       fs.writeFileSync(filePath, encodePngRgba(pixels, width, height));
@@ -396,7 +401,7 @@ async function compositeAttackTrails(job) {
     }
     return {
       framePaths: written,
-      bakedTrails: Boolean(segments.length),
+      bakedTrails: Boolean(meshSegments.length || temporalSweeps.length),
       bakedAttachments: Boolean(attachmentIds.length),
       trailIds,
       attachmentIds,

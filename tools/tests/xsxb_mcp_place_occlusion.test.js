@@ -7,6 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { decodePngRgba, encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
 const { placeImageOnTarget } = require("../../mcp/xsxb_mcp_place");
+const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
 
 /** Creates a real PNG fixture with a fist, clothing and a crossing weapon. */
 function fixture(t) {
@@ -29,8 +30,16 @@ function fixture(t) {
   const weapon = write("weapon.png", 1, 5, () => [0, 220, 255, 255]);
   const mask = write("mask.png", 8, 8, (x, y) => [255, 255, 255, x === 3 && y === 3 ? 255 : 0]);
   return {
-    root, write, mask,
-    args: { target_path: target, object_path: weapon, target_anchor: { view, cells: ["D4"], derive: "center" }, object_anchor: { mode: "alpha_center" }, verify_overlay: false },
+    root,
+    write,
+    mask,
+    args: {
+      target_path: target,
+      object_path: weapon,
+      target_anchor: { view, cells: ["D4"], derive: "center" },
+      object_anchor: { mode: "alpha_center" },
+      verify_overlay: false,
+    },
   };
 }
 
@@ -53,17 +62,74 @@ test("local foreground covers the grip while the pommel remains above clothing",
 test("occlusion rejects dimensions that do not match the target", (t) => {
   const f = fixture(t);
   const mask = f.write("wrong.png", 1, 1, () => [255, 255, 255, 255]);
-  assert.throws(() => placeImageOnTarget({ ...f.args, occlusion: { mask_path: mask } }, { root: f.root }), /dimensions/i);
+  assert.throws(
+    () => placeImageOnTarget({ ...f.args, occlusion: { mask_path: mask } }, { root: f.root }),
+    /dimensions/i,
+  );
 });
 
 test("region anchors reject mixed cell addressing before using evidence", (t) => {
   const f = fixture(t);
-  assert.throws(() => placeImageOnTarget({ ...f.args, target_anchor: { ...f.args.target_anchor, region_id: "hand", basis_snapshot_id: "snapshot" } }, { root: f.root }), /cannot combine/i);
+  assert.throws(
+    () =>
+      placeImageOnTarget(
+        {
+          ...f.args,
+          target_anchor: { ...f.args.target_anchor, region_id: "hand", basis_snapshot_id: "snapshot" },
+        },
+        { root: f.root },
+      ),
+    /cannot combine/i,
+  );
+});
+
+test("public placement scales from the same detected region used as its target anchor", async (t) => {
+  const f = fixture(t);
+  const service = createXsxbMcpService({ root: f.root, florenceDetectImpl: null });
+  t.after(() => service.close());
+  const target = f.write("region-target.png", 64, 64, (x, y) =>
+    x >= 20 && x <= 43 && y >= 12 && y <= 55 ? [200, 90, 70, 255] : [0, 0, 0, 0],
+  );
+  const weapon = f.write("region-weapon.png", 4, 20, () => [0, 220, 255, 255]);
+  const detected = await service.callMcp("xsxb_detect_regions", {
+    file_path: target,
+    provider: "code",
+    targets: ["subject"],
+    output_path: path.join(f.root, "regions.png"),
+  });
+  assert.equal(detected.ok, true);
+  const region = detected.data.candidates[0];
+  assert.ok(region.reference);
+  const placed = await service.callMcp("xsxb_place_image", {
+    target_path: target,
+    object_path: weapon,
+    target_anchor: region.reference,
+    object_anchor: { mode: "alpha_center" },
+    scale: { mode: "relative", span: "width", ratio: 1 },
+    output_path: path.join(f.root, "region-scale.png"),
+    verify_overlay: false,
+  });
+  assert.equal(placed.ok, true, JSON.stringify(placed));
+  assert.ok(placed.data.scale > 0);
+  assert.equal(placed.data.resolved.mode, "perception_region");
 });
 
 test("rotation and scale keep local grip occlusion without hiding the remaining weapon", (t) => {
   const f = fixture(t);
-  const result = placeImageOnTarget({ ...f.args, rotation: 90, scale: { mode: "relative", span: "height", ratio: 1.5, target: { view: f.args.target_anchor.view, cells: ["A1", "A5"] } }, occlusion: { mask_path: f.mask } }, { root: f.root });
+  const result = placeImageOnTarget(
+    {
+      ...f.args,
+      rotation: 90,
+      scale: {
+        mode: "relative",
+        span: "height",
+        ratio: 1.5,
+        target: { view: f.args.target_anchor.view, cells: ["A1", "A5"] },
+      },
+      occlusion: { mask_path: f.mask },
+    },
+    { root: f.root },
+  );
   const output = decodePngRgba(result.output_path);
   assert.deepEqual(pixel(output, 3, 3), [200, 90, 70, 255]);
   assert.deepEqual(pixel(output, 5, 3), [0, 220, 255, 255]);
@@ -82,7 +148,20 @@ test("fractional downscale samples translucent object alpha once per output pixe
   const f = fixture(t);
   const target = f.write("clear-target.png", 8, 8, () => [0, 0, 0, 0]);
   const weapon = f.write("soft-weapon.png", 2, 6, () => [0, 220, 255, 128]);
-  const result = placeImageOnTarget({ ...f.args, target_path: target, object_path: weapon, scale: { mode: "relative", span: "height", ratio: 3, target: { view: f.args.target_anchor.view, cells: ["A1"] } } }, { root: f.root });
+  const result = placeImageOnTarget(
+    {
+      ...f.args,
+      target_path: target,
+      object_path: weapon,
+      scale: {
+        mode: "relative",
+        span: "height",
+        ratio: 3,
+        target: { view: f.args.target_anchor.view, cells: ["A1"] },
+      },
+    },
+    { root: f.root },
+  );
   const output = decodePngRgba(result.output_path);
   const alphas = output.data.filter((value, i) => i % 4 === 3 && value);
   assert.ok(alphas.length > 0);

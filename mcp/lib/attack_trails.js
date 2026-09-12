@@ -264,19 +264,21 @@ function normalizeSegment(value, index, bindingKey, sourceSchema = 6) {
     ),
   );
   const color = normalizeColor(segment.color);
+  const renderMode =
+    String(segment.renderMode ?? segment.render_mode ?? "mesh").toLowerCase() === "sweep" ? "sweep" : "mesh";
+  const pathKind =
+    String(segment.pathKind || segment.path_kind || "smooth_arc") === "polyline" ? "polyline" : "smooth_arc";
   return {
     id: slug(segment.id, `trail_${index + 1}`),
     name: String(segment.name || `Trail ${index + 1}`),
     profileId: String(segment.profileId || profileId),
     animationId: String(segment.animationId || animationId),
     enabled: segment.enabled !== false,
-    generated:
-      segment.generated !== false &&
-      String(segment.pathKind || segment.path_kind || "smooth_arc") !== "polyline",
-    pathKind:
-      String(segment.pathKind || segment.path_kind || "smooth_arc") === "polyline"
-        ? "polyline"
-        : "smooth_arc",
+    generated: segment.generated !== false && (renderMode === "sweep" || pathKind !== "polyline"),
+    renderMode,
+    trailDurationMs: Math.round(clamp(segment.trailDurationMs ?? segment.trail_duration_ms, 1, 5000, 150)),
+    opacity: clamp(segment.opacity, 0, 1, 0.85),
+    pathKind,
     presetOnly: segment.presetOnly === true && sticks.length === 0,
     coordinateSpace: "group",
     layer: segmentLayer,

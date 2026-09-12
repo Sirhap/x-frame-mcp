@@ -16,7 +16,12 @@ const {
   booleanFlag,
 } = require("./xsxb_mcp_arguments");
 const { measureLongAxis } = require("./xsxb_mcp_visual_qa");
-const { resolveRegionAnchor, resolveOcclusion, compositeOccludedObject, placementClipping } = require("./xsxb_mcp_place_occlusion");
+const {
+  resolveRegionAnchor,
+  resolveOcclusion,
+  compositeOccludedObject,
+  placementClipping,
+} = require("./xsxb_mcp_place_occlusion");
 
 const DEFAULT_GRID = 8;
 const GRID_MIN = 2;
@@ -1219,21 +1224,40 @@ function spanPixels(spec, span) {
  * Uniform scale from relative or physical span. Never image-width-per-meter.
  * @param {unknown} scale Scale spec.
  * @param {{minX:number,minY:number,maxX:number,maxY:number}} bbox Opaque box.
+ * @param {{component?:{minX:number,minY:number,maxX:number,maxY:number}}|null} [targetRegion]
+ * Fresh perception region used when scale.target is intentionally omitted.
  * @returns {{value:number,warning?:string}} Scale.
  */
-function resolveScale(scale, bbox) {
+function resolveScale(scale, bbox, targetRegion = null) {
   if (scale === undefined || scale === null || scale === "" || scale === "none" || scale.mode === "none") {
     return { value: 1 };
   }
   if (!scale || typeof scale !== "object") throw new Error("scale must be none or an object with mode.");
   const boxW = bbox.maxX - bbox.minX + 1;
   const boxH = bbox.maxY - bbox.minY + 1;
+  /**
+   * Resolves one source span from a cell view or a fresh detected region.
+   * A region cannot be mixed with a grid target: each names a different
+   * source of truth for the same scale span.
+   * @param {"width"|"height"} span Requested source edge.
+   * @returns {number} Source-pixel length.
+   */
+  const targetSpan = (span) => {
+    if (targetRegion?.component) {
+      const component = targetRegion.component;
+      return span === "height" ? component.maxY - component.minY + 1 : component.maxX - component.minX + 1;
+    }
+    if (!scale.target || typeof scale.target !== "object") {
+      throw new Error("scale.target is required unless target_anchor is a fresh perception region.");
+    }
+    return spanPixels(scale.target, span);
+  };
   if (scale.mode === "relative") {
     const ratio = Number(scale.ratio);
     if (!(ratio > 0)) throw new Error("scale.ratio must be greater than 0.");
-    const targetPx = spanPixels(scale.target, scale.span || "width");
+    const targetPx = targetSpan(scale.span || "width");
     const objectPx = (scale.span || "width") === "height" ? boxH : boxW;
-    const otherTarget = spanPixels(scale.target, (scale.span || "width") === "height" ? "width" : "height");
+    const otherTarget = targetSpan((scale.span || "width") === "height" ? "width" : "height");
     const otherObject = (scale.span || "width") === "height" ? boxW : boxH;
     const value = (targetPx * ratio) / objectPx;
     const other = (otherTarget * ratio) / otherObject;
@@ -1249,7 +1273,7 @@ function resolveScale(scale, bbox) {
     if (!(targetM > 0) || !(objectM > 0)) throw new Error("target_m and object_m must be greater than 0.");
     const span = scale.span || "width";
     const objectSpan = scale.object_span || (span === "height" ? "bbox_height" : "bbox_width");
-    const targetPx = spanPixels(scale.target, span);
+    const targetPx = targetSpan(span);
     const objectPx = objectSpan === "bbox_width" ? boxW : boxH;
     const otherObject = objectSpan === "bbox_width" ? boxH : boxW;
     const value = (targetPx / targetM) * (objectM / objectPx);
@@ -1474,7 +1498,11 @@ function placeImageOnTarget(args = {}, options = {}) {
   const targetPoint = resolveTargetAnchor(args.target_anchor, target, { sourcePath: targetPath, root });
   const objectPoint = resolveObjectAnchor(args.object_anchor, object, { sourcePath: objectPath, root });
   const bbox = objectPoint.bbox || opaqueBBox(object.data, object.width, object.height);
-  const scaled = resolveScale(args.scale, bbox);
+  const scaleRegion =
+    args.scale?.target && typeof args.scale.target === "object"
+      ? resolveRegionAnchor(args.scale.target, targetPath, root, "scale.target")
+      : null;
+  const scaled = resolveScale(args.scale, bbox, scaleRegion?.region || targetPoint.region);
   const origin = placementOrigin(targetPoint, objectPoint, scaled.value);
   const objectLayer = new Uint8ClampedArray(target.data.length);
   const mapped = {
@@ -1488,20 +1516,28 @@ function placeImageOnTarget(args = {}, options = {}) {
     );
   }
   // Inverse mapping samples each destination once, including fractional scales.
-    blitRotated(
-      objectLayer,
-      target.width,
-      target.height,
-      object.data,
-      object.width,
-      object.height,
-      origin.left,
-      origin.top,
-      scaled.value,
-      mapped,
-      rotation,
-    );
-  const occlusion = resolveOcclusion(args.occlusion, target, targetPath, root, layer, targetPoint.region, () => targetCoverBox(args.target_anchor));
+  blitRotated(
+    objectLayer,
+    target.width,
+    target.height,
+    object.data,
+    object.width,
+    object.height,
+    origin.left,
+    origin.top,
+    scaled.value,
+    mapped,
+    rotation,
+  );
+  const occlusion = resolveOcclusion(
+    args.occlusion,
+    target,
+    targetPath,
+    root,
+    layer,
+    targetPoint.region,
+    () => targetCoverBox(args.target_anchor),
+  );
   const composite = compositeOccludedObject(target, objectLayer, occlusion);
   const dest = composite.data;
   const outputPath = resolveOutputPath(args, { root, artifactDir, inputPath: targetPath, suffix: "_placed" });
@@ -1545,7 +1581,14 @@ function placeImageOnTarget(args = {}, options = {}) {
     resolved: targetPoint.resolved,
     object_anchor: { x: objectPoint.x, y: objectPoint.y, resolved: objectPoint.resolved },
     occlusion: composite.receipt,
-    clipping: placementClipping(opaqueBBox(object.data, object.width, object.height), objectPoint, targetPoint, scaled.value, rotation, target),
+    clipping: placementClipping(
+      opaqueBBox(object.data, object.width, object.height),
+      objectPoint,
+      targetPoint,
+      scaled.value,
+      rotation,
+      target,
+    ),
     mapped,
     left: origin.left,
     top: origin.top,

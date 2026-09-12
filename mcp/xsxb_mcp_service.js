@@ -64,6 +64,7 @@ const { compileSmearBrief } = require("./xsxb_mcp_smear_brief");
 const { compilePlaceBrief } = require("./xsxb_mcp_place_brief");
 const { detectRegions } = require("./xsxb_mcp_detect_regions");
 const { createFlorenceDetector } = require("./xsxb_mcp_florence");
+const { resolvePerceptionRegion } = require("./xsxb_mcp_region_store");
 const {
   assertObservation,
   canonicalValue,
@@ -86,6 +87,7 @@ const {
 } = require("./xsxb_mcp_lock");
 const { validateToolArguments } = require("./xsxb_mcp_schema");
 const { compositeAttackTrails } = require("./xsxb_mcp_trail_preview");
+const { assertSweepSticks } = require("./xsxb_mcp_sweep");
 const {
   cellIdToken,
   normalizeTrailPathKind,
@@ -111,22 +113,12 @@ const {
   requireFps,
   resolveExportFps,
   exportFrameDurationSeconds,
-  requireTunerPort,
   requireFrameIndex,
   resolveImportSource,
   sliceExtractedFrames,
 } = require("./xsxb_mcp_arguments");
-const {
-  createTestWav,
-  encodeGifWithFfmpeg,
-  extractVideoFrames,
-  launchTunerProcess,
-  probeTunerUrl,
-  waitForTuner,
-} = require("./xsxb_mcp_processes");
+const { createTestWav, encodeGifWithFfmpeg, extractVideoFrames } = require("./xsxb_mcp_processes");
 
-const DEFAULT_TUNER_HOST = "127.0.0.1";
-const DEFAULT_TUNER_PORT = 5179;
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
 
 /**
@@ -253,7 +245,7 @@ function resolveBoxPatch(patch, animation, frameRecord, args, image) {
 
 /**
  * Creates the business service used by the XSXB MCP transport.
- * @param {{root?:string,extractVideoFramesImpl?:Function,cutoutPngFileImpl?:Function,probeTunerImpl?:Function,launchTunerImpl?:Function}} [options] Service dependencies.
+ * @param {{root?:string,extractVideoFramesImpl?:Function,cutoutPngFileImpl?:Function}} [options] Service dependencies.
  * @returns {{tools:object[],call:(name:string,args?:object)=>Promise<object>}} MCP-facing service.
  */
 function createXsxbMcpService(options = {}) {
@@ -265,8 +257,6 @@ function createXsxbMcpService(options = {}) {
     options.florenceDetectImpl === undefined ? createFlorenceDetector({ root }) : options.florenceDetectImpl;
   const compositeTrailImpl = options.compositeTrailImpl || compositeAttackTrails;
   const cutoutPngFileImpl = options.cutoutPngFileImpl || null;
-  const probeTunerImpl = options.probeTunerImpl || probeTunerUrl;
-  const launchTunerImpl = options.launchTunerImpl || launchTunerProcess;
   const context = { projectId: "", profileId: "", animationId: "" };
 
   /**
@@ -2512,60 +2502,6 @@ function createXsxbMcpService(options = {}) {
     };
   }
 
-  async function openTuner(args = {}) {
-    const requestedAnimation = Boolean(args.animation_id || args.animation);
-    let project;
-    let profileId = String(args.profile_id || args.profile || "").trim();
-    let animationId = String(args.animation_id || args.animation || "").trim();
-    if (requestedAnimation) {
-      const selection = animationFor(args);
-      project = selection.project;
-      profileId = selection.profile.id;
-      animationId = String(selection.animation.id || selection.animation.name);
-    } else {
-      project = registryProject(args.project_id || args.project, false);
-    }
-    const port = requireTunerPort(args.port ?? process.env.PORT ?? DEFAULT_TUNER_PORT);
-    const host = DEFAULT_TUNER_HOST;
-    const url = new URL(`http://${host}:${port}/workspace`);
-    url.searchParams.set("project", project.id);
-    if (profileId) url.searchParams.set("profile", profileId);
-    if (animationId) url.searchParams.set("animation", animationId);
-    const workspaceUrl = url.toString();
-    const shouldStart = args.start !== false;
-    let reused = await probeTunerImpl(workspaceUrl);
-    let launched = false;
-    let pid = null;
-    if (!reused && shouldStart) {
-      const spawned = (await launchTunerImpl({ root, port, host, url: workspaceUrl })) || {};
-      pid = spawned.pid || null;
-      launched = true;
-      reused = options.launchTunerImpl
-        ? Boolean(await probeTunerImpl(workspaceUrl))
-        : await waitForTuner(probeTunerImpl, workspaceUrl);
-      if (!reused && !options.launchTunerImpl) {
-        if (pid) {
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch (_error) {
-            // The child may have exited before the probe budget ran out.
-          }
-        }
-        throw new Error(`Tuner did not start at http://${host}:${port}.`);
-      }
-    }
-    return {
-      projectId: project.id,
-      profileId,
-      animationId,
-      url: workspaceUrl,
-      launched,
-      reused: Boolean(reused && !launched),
-      started: Boolean(reused || launched),
-      pid,
-    };
-  }
-
   function summarizeAttackTrailSticks(sticks) {
     const frames = sticks.map((stick) => Number(stick.frame) || 0);
     const frameSpan = frames.length ? Math.max(...frames) - Math.min(...frames) : 0;
@@ -2587,6 +2523,22 @@ function createXsxbMcpService(options = {}) {
     const frames = animation.frames || [];
     if (!frames.length) throw new Error("Cannot add an attack trail to an animation without frames.");
     const lastFrame = frames.length - 1;
+    const renderMode = String(args.render_mode ?? "mesh").toLowerCase() === "sweep" ? "sweep" : "mesh";
+    if (
+      args.render_mode !== undefined &&
+      !["mesh", "sweep"].includes(String(args.render_mode).toLowerCase())
+    ) {
+      throw new Error('render_mode must be "mesh" or "sweep".');
+    }
+    if (renderMode === "sweep") assertSweepSticks(args.sticks);
+    const trailDurationMs = Number(args.trail_duration_ms ?? 150);
+    if (!Number.isFinite(trailDurationMs) || trailDurationMs < 1 || trailDurationMs > 5000) {
+      throw new Error("trail_duration_ms must be between 1 and 5000.");
+    }
+    const opacity = Number(args.opacity ?? 0.85);
+    if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+      throw new Error("opacity must be between 0 and 1.");
+    }
     const width = Number(frames[0]?.width || 320);
     const height = Number(frames[0]?.height || 320);
     const startFrame = Number.isInteger(Number(args.start_frame))
@@ -2655,6 +2607,7 @@ function createXsxbMcpService(options = {}) {
       },
     );
     const pathKind = normalizeTrailPathKind(args.path_kind);
+    if (renderMode === "sweep") assertSweepSticks(sticks);
     const segmentId = slug(
       args.id ||
         (args.texture_path ? path.basename(args.texture_path, path.extname(args.texture_path)) : "trail"),
@@ -2668,8 +2621,12 @@ function createXsxbMcpService(options = {}) {
       texture,
       colorMode: args.color_mode || args.colorMode || "solid",
       color: args.color || "#d9364a",
+      renderMode,
+      trailDurationMs,
+      opacity,
       pathKind,
-      generated: pathKind !== "polyline",
+      generated: renderMode === "sweep" || pathKind !== "polyline",
+      ...(renderMode === "sweep" ? { layer: String(sticks[0].layer || "behind") } : {}),
       sticks,
     };
     if (args.before_stop_chase !== undefined) segment.beforeStopChaseMultiplier = args.before_stop_chase;
@@ -2687,9 +2644,15 @@ function createXsxbMcpService(options = {}) {
       bindingKey,
       segment: written,
       pathKind: written?.pathKind || pathKind,
-      useMesh: trailUsesHermiteMesh(written || segment),
+      renderMode: written?.renderMode || renderMode,
+      useMesh: (written?.renderMode || renderMode) === "mesh" && trailUsesHermiteMesh(written || segment),
       ...summarizeAttackTrailSticks(written?.sticks || []),
-      warnings,
+      warnings: [
+        ...warnings,
+        ...(renderMode === "sweep" && booleanFlag(args.sync)
+          ? ["render_mode=sweep is baked by MCP exports; the Godot runtime currently uses its mesh fallback."]
+          : []),
+      ],
       sync: synchronize(project, booleanFlag(args.sync)),
     };
   }
@@ -2714,21 +2677,23 @@ function createXsxbMcpService(options = {}) {
     if (!/\.png$/i.test(absolute)) throw new Error("Attachment image must be a PNG.");
     const paths = projectStore.projectPaths(project);
     const bindings = projectStore.readJson(paths.frameImageAttachments, []);
-    const relativePath = copyIntoWorkspace(
-      project,
-      path.join("attachments", profile.id, String(animation.id || animation.name)),
-      absolute,
-    );
     const name = String(args.name || path.basename(absolute));
     const id = slug(args.id || path.basename(absolute, path.extname(absolute)), "attachment");
     const defaultScale = Number(args.scale ?? 1);
+    if (!Number.isFinite(defaultScale) || defaultScale <= 0) {
+      throw new Error("scale must be a finite number greater than zero.");
+    }
     const requestedOrder = args.layer_order ?? args.layerOrder;
+    const layer = String(args.layer || "above").toLowerCase();
+    if (layer !== "above" && layer !== "below") throw new Error("layer must be either above or below.");
     const layerOrder =
       requestedOrder === undefined || requestedOrder === null || requestedOrder === ""
-        ? 1
+        ? layer === "below"
+          ? -1
+          : 1
         : Number(requestedOrder);
     if (!Number.isFinite(layerOrder)) throw new Error("layer_order must be a finite number.");
-    const layer = String(args.layer || "above") === "below" ? "below" : "above";
+    const attachmentImage = decodePngRgba(absolute);
     const added = [];
     let next = Array.isArray(bindings) ? bindings.slice() : [];
     for (const request of requests) {
@@ -2739,15 +2704,34 @@ function createXsxbMcpService(options = {}) {
       const key = `${profile.id}/${animation.id || animation.name}:${frame}`;
       const source = frames[frame] || frames[0];
       const scale = Number(request.scale ?? defaultScale);
+      if (!Number.isFinite(scale) || scale <= 0)
+        throw new Error("scale must be a finite number greater than zero.");
       const sourcePath = resolveAnimationFramePath(project, source.path, animation);
       const needsHandImage =
         String(args.grid_scope || "") === "subject" || cellIdToken(request.hand ?? args.hand);
       const sourceImage =
         needsHandImage && sourcePath && fs.existsSync(sourcePath) ? decodePngRgba(sourcePath) : undefined;
-      const hand = parseWritePoint(request.hand ?? args.hand, {
-        ...writePointOptions(animation, source, args, sourceImage),
-        label: "hand",
-      });
+      const handReference = request.hand ?? args.hand;
+      const hand =
+        handReference && typeof handReference === "object" && handReference.region_id
+          ? (() => {
+              if (
+                Object.keys(handReference).some((key) => !["region_id", "basis_snapshot_id"].includes(key))
+              ) {
+                throw new Error("hand region reference cannot combine with other coordinates.");
+              }
+              const resolved = resolvePerceptionRegion(handReference, sourcePath, { root });
+              const origin = canvasAnchor(
+                resolved.width,
+                resolved.height,
+                animation.anchorMode || "canvas_bottom_center",
+              );
+              return { x: resolved.x - origin.x, y: resolved.y - origin.y };
+            })()
+          : parseWritePoint(handReference, {
+              ...writePointOptions(animation, source, args, sourceImage),
+              label: "hand",
+            });
       const gripT = request.t !== undefined ? request.t : args.t;
       let offsetX = Number(request.offset_x ?? args.offset_x ?? 0);
       let offsetY =
@@ -2757,21 +2741,36 @@ function createXsxbMcpService(options = {}) {
             : Number(args.offset_y)
           : Number(request.offset_y);
       if (hand) {
-        const image = decodePngRgba(absolute);
-        const measured = measureLongAxis(image.data, image.width, image.height, {
-          t: gripT === undefined ? 0.5 : gripT,
-        });
-        offsetX = hand.x - measured.localFromCenter.x;
-        offsetY = hand.y - measured.localFromCenter.y;
+        const measured = measureLongAxis(
+          attachmentImage.data,
+          attachmentImage.width,
+          attachmentImage.height,
+          {
+            t: gripT === undefined ? 0.5 : gripT,
+          },
+        );
+        const rotation = Number(request.rotation ?? args.rotation ?? 0);
+        if (!Number.isFinite(rotation)) throw new Error("rotation must be a finite number.");
+        const radians = (rotation * Math.PI) / 180;
+        const cos = Math.cos(radians) * scale;
+        const sin = Math.sin(radians) * scale;
+        offsetX = hand.x - (cos * measured.localFromCenter.x - sin * measured.localFromCenter.y);
+        offsetY = hand.y - (sin * measured.localFromCenter.x + cos * measured.localFromCenter.y);
+      } else if (request.rotation !== undefined || args.rotation !== undefined) {
+        const rotation = Number(request.rotation ?? args.rotation);
+        if (!Number.isFinite(rotation)) throw new Error("rotation must be a finite number.");
       }
       const rotation = Number(request.rotation ?? args.rotation ?? 0);
+      if (![offsetX, offsetY, rotation].every(Number.isFinite)) {
+        throw new Error("Attachment offset and rotation must be finite numbers.");
+      }
       const attachment = {
         id,
         key,
         frameKey: key,
         frame,
         name,
-        path: relativePath,
+        path: null,
         type: "image/png",
         layer,
         layerOrder,
@@ -2784,12 +2783,21 @@ function createXsxbMcpService(options = {}) {
           profileId: profile.id,
           animation: `${profile.id}/${animation.id || animation.name}`,
           frame,
+          ...(handReference?.region_id
+            ? { grip: { ...handReference, t: gripT ?? 0.5, hand, space: "group" } }
+            : {}),
         },
       };
       next = next.filter((entry) => entry.id !== id || entry.key !== key);
       next.push(attachment);
       added.push(attachment);
     }
+    const relativePath = copyIntoWorkspace(
+      project,
+      path.join("attachments", profile.id, String(animation.id || animation.name)),
+      absolute,
+    );
+    for (const attachment of added) attachment.path = relativePath;
     projectStore.writeJson(paths.frameImageAttachments, next);
     const base = {
       projectId: project.id,
@@ -3551,7 +3559,7 @@ function createXsxbMcpService(options = {}) {
     return {
       filePath: absolute,
       space: "image_pixels",
-      note: "t=0 is the thicker pommel, t=1 is the thinner tip. localFromCenter is the grip relative to the image center. Attachment offset = hand - localFromCenter.",
+      note: "t=0 is the thicker pommel, t=1 is the thinner tip. localFromCenter is the grip relative to the image center. xsxb_add_attachment rotates and scales that vector before solving its offset from hand.",
       ...measured,
     };
   }
@@ -3781,7 +3789,6 @@ function createXsxbMcpService(options = {}) {
     xsxb_set_active_project: setActiveProject,
     xsxb_bind_godot: bindGodot,
     xsxb_cutout: cutoutAnimation,
-    xsxb_open_tuner: openTuner,
   };
 
   // Keep the receipt envelope on internal definitions for tests. tools/list
@@ -3813,7 +3820,7 @@ function createXsxbMcpService(options = {}) {
    */
   function receiptRoute(name, readOnly) {
     if (readOnly) return "domain_read";
-    if (/export_|import_video|open_tuner|sync_godot/u.test(name)) return "external_process";
+    if (/export_|import_video|sync_godot/u.test(name)) return "external_process";
     if (/place|plant|shift|register|measure|overlay/u.test(name)) return "geometry";
     return "domain_mutation";
   }

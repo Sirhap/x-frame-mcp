@@ -7,7 +7,9 @@ const { requireExistingFile } = require("./xsxb_mcp_arguments");
 function resolveRegionAnchor(anchor, sourcePath, root, label) {
   if (anchor?.region_id === undefined && anchor?.basis_snapshot_id === undefined) return null;
   if (Object.keys(anchor).some((key) => !["region_id", "basis_snapshot_id"].includes(key))) {
-    throw new Error(`${label} region reference cannot combine with cells, mode, view, or other anchor fields.`);
+    throw new Error(
+      `${label} region reference cannot combine with cells, mode, view, or other anchor fields.`,
+    );
   }
   if (!anchor.region_id || !anchor.basis_snapshot_id) {
     throw new Error(`${label} requires both region_id and basis_snapshot_id.`);
@@ -34,20 +36,25 @@ function resolveOcclusion(spec, target, targetPath, root, layer, targetRegion, c
   let source = "none";
   let reference;
   if (spec !== undefined) {
-    if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new Error("occlusion must be an object.");
-    if (layer === "behind") throw new Error("occlusion cannot combine with layer=behind; use front or under_target.");
+    if (!spec || typeof spec !== "object" || Array.isArray(spec))
+      throw new Error("occlusion must be an object.");
+    if (layer === "behind")
+      throw new Error("occlusion cannot combine with layer=behind; use front or under_target.");
     if (spec.mask_path !== undefined) {
-      if (Object.keys(spec).length !== 1) throw new Error("occlusion.mask_path cannot combine with region references or other fields.");
+      if (Object.keys(spec).length !== 1)
+        throw new Error("occlusion.mask_path cannot combine with region references or other fields.");
       const maskPath = requireExistingFile(spec.mask_path, "Occlusion mask");
       const image = decodePngRgba(maskPath);
-      if (image.width !== target.width || image.height !== target.height) throw new Error("Occlusion mask dimensions must match the target image.");
+      if (image.width !== target.width || image.height !== target.height)
+        throw new Error("Occlusion mask dimensions must match the target image.");
       mask = new Uint8ClampedArray(target.width * target.height);
       for (let i = 0; i < mask.length; i += 1) mask[i] = image.data[i * 4 + 3];
       source = "mask_path";
       reference = { mask_path: maskPath };
     } else {
       const resolved = resolveRegionAnchor(spec, targetPath, root, "occlusion");
-      if (!resolved) throw new Error("occlusion requires mask_path or a region_id and basis_snapshot_id reference.");
+      if (!resolved)
+        throw new Error("occlusion requires mask_path or a region_id and basis_snapshot_id reference.");
       mask = resolved.region.mask;
       source = "perception_region";
       reference = { region_id: resolved.region.regionId, basis_snapshot_id: resolved.region.snapshotId };
@@ -61,14 +68,22 @@ function resolveOcclusion(spec, target, targetPath, root, layer, targetRegion, c
     const box = layer === "behind" ? null : coverBox();
     for (let y = 0; y < target.height; y += 1) {
       for (let x = 0; x < target.width; x += 1) {
-        if (box && (x < Math.floor(box.x1) || x >= Math.ceil(box.x2) || y < Math.floor(box.y1) || y >= Math.ceil(box.y2))) continue;
+        if (
+          box &&
+          (x < Math.floor(box.x1) ||
+            x >= Math.ceil(box.x2) ||
+            y < Math.floor(box.y1) ||
+            y >= Math.ceil(box.y2))
+        )
+          continue;
         const i = y * target.width + x;
         mask[i] = target.data[i * 4 + 3];
       }
     }
     source = layer === "behind" ? "whole_target" : "legacy_cell_union";
   }
-  if (mask && mask.length !== target.width * target.height) throw new Error("Occlusion mask dimensions must match the target image.");
+  if (mask && mask.length !== target.width * target.height)
+    throw new Error("Occlusion mask dimensions must match the target image.");
   return { mask, source, reference };
 }
 
@@ -98,7 +113,9 @@ function compositeOccludedObject(target, objectLayer, occlusion) {
     const alpha = objectWeight + targetWeight;
     if (!alpha) continue;
     for (let channel = 0; channel < 3; channel += 1) {
-      output[off + channel] = Math.round((objectLayer[off + channel] * objectWeight + target.data[off + channel] * targetWeight) / alpha);
+      output[off + channel] = Math.round(
+        (objectLayer[off + channel] * objectWeight + target.data[off + channel] * targetWeight) / alpha,
+      );
     }
     output[off + 3] = Math.round(alpha * 255);
     if ([0, 1, 2, 3].some((channel) => output[off + channel] !== target.data[off + channel])) changed += 1;
@@ -119,18 +136,32 @@ function compositeOccludedObject(target, objectLayer, occlusion) {
 
 /** Reports transformed opaque bounds separately from observed output pixel counts. */
 function placementClipping(bbox, objectAnchor, targetAnchor, scale, degrees, target) {
-  const angle = degrees * Math.PI / 180;
+  const angle = (degrees * Math.PI) / 180;
   const cosine = Math.cos(angle);
   const sine = Math.sin(angle);
-  const points = [[bbox.minX, bbox.minY], [bbox.maxX + 1, bbox.minY], [bbox.minX, bbox.maxY + 1], [bbox.maxX + 1, bbox.maxY + 1]].map(([x, y]) => {
+  const points = [
+    [bbox.minX, bbox.minY],
+    [bbox.maxX + 1, bbox.minY],
+    [bbox.minX, bbox.maxY + 1],
+    [bbox.maxX + 1, bbox.maxY + 1],
+  ].map(([x, y]) => {
     const dx = (x - objectAnchor.x) * scale;
     const dy = (y - objectAnchor.y) * scale;
     return { x: targetAnchor.x + dx * cosine - dy * sine, y: targetAnchor.y + dx * sine + dy * cosine };
   });
-  const bounds = { min_x: Math.min(...points.map((point) => point.x)), min_y: Math.min(...points.map((point) => point.y)), max_x: Math.max(...points.map((point) => point.x)), max_y: Math.max(...points.map((point) => point.y)) };
+  const bounds = {
+    min_x: Math.min(...points.map((point) => point.x)),
+    min_y: Math.min(...points.map((point) => point.y)),
+    max_x: Math.max(...points.map((point) => point.x)),
+    max_y: Math.max(...points.map((point) => point.y)),
+  };
   return {
     basis: "transformed_alpha_bounds",
-    possible_clipping: bounds.min_x < -1e-9 || bounds.min_y < -1e-9 || bounds.max_x > target.width + 1e-9 || bounds.max_y > target.height + 1e-9,
+    possible_clipping:
+      bounds.min_x < -1e-9 ||
+      bounds.min_y < -1e-9 ||
+      bounds.max_x > target.width + 1e-9 ||
+      bounds.max_y > target.height + 1e-9,
     bounds,
   };
 }

@@ -226,7 +226,6 @@ async function isolate(tool, probe, serviceOptions) {
 
 const PROBES = {
   ...authoringProbes(importSequence),
-  xsxb_open_tuner: probeOpenTuner,
 
   async xsxb_list_projects(fixture) {
     const listed = await fixture.call("xsxb_list_projects");
@@ -1345,25 +1344,6 @@ animations = [{
   },
 };
 
-const OPEN_TUNER_OPTIONS = {
-  probeTunerImpl: async () => false,
-  launchTunerImpl: async () => ({ pid: 4242 }),
-};
-
-/**
- * Checks the public launch request with a stubbed Tuner process.
- * @param {object} fixture Isolated public client.
- * @returns {Promise<object>} Usability verdict.
- */
-async function probeOpenTuner(fixture) {
-  await importSequence(fixture, "walk");
-  const opened = await fixture.call("xsxb_open_tuner", { animation_id: "walk" });
-  if (!opened.launched || opened.pid !== 4242 || !opened.url.includes("walk")) {
-    return verdict("xsxb_open_tuner", "fail", JSON.stringify(opened));
-  }
-  return verdict("xsxb_open_tuner", "ready", `launch request pid=${opened.pid}`, "Tuner process is stubbed.");
-}
-
 /**
  * Audits every catalogued MCP tool in isolation.
  * @returns {Promise<{catalog:string[],missing:string[],results:object[],counts:object}>}
@@ -1379,7 +1359,7 @@ async function runUsabilityAudit() {
       results.push(verdict(name, "fail", "no isolated probe registered"));
       continue;
     }
-    results.push(await isolate(name, probe, name === "xsxb_open_tuner" ? OPEN_TUNER_OPTIONS : {}));
+    results.push(await isolate(name, probe, {}));
   }
   const counts = { ready: 0, limited: 0, stub: 0, fail: 0 };
   for (const row of results) counts[row.status] += 1;

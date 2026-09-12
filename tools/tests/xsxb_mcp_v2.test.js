@@ -217,7 +217,11 @@ test("xsxb_detect_regions is read-only, code-first, and returns speakable candid
     assert.ok(receipt.data.candidates.some((candidate) => candidate.hypothesis === "subject"));
     assert.ok(receipt.data.candidates.some((candidate) => candidate.hypothesis === "elongated_attachment"));
     for (const candidate of receipt.data.candidates) {
-      assert.match(candidate.regionId, /^reg_[0-9a-f]{16}$/);
+      assert.match(candidate.regionId, /^reg_[0-9a-f]{64}$/);
+      assert.deepEqual(candidate.reference, {
+        region_id: candidate.regionId,
+        basis_snapshot_id: receipt.observation.snapshotId,
+      });
       assert.ok(candidate.cells.every((cell) => /^[A-Z][1-9][0-9]*$/.test(cell)));
       assert.equal(Object.hasOwn(candidate, "bbox"), false, "public candidates hide pixel boxes");
       assert.ok(Array.isArray(candidate.evidence));

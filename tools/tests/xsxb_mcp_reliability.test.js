@@ -17,15 +17,9 @@ const { encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
  */
 async function withProject(operation, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-reliability-"));
-  let launches = 0;
   const service = createXsxbMcpService({
     root,
     florenceDetectImpl: null,
-    probeTunerImpl: async () => false,
-    launchTunerImpl: async () => {
-      launches += 1;
-      return {};
-    },
   });
   const call = async (name, args = {}) => (await service.callMcp(name, args)).data;
   try {
@@ -47,7 +41,7 @@ async function withProject(operation, options = {}) {
     const animation = await call("xsxb_get_animation");
     const store = createProjectStore(root);
     const paths = store.projectPaths(store.activeProject("review"));
-    await operation({ root, call, service, paths, animation, launches: () => launches });
+    await operation({ root, call, service, paths, animation });
   } finally {
     service.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -197,13 +191,6 @@ test("public numeric and nested enum validation rejects malformed values before 
     await assert.rejects(call("xsxb_get_animation", { include: ["typo"] }), /must be one of/);
     await assert.rejects(call("xsxb_reorganize_frames", { order: [-1] }), /at least 0/);
     assert.deepEqual(fs.readFileSync(paths.tuning), original);
-  });
-});
-
-test("false spellings do not launch the Tuner", async () => {
-  await withProject(async ({ call, launches }) => {
-    for (const start of [false, "false", "no", "0", 0]) await call("xsxb_open_tuner", { start });
-    assert.equal(launches(), 0);
   });
 });
 

@@ -1,19 +1,19 @@
 ---
-description: 改完 MCP 代码后删加 mcp.json 并杀掉旧 xsxb 进程，不要只口头让用户点面板
+description: 改完 MCP 代码后删加 mcp.json 并杀掉旧 x-frame 进程，不要只口头让用户点面板
 alwaysApply: true
 ---
 
-# 重载 xsxb MCP
+# 重载 x-frame MCP
 
 磁盘上的 `mcp/` 修复不是 Cursor 里还在跑的旧 STDIO 进程。改完代码并 `npm run check` 之后，代理自己重载，不要停在「请在面板点 Reload」。
 
-1. 记下当前 `xsxb` 整段配置（`command` / `args` / `env`）。
-2. 从本仓 `.cursor/mcp.json` 删掉 `xsxb`。若 `~/.cursor/mcp.json` 或其它已打开仓库的 `.cursor/mcp.json` 也指向同一份 `xsxb_mcp_server.js`，一并删掉。
+1. 记下当前 `x-frame` 整段配置（`command` / `args` / `env`）。
+2. 从本仓 `.cursor/mcp.json` 删掉 `x-frame`。若 `~/.cursor/mcp.json` 或其它已打开仓库的 `.cursor/mcp.json` 也指向同一份 `xsxb_mcp_server.js`，一并删掉。
 3. `pkill -f` 本仓 `mcp/xsxb_mcp_server.js`，清掉残留进程。
-4. 把同一段 `xsxb` 写回去，并把 `env.XSXB_MCP_REV` 改成当天日期加短原因（例如 `20260908-catalog-prune`）。Cursor 靠配置变化拉新进程。
+4. 把同一段 `x-frame` 写回去，并把 `env.XSXB_MCP_REV` 改成当天日期加短原因（例如 `20260908-catalog-prune`）。Cursor 靠配置变化拉新进程。
 5. 用 `pgrep` 确认新进程带上新的 `XSXB_MCP_REV`，再打一发只读工具（如 `xsxb_list_projects`）。
 
 ```text
-BAD: 改完 mcp/*.js → 继续用当前会话的 xsxb
-GOOD: 删 xsxb 配置 → 杀旧进程 → 加回并换 XSXB_MCP_REV → 确认新 PID
+BAD: 改完 mcp/*.js → 继续用当前会话的 x-frame
+GOOD: 删 x-frame 配置 → 杀旧进程 → 加回并换 XSXB_MCP_REV → 确认新 PID
 ```

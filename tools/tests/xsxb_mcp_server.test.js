@@ -20,8 +20,7 @@ const {
   toolDefinitions,
 } = require("../xsxb_mcp_service");
 const { decodePngRgba, encodePngRgba, subjectAnchor } = require("../xsxb_mcp_cutout");
-const { resolveTunerServer, videoExtractFfmpegArgs } = require("../xsxb_mcp_processes");
-const openTunerStub = require("../xsxb_open_tuner");
+const { videoExtractFfmpegArgs } = require("../xsxb_mcp_processes");
 
 const ONE_PIXEL_PNG = encodePngRgba(new Uint8ClampedArray([255, 255, 255, 255]), 1, 1);
 
@@ -83,8 +82,8 @@ test("MCP transport initializes, lists tools, and returns structured tool result
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
     service,
   );
-  assert.equal(initialized.result.serverInfo.name, "xsxb-frame-tuner");
-  assert.match(initialized.result.instructions, /XSXB-Frame-Tuner/);
+  assert.equal(initialized.result.serverInfo.name, "x-frame");
+  assert.match(initialized.result.instructions, /X-Frame/);
   assert.match(initialized.result.instructions, /missing capability|leave MCP|raise it/i);
   assert.equal(initialized.result.instructions, INSTRUCTIONS);
   const listed = await handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/list" }, service);
@@ -128,7 +127,7 @@ test("stdio entrypoints stay alive and answer initialize", async () => {
     });
     child.kill("SIGTERM");
     const code = await closed;
-    assert.match(stdout, /"xsxb-frame-tuner"/, `${rel} must answer initialize (exit ${code})`);
+    assert.match(stdout, /"x-frame"/, `${rel} must answer initialize (exit ${code})`);
   }
 });
 
@@ -698,10 +697,11 @@ animations = [{
   }
 });
 
-test("MCP catalog exposes bind, cutout, active, and open-tuner tools", () => {
-  for (const name of ["xsxb_bind_godot", "xsxb_cutout", "xsxb_set_active_project", "xsxb_open_tuner"]) {
+test("MCP catalog exposes bind, cutout, and active tools without open_tuner", () => {
+  for (const name of ["xsxb_bind_godot", "xsxb_cutout", "xsxb_set_active_project"]) {
     assert.ok(MCP_TOOL_NAMES.includes(name), name);
   }
+  assert.equal(MCP_TOOL_NAMES.includes("xsxb_open_tuner"), false);
 });
 
 test("sync keeps the requested project and reports the missing Godot bind", async () => {
@@ -870,10 +870,7 @@ test("MCP without an explicit root stores in the current working directory .x-fr
   delete process.env.XSXB_ROOT;
   process.chdir(host);
   try {
-    const service = createXsxbMcpService({
-      probeTunerImpl: async () => true,
-      launchTunerImpl: async () => ({ pid: 1 }),
-    });
+    const service = createXsxbMcpService({});
     const created = await service.call("xsxb_create_project", {
       project_id: "local",
       label: "Local",
@@ -1179,8 +1176,7 @@ test("xsxb_cutout uses the tuner smart-cutout path and keeps hit-frame feet", as
   }
 });
 
-test("add tools accept real files and open_tuner can launch", async () => {
-  let launched = false;
+test("add tools accept real files", async () => {
   const current = fixture();
   const service = createXsxbMcpService({
     root: current.root,
@@ -1190,11 +1186,6 @@ test("add tools accept real files and open_tuner can launch", async () => {
         fs.writeFileSync(framePath, ONE_PIXEL_PNG);
         return framePath;
       });
-    },
-    probeTunerImpl: async () => false,
-    launchTunerImpl: async () => {
-      launched = true;
-      return { pid: 99 };
     },
   });
   try {
@@ -1240,12 +1231,6 @@ test("add tools accept real files and open_tuner can launch", async () => {
     });
     assert.equal(trail.segment.id, "arc");
     assert.equal(trail.segment.color, "#112233");
-
-    const opened = await service.call("xsxb_open_tuner", { animation_id: "walk" });
-    assert.equal(launched, true);
-    assert.equal(opened.launched, true);
-    assert.equal(opened.pid, 99);
-    assert.match(opened.url, /animation=walk/);
 
     await assert.rejects(
       () => service.call("xsxb_add_attachment", { animation_id: "walk", sync: false }),
@@ -1356,21 +1341,12 @@ test("import_animation slices PNG sequences with start_frame and end_frame", asy
   }
 });
 
-test("the leftover open_tuner module does not claim the Tuner started", async () => {
-  const result = await openTunerStub({});
-  assert.notEqual(result.status, "tuner_started");
-  assert.match(String(result.status || result.error || ""), /not[_ ]implemented/i);
-});
-
 test("MCP service uses XSXB_ROOT when options.root is omitted", async () => {
   const previous = process.env.XSXB_ROOT;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-env-root-"));
   process.env.XSXB_ROOT = root;
   try {
-    const service = createXsxbMcpService({
-      probeTunerImpl: async () => true,
-      launchTunerImpl: async () => ({ pid: 1 }),
-    });
+    const service = createXsxbMcpService({});
     await service.call("xsxb_list_projects");
     assert.ok(fs.existsSync(path.join(root, ".x-frame", "data", "projects.json")));
     assert.equal(fs.existsSync(path.join(root, "data", "projects.json")), false);
@@ -1378,44 +1354,6 @@ test("MCP service uses XSXB_ROOT when options.root is omitted", async () => {
     if (previous === undefined) delete process.env.XSXB_ROOT;
     else process.env.XSXB_ROOT = previous;
     fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("launchTuner looks up XSXB_TUNER_ROOT instead of assuming this repo is Tuner", () => {
-  const missingRoot = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-no-tuner-"));
-  const tunerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-tuner-"));
-  const previous = process.env.XSXB_TUNER_ROOT;
-  try {
-    assert.throws(
-      () => resolveTunerServer({ root: missingRoot }),
-      (error) => error && error.code === "XSXB_TUNER_MISSING",
-    );
-    const script = path.join(tunerRoot, "tools/animation_tuner/server.js");
-    fs.mkdirSync(path.dirname(script), { recursive: true });
-    fs.writeFileSync(script, "console.log('stub');\n");
-    process.env.XSXB_TUNER_ROOT = tunerRoot;
-    assert.equal(resolveTunerServer({ root: missingRoot }), path.resolve(script));
-  } finally {
-    if (previous === undefined) delete process.env.XSXB_TUNER_ROOT;
-    else process.env.XSXB_TUNER_ROOT = previous;
-    fs.rmSync(missingRoot, { recursive: true, force: true });
-    fs.rmSync(tunerRoot, { recursive: true, force: true });
-  }
-});
-
-test("open_tuner rejects a non-numeric PORT environment value", async () => {
-  const current = fixture();
-  const previous = process.env.PORT;
-  process.env.PORT = "not-a-port";
-  try {
-    await assert.rejects(
-      () => current.service.call("xsxb_open_tuner", { start: false }),
-      /Tuner port must be an integer/,
-    );
-  } finally {
-    if (previous === undefined) delete process.env.PORT;
-    else process.env.PORT = previous;
-    current.cleanup();
   }
 });
 
@@ -1438,42 +1376,6 @@ test("update_timing does not persist fps when a frame request is invalid", async
     );
     const after = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
     assert.equal(after.animation.fps, 12);
-  } finally {
-    current.cleanup();
-  }
-});
-
-test("open_tuner can switch projects without leftover animation context", async () => {
-  const current = fixture();
-  const service = createXsxbMcpService({
-    root: current.root,
-    probeTunerImpl: async () => true,
-    launchTunerImpl: async () => ({ pid: 1 }),
-  });
-  try {
-    const sequenceDir = path.join(current.root, "seq-a");
-    fs.mkdirSync(sequenceDir, { recursive: true });
-    fs.writeFileSync(path.join(sequenceDir, "a.png"), ONE_PIXEL_PNG);
-    await service.call("xsxb_import_animation", {
-      source: "png_sequence",
-      directory: sequenceDir,
-      animation_id: "walk",
-    });
-    await service.call("xsxb_open_tuner", { animation_id: "walk" });
-
-    const otherGodot = path.join(current.root, "godot-b");
-    fs.mkdirSync(otherGodot, { recursive: true });
-    fs.writeFileSync(path.join(otherGodot, "project.godot"), '[application]\nconfig/name="B"\n');
-    createProjectStore(current.root).addProject({
-      id: "proj-b",
-      label: "B",
-      projectRoot: otherGodot,
-    });
-    const opened = await service.call("xsxb_open_tuner", { project_id: "proj-b" });
-    assert.equal(opened.projectId, "proj-b");
-    assert.equal(opened.animationId, "");
-    assert.match(opened.url, /project=proj-b/);
-    assert.doesNotMatch(opened.url, /animation=/);
   } finally {
     current.cleanup();
   }

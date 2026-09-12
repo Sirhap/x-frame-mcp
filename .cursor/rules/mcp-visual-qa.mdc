@@ -10,7 +10,7 @@ alwaysApply: true
 - 抠完看 `preview.path`（洋红扁平成图）。不要用默认带格、按 `feetY` 贴底的小格子表当「腿还在」。黑底合成图上看不见深蓝裤子。
 - 给人看的表：`grid=false`，格子至少盖住画布。种脚表才按靴底裁切。
 - 生成黑/白底板用 `border_flood` + `key_color`。复测要从 raw 重抠（或 `force` + `key_color`）；对着已抠帧会 skip。
-- 改完 MCP 代码后按「重载 xsxb MCP」规则删加 mcp.json 并杀掉旧进程。磁盘上的修复不是 Cursor 里还在跑的旧进程。
+- 改完 MCP 代码后按「重载 x-frame MCP」规则删加 mcp.json 并杀掉旧进程。磁盘上的修复不是 Cursor 里还在跑的旧进程。
 - 站姿图已经持剑再 `place_image` 是叠刃。着地冰花挡住蹲姿是构图；洋红里裤子仍连到靴子才算抠对。
 
 ```text

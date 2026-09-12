@@ -80,7 +80,7 @@ Write-back uses `grid.cells[row][col]` (or the same group numbers). Do not conve
 
 Planting:
 
-- `xsxb_shift_frames` is already in the catalog. If a client reports it not found, reload the `xsxb` MCP server (stale session catalog). Do not skip planting.
+- `xsxb_shift_frames` is already in the catalog. If a client reports it not found, reload the `x-frame` MCP server (stale session catalog). Do not skip planting.
 - Do not plant soles to `0,0`; that clips 1px. Plant the sole to `y=-1`.
 - `metrics.feetY` is the boot sole and ignores connected bright slash/glow below it. Confirm on the overlay before planting.
 

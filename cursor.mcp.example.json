@@ -1,12 +1,9 @@
 {
   "mcpServers": {
-    "xsxb": {
+    "x-frame": {
       "type": "stdio",
       "command": "node",
-      "args": ["/absolute/path/to/x-frame-mcp/mcp/xsxb_mcp_server.js"],
-      "env": {
-        "XSXB_ROOT": "/absolute/path/to/XSXB-Frame-Tuner"
-      }
+      "args": ["/absolute/path/to/x-frame-mcp/mcp/xsxb_mcp_server.js"]
     }
   }
 }

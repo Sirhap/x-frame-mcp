@@ -58,7 +58,6 @@ const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_overlay_grid",
   "xsxb_plan_place",
   "xsxb_place_image",
-  "xsxb_open_tuner",
   ...authoringDefinitions().map((tool) => tool.name),
 ]);
 
@@ -1037,6 +1036,15 @@ function toolDefinitions() {
           name: { type: "string" },
           color: { type: "string", description: "#RRGGBB solid color." },
           color_mode: { type: "string", enum: ["solid", "original", "gradient"], default: "solid" },
+          render_mode: {
+            type: "string",
+            enum: ["mesh", "sweep"],
+            default: "mesh",
+            description:
+              "sweep fills the recent blade-edge trajectory with time decay in MCP sheet/GIF exports. Requires explicit sticks. Godot/Tuner continue using their mesh fallback; mesh keeps existing behavior everywhere.",
+          },
+          trail_duration_ms: { type: "number", minimum: 1, maximum: 5000, default: 150 },
+          opacity: { type: "number", minimum: 0, maximum: 1, default: 0.85 },
           path_kind: {
             type: "string",
             enum: ["polyline", "smooth_arc"],
@@ -1169,7 +1177,7 @@ function toolDefinitions() {
     {
       name: "xsxb_add_attachment",
       description:
-        "Walk/run loops: do not use this. Bind a local PNG as a frame image attachment. file_path is required for a real asset. Pass frames to bind the same asset on many frames in one write. offset_x/offset_y are group coordinates. Prefer hand (group point or overlay cell id E5 / e5 / {cell:E5} from the overlay) plus t; MCP measures the PNG and writes offset = hand - localFromCenter.",
+        "Walk/run loops: do not use this. Bind a local PNG as a frame image attachment. file_path is required for a real asset. Pass frames to bind the same asset on many frames in one write. offset_x/offset_y are group coordinates. Prefer hand (group point, overlay cell, or fresh detect_regions reference) plus t; MCP measures the PNG and applies its scale and rotation before solving the grip offset.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1185,12 +1193,15 @@ function toolDefinitions() {
           id: { type: "string" },
           name: { type: "string" },
           layer: { type: "string", enum: ["above", "below"], default: "above" },
-          layer_order: { type: "integer", default: 1 },
+          layer_order: {
+            type: "integer",
+            description: "Signed draw order; omitted derives -1 for below and +1 for above.",
+          },
           offset_x: { type: "number", default: 0 },
           offset_y: { type: "number" },
           hand: {
             description:
-              'Stage grip in group coordinates, {x,y} or "x,y", or overlay cell id E5 / e5 / {cell:E5}. With t, MCP sets offset = hand - localFromCenter.',
+              "Stage grip: group {x,y}, cell id, or {region_id,basis_snapshot_id} from detect_regions for this frame. With t, MCP subtracts the rotated, scaled local grip from hand. Region references validate source freshness.",
           },
           t: {
             type: "number",
@@ -1588,7 +1599,7 @@ function toolDefinitions() {
     {
       name: "xsxb_detect_regions",
       description:
-        "Read-only, code-first perception for a PNG or animation. Uses deterministic alpha, connectivity, color, shape, and temporal evidence before optional Florence-2 fallback. Returns speakable region cells and opaque region ids; never mutates source images and never exposes freehand pixel boxes. output_path that resolves to a source PNG is refused (OVERWRITE_SOURCE).",
+        "Read-only, code-first perception for a PNG or animation. Uses deterministic alpha, connectivity, color, shape, and temporal evidence before optional Florence-2 fallback. Each candidate returns a fresh {region_id,basis_snapshot_id} reference usable by place_image or add_attachment; targetStatus reports geometry and semantic state separately. Never mutates source images or exposes freehand pixel boxes. output_path that resolves to a source PNG is refused (OVERWRITE_SOURCE).",
       inputSchema: {
         type: "object",
         properties: {
@@ -1769,6 +1780,15 @@ function toolDefinitions() {
             description:
               "{view, cells, derive} or {x_from, y_from} with the same fields on each arm. derive: center|bottom_center|top_center|left_center|right_center|median_center. Named cells without snap or derive default to snap alpha_centroid. snap: alpha_center|alpha_centroid|alpha_bottom_center|alpha_support on the cell union's opaque pixels. overlay_id from xsxb_overlay_grid is required for agent-led calls. nudge: {dx,dy} pixel tweak after snap/derive. Never freehand x,y.",
             properties: {
+              region_id: {
+                type: "string",
+                description:
+                  "Opaque detect_regions candidate id; pair with basis_snapshot_id, exclusive with other anchor fields.",
+              },
+              basis_snapshot_id: {
+                type: "string",
+                description: "Observation snapshot returned with region_id.",
+              },
               view: { type: "object", description: "Overlay view that produced the cell ids." },
               cells: { type: "array", items: { type: "string" }, description: "Speakable cell ids." },
               derive: {
@@ -1809,6 +1829,15 @@ function toolDefinitions() {
             description:
               "mode alpha_center|alpha_centroid|alpha_bottom_center|alpha_support, cells+derive, cells+snap on the grip region (cells without snap/derive default to alpha_centroid), or measure_t along pommel→tip. overlay_id from the object overlay for agent-led calls. alpha_support uses the opaque bbox bottom band; footY is maxY+1.",
             properties: {
+              region_id: {
+                type: "string",
+                description:
+                  "Fresh detect_regions candidate on object_path; exclusive with other anchor fields.",
+              },
+              basis_snapshot_id: {
+                type: "string",
+                description: "Observation snapshot returned with region_id.",
+              },
               mode: {
                 type: "string",
                 description: "alpha_center|alpha_centroid|alpha_bottom_center|alpha_support.",
@@ -1837,17 +1866,19 @@ function toolDefinitions() {
           },
           scale: {
             description:
-              'Omit or {mode:"none"} for 1. relative: target view+cells, span width|height, ratio. physical: span, target_m, object_m, object_span bbox_width|bbox_height. Uniform scale from that span.',
+              'Omit or {mode:"none"} for 1. relative: target view+cells, or a fresh target_anchor/target region, span width|height, ratio. physical: span, target_m, object_m, object_span bbox_width|bbox_height. Uniform scale from that span.',
             properties: {
               mode: { type: "string", enum: ["none", "relative", "physical"] },
               target: {
                 type: "object",
-                description: "{view, cells, overlay_id} naming the span.",
-                required: ["view", "cells"],
+                description:
+                  "{view,cells,overlay_id} naming the span, or {region_id,basis_snapshot_id} from detect_regions on target_path. Omit only when target_anchor itself is that region.",
                 additionalProperties: false,
                 properties: {
                   view: { type: "object" },
                   cells: { type: "array", items: { type: "string" } },
+                  region_id: { type: "string" },
+                  basis_snapshot_id: { type: "string" },
                   overlay_id: {
                     type: "string",
                     description:
@@ -1875,6 +1906,17 @@ function toolDefinitions() {
             description:
               "front paints the object on top. behind restores every opaque target pixel. under_target restores opaque target pixels only inside the target_anchor cell union.",
           },
+          occlusion: {
+            type: "object",
+            additionalProperties: false,
+            description:
+              "Restore only local foreground over the object. Use {region_id,basis_snapshot_id} from target detection or {mask_path} for a target-sized alpha PNG; mutually exclusive. Mask alpha is absolute foreground opacity. With under_target and a region target anchor, that region mask is automatic.",
+            properties: {
+              region_id: { type: "string" },
+              basis_snapshot_id: { type: "string" },
+              mask_path: { type: "string" },
+            },
+          },
           output_path: {
             type: "string",
             description:
@@ -1894,25 +1936,6 @@ function toolDefinitions() {
             description:
               "Optional plan_id from xsxb_plan_place. When set, target cells/layer/snap must match the stored brief or place throws PLAN_MISMATCH. object_cells are read notes: object_anchor.measure_t is an allowed pairing and does not have to match those cells. Place still works without it.",
           },
-        },
-        additionalProperties: false,
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    },
-    {
-      name: "xsxb_open_tuner",
-      description:
-        "Start the local Tuner if needed and return a workspace URL focused on one project, profile, and animation.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          ...animationProperties,
-          start: {
-            type: "boolean",
-            default: true,
-            description: "Start the Tuner process when it is not listening.",
-          },
-          port: { type: "integer", minimum: 1, maximum: 65535, default: 5179 },
         },
         additionalProperties: false,
       },

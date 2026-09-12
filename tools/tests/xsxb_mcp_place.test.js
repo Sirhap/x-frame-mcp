@@ -181,7 +181,7 @@ test("detect_regions, overlay_grid, and place_image sit after measure_image in t
   assert.equal(MCP_TOOL_NAMES[measure + 2], "xsxb_overlay_grid");
   assert.equal(MCP_TOOL_NAMES[measure + 3], "xsxb_plan_place");
   assert.equal(MCP_TOOL_NAMES[measure + 4], "xsxb_place_image");
-  assert.equal(MCP_TOOL_NAMES[measure + 5], "xsxb_open_tuner");
+  assert.equal(MCP_TOOL_NAMES.includes("xsxb_open_tuner"), false);
   const names = toolDefinitions().map((tool) => tool.name);
   assert.deepEqual(names, [...MCP_TOOL_NAMES]);
 });
