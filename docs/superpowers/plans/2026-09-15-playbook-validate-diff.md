@@ -19,4 +19,4 @@
 
 - [x] RED: acceptance + compose tests fail because tools/modules are missing.
 - [x] GREEN: implement compose, validate-for-godot, catalog, skills, docs.
-- [ ] Real acceptance writes and decodes preview/evidence PNGs through `tools/call`.
+- [x] Real acceptance writes and decodes preview/evidence PNGs through `tools/call`.
