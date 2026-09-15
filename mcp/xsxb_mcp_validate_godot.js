@@ -5,11 +5,15 @@
  * Import/sync success is not a visual pass: grounded clips must keep idle feet.
  */
 
+const fs = require("node:fs");
+const path = require("node:path");
+const { GODOT_SYNC_ROOT } = require("./lib/godot_sync");
 const { borderFloodKey, measureSpriteGeometry } = require("./xsxb_mcp_lock");
 
 const FX_KIND = /vfx|effect|overlay|prop|\bfx\b|airborne|jump/i;
 const DEFAULT_FEET_TOLERANCE = 2;
 const DEFAULT_HEIGHT_TOLERANCE = 2;
+const SYNC_ROOT_ALIASES = Object.freeze(["xsxb_frame_tuner", "x_frame"]);
 
 /**
  * True when a clip is VFX, overlay, or airborne and must not lock to idle soles.
@@ -21,18 +25,33 @@ function isFxOrAirborne(clip) {
 }
 
 /**
- * Keys a near-white studio plate, then measures body/feet geometry.
+ * Keys a near-white or near-black studio plate, then measures body/feet geometry.
  * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Decoded PNG.
  * @returns {object} Sprite geometry after the plate is removed.
  */
 function measureKeyedSubject(image) {
-  const keyed = borderFloodKey(image.data, image.width, image.height, { mode: "near_white" });
+  const keyed = borderFloodKey(image.data, image.width, image.height, { mode: "any" });
   return measureSpriteGeometry(keyed.data, image.width, image.height);
 }
 
 /**
+ * Median of finite numbers, or 0 when the list is empty.
+ * @param {number[]} values Samples.
+ * @returns {number} Median.
+ */
+function median(values) {
+  const sorted = (Array.isArray(values) ? values : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (!sorted.length) return 0;
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
  * Compares grounded clips to idle (or the first grounded clip) for feet/height drift.
- * @param {Array<{id:string,grounded?:boolean,feetY:number,bodyH:number}>} clips Measured animations.
+ * @param {Array<{id:string,grounded?:boolean,feetY?:number,bodyH?:number,feetYs?:number[],bodyHs?:number[]}>} clips
+ *   Measured animations.
  * @param {{feetTolerance?:number,heightTolerance?:number}} [options] Pixel slop.
  * @returns {{ok:boolean,reference:string|null,issues:string[],clips:object[]}} Contract.
  */
@@ -43,13 +62,30 @@ function evaluateScaleContract(clips, options = {}) {
   const heightTolerance = Number.isFinite(Number(options.heightTolerance))
     ? Number(options.heightTolerance)
     : DEFAULT_HEIGHT_TOLERANCE;
-  const grounded = (Array.isArray(clips) ? clips : []).filter((clip) => clip && clip.grounded !== false);
+  const grounded = (Array.isArray(clips) ? clips : [])
+    .filter((clip) => clip && clip.grounded !== false)
+    .map((clip) => {
+      const feetYs = Array.isArray(clip.feetYs) ? clip.feetYs : [clip.feetY];
+      const bodyHs = Array.isArray(clip.bodyHs) ? clip.bodyHs : [clip.bodyH];
+      const feetY = Number.isFinite(Number(clip.feetY)) ? Number(clip.feetY) : median(feetYs);
+      const bodyH = Number.isFinite(Number(clip.bodyH)) ? Number(clip.bodyH) : median(bodyHs);
+      const finiteFeet = feetYs.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+      return {
+        ...clip,
+        feetY,
+        bodyH,
+        feetSpan: finiteFeet.length ? Math.max(...finiteFeet) - Math.min(...finiteFeet) : 0,
+      };
+    });
   const reference = grounded.find((clip) => /idle/i.test(String(clip.id || ""))) || grounded[0] || null;
   const issues = [];
   if (!reference) {
     return { ok: true, reference: null, issues, clips: [] };
   }
   for (const clip of grounded) {
+    if (clip.feetSpan > feetTolerance) {
+      issues.push(`${clip.id}: feet row spans ${clip.feetSpan}px inside the clip`);
+    }
     if (clip.id === reference.id) continue;
     const dFeet = Math.abs(Number(clip.feetY || 0) - Number(reference.feetY || 0));
     const dHeight = Math.abs(Number(clip.bodyH || 0) - Number(reference.bodyH || 0));
@@ -72,10 +108,26 @@ function evaluateScaleContract(clips, options = {}) {
       id: clip.id,
       feetY: clip.feetY,
       bodyH: clip.bodyH,
+      feetSpan: clip.feetSpan,
       dFeet: Number(clip.feetY || 0) - Number(reference.feetY || 0),
       dBody: Number(clip.bodyH || 0) - Number(reference.bodyH || 0),
     })),
   };
+}
+
+/**
+ * Classifies a disk-mutating inspect step so agents stop on warn.
+ * @param {{errors?:string[],warnings?:string[],scaleOk?:boolean,changedPixelCount?:number}} signal
+ *   Gate or diff evidence.
+ * @returns {"clean"|"review"|"warn"} Verdict.
+ */
+function classifyInspectQa(signal = {}) {
+  if (Array.isArray(signal.errors) && signal.errors.length) return "warn";
+  if (Number.isFinite(Number(signal.changedPixelCount))) {
+    return Number(signal.changedPixelCount) === 0 ? "warn" : "review";
+  }
+  if (signal.scaleOk === false || (Array.isArray(signal.warnings) && signal.warnings.length)) return "review";
+  return "clean";
 }
 
 /**
@@ -104,12 +156,83 @@ function composeValidationEvidence(images) {
 }
 
 /**
- * Merges import validation, the scale contract, and written evidence.
+ * Finds the sync folder that actually contains the generated runtime.
+ * @param {string} projectRoot Bound Godot root.
+ * @returns {string} Directory name under the Godot project.
+ */
+function resolveGodotSyncRoot(projectRoot) {
+  const candidates = [...new Set([GODOT_SYNC_ROOT, ...SYNC_ROOT_ALIASES])];
+  if (!projectRoot) return GODOT_SYNC_ROOT;
+  for (const name of candidates) {
+    if (fs.existsSync(path.join(projectRoot, name, "runtime", "xsxb_frame_actor.gd"))) return name;
+  }
+  return GODOT_SYNC_ROOT;
+}
+
+/**
+ * Lists runtime files and game-local animation counts after sync.
+ * @param {string} projectRoot Bound Godot root.
+ * @param {string} projectId XSXB project id.
+ * @returns {object} Disk snapshot an editor MCP can verify against.
+ */
+function describeGodotHandoff(projectRoot, projectId) {
+  const syncRoot = resolveGodotSyncRoot(projectRoot);
+  const runtimeDir = projectRoot ? path.join(projectRoot, syncRoot, "runtime") : "";
+  const dataDir = projectRoot ? path.join(projectRoot, syncRoot, "data", "projects", projectId) : "";
+  const runtimeFiles = [
+    "xsxb_frame_actor.gd",
+    "xsxb_frame_actor.tscn",
+    "xsxb_runtime_test.tscn",
+    "xsxb_attack_trail_renderer.gd",
+    "xsxb_attack_trail.gdshader",
+  ].map((fileName) => ({
+    name: fileName,
+    path: runtimeDir ? path.join(runtimeDir, fileName) : "",
+    present: Boolean(runtimeDir && fs.existsSync(path.join(runtimeDir, fileName))),
+  }));
+  let animations = [];
+  let frameCount = 0;
+  const manifestPath = dataDir ? path.join(dataDir, "animation_manifest.json") : "";
+  if (manifestPath && fs.existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
+        for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
+          const frames = Array.isArray(animation.frames) ? animation.frames.length : 0;
+          frameCount += frames;
+          animations.push({
+            id: String(animation.id || animation.name),
+            frames,
+            type: animation.type || "actor",
+          });
+        }
+      }
+    } catch {
+      animations = [];
+    }
+  }
+  return {
+    syncRoot,
+    runtimeDir,
+    dataDir,
+    runtime: {
+      actorScript: runtimeFiles.find((file) => file.name === "xsxb_frame_actor.gd")?.present === true,
+      actorScene: runtimeFiles.find((file) => file.name === "xsxb_frame_actor.tscn")?.present === true,
+      files: runtimeFiles,
+    },
+    animations,
+    frameCount,
+    present: runtimeFiles.every((file) => file.present),
+  };
+}
+
+/**
+ * Merges import validation, the scale contract, written evidence, and a Godot snapshot.
  * Scale drift is a warning unless `strict` is set.
  * @param {{ok?:boolean,errors?:string[],warnings?:string[],summary?:object}} importResult validateImport payload.
  * @param {{ok:boolean,issues:string[]}} scaleContract Feet/height contract.
  * @param {{path:string,width:number,height:number}} evidence Written PNG.
- * @param {{strict?:boolean}} [options] Strict treats warnings as failure.
+ * @param {{strict?:boolean,godot?:object,summaryPath?:string}} [options] Strict and snapshot extras.
  * @returns {object} Public `data` payload for `xsxb_validate_for_godot`.
  */
 function assembleGodotValidation(importResult, scaleContract, evidence, options = {}) {
@@ -120,24 +243,42 @@ function assembleGodotValidation(importResult, scaleContract, evidence, options 
     if (options.strict) errors.push(...issues);
     else warnings.push(...issues);
   }
+  const ok = errors.length === 0 && (!options.strict || warnings.length === 0);
+  const qa = classifyInspectQa({
+    errors,
+    warnings,
+    scaleOk: scaleContract ? scaleContract.ok !== false : true,
+  });
   return {
-    ok: errors.length === 0 && (!options.strict || warnings.length === 0),
+    ok,
+    qa,
+    next:
+      qa === "warn"
+        ? "stop; open evidence.path and fix errors before sync or playbook continue"
+        : qa === "review"
+          ? "open evidence.path; scale or gameplay warnings are not a visual pass"
+          : "open evidence.path; gate passed, still confirm the sheet",
     errors,
     warnings,
     summary: importResult.summary || {},
     scale_contract: scaleContract,
+    godot: options.godot || null,
     evidence: {
       path: evidence.path,
       width: evidence.width,
       height: evidence.height,
     },
+    run_summary: options.summaryPath ? { path: options.summaryPath } : null,
   };
 }
 
 module.exports = {
   assembleGodotValidation,
+  classifyInspectQa,
   composeValidationEvidence,
+  describeGodotHandoff,
   evaluateScaleContract,
   isFxOrAirborne,
   measureKeyedSubject,
+  resolveGodotSyncRoot,
 };

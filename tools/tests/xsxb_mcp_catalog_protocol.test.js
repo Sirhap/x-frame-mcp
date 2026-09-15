@@ -48,6 +48,7 @@ test("initialize instructions are self-contained and do not advertise missing me
   assert.match(INSTRUCTIONS, /xsxb_diff_frames/);
   assert.match(INSTRUCTIONS, /xsxb_validate_for_godot/);
   assert.match(INSTRUCTIONS, /skills\/x-frame/);
+  assert.match(INSTRUCTIONS, /qa=warn/);
   assert.equal((await handleMessage(request(2, "prompts/list"), service)).error.code, -32601);
   assert.equal(
     (await handleMessage(request(3, "resources/read", { uri: "xsxb://docs/session" }), service)).error.code,

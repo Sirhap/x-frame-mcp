@@ -985,10 +985,14 @@ animations = [{
       frame_b: 1,
       mode: "diff",
     });
-    if (!fs.existsSync(diffed.preview.path) || Number(diffed.changedPixelCount) < 20) {
+    if (
+      !fs.existsSync(diffed.preview.path) ||
+      Number(diffed.changedPixelCount) < 20 ||
+      diffed.qa !== "review"
+    ) {
       return verdict("xsxb_diff_frames", "fail", JSON.stringify(diffed));
     }
-    return verdict("xsxb_diff_frames", "ready", `changed=${diffed.changedPixelCount}`);
+    return verdict("xsxb_diff_frames", "ready", `changed=${diffed.changedPixelCount} qa=${diffed.qa}`);
   },
 
   async xsxb_validate_for_godot(fixture) {
@@ -1043,10 +1047,20 @@ animations = [{
       ].join("\n"),
     );
     const ready = await fixture.call("xsxb_validate_for_godot", { require_gameplay: true });
-    if (ready.ok !== true || !fs.existsSync(ready.evidence.path)) {
+    if (
+      ready.ok !== true ||
+      ready.qa !== "clean" ||
+      !fs.existsSync(ready.evidence.path) ||
+      !ready.godot?.runtime?.actorScript ||
+      !fs.existsSync(ready.run_summary.path)
+    ) {
       return verdict("xsxb_validate_for_godot", "fail", JSON.stringify(ready));
     }
-    return verdict("xsxb_validate_for_godot", "ready", `evidence=${path.basename(ready.evidence.path)}`);
+    return verdict(
+      "xsxb_validate_for_godot",
+      "ready",
+      `qa=${ready.qa} evidence=${path.basename(ready.evidence.path)}`,
+    );
   },
 
   async xsxb_cutout(fixture) {

@@ -1314,7 +1314,7 @@ function toolDefinitions() {
     {
       name: "xsxb_validate_for_godot",
       description:
-        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height). require_gameplay defaults true. Scale drift is a warning unless strict. ok is the gate, not a visual pass — open evidence.path. Compose with an editor MCP; this tool does not drive Godot.",
+        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height; VFX/airborne skipped). require_gameplay defaults true. Scale drift is a warning unless strict. qa is clean|review|warn — warn means stop. ok is the gate, not a visual pass — open evidence.path and run_summary.path. Compose with an editor MCP; this tool does not drive Godot.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1570,7 +1570,7 @@ function toolDefinitions() {
     {
       name: "xsxb_diff_frames",
       description:
-        "Write a real PNG comparing two animation frames. mode=diff paints changed pixels magenta; mode=onion is red/cyan/white. Open preview.path — import or sync is not a visual pass. Same-size frames only.",
+        "Write a real PNG comparing two animation frames. mode=diff paints changed pixels magenta; mode=onion keys the studio plate then paints red/cyan/white. qa is review when pixels changed, warn when frames are identical. Open preview.path — import or sync is not a visual pass. Same-size frames only.",
       inputSchema: {
         type: "object",
         properties: {

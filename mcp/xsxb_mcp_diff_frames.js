@@ -5,7 +5,7 @@
  * pixels so an agent can open a real PNG instead of treating import as a pass.
  */
 
-const { composeRbOverlay } = require("./xsxb_mcp_lock");
+const { borderFloodKey, composeRbOverlay } = require("./xsxb_mcp_lock");
 
 const MAGENTA = Object.freeze([255, 0, 255, 255]);
 
@@ -34,6 +34,16 @@ function countChangedPixels(frameA, frameB) {
 }
 
 /**
+ * Floods a studio plate so onion-skin uses subject occupancy, not opaque fill.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} frame Decoded PNG.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} Keyed frame.
+ */
+function keyStudioPlate(frame) {
+  const keyed = borderFloodKey(frame.data, frame.width, frame.height, { mode: "any" });
+  return { data: keyed.data, width: frame.width, height: frame.height };
+}
+
+/**
  * Composites two decoded frames as a magenta change map or a red/cyan onion.
  * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} frameA First frame.
  * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} frameB Second frame.
@@ -49,7 +59,7 @@ function composeFrameDiff(frameA, frameB, options = {}) {
   const mode = String(options.mode || "diff") === "onion" ? "onion" : "diff";
   const changedPixelCount = countChangedPixels(frameA, frameB);
   if (mode === "onion") {
-    const onion = composeRbOverlay(frameA, frameB);
+    const onion = composeRbOverlay(keyStudioPlate(frameA), keyStudioPlate(frameB));
     return { data: onion.data, width: onion.width, height: onion.height, changedPixelCount, mode };
   }
   const data = new Uint8ClampedArray(width * height * 4);
@@ -67,4 +77,4 @@ function composeFrameDiff(frameA, frameB, options = {}) {
   return { data, width, height, changedPixelCount, mode };
 }
 
-module.exports = { composeFrameDiff, countChangedPixels };
+module.exports = { composeFrameDiff, countChangedPixels, keyStudioPlate };

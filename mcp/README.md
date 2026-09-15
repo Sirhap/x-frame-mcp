@@ -105,7 +105,7 @@ npm run mcp:start
 
 完整会话流程写在 `initialize.instructions`：走循环锁尺、视频成环、静图贴合、刀光各一行。硬约束（`preview.path`、`y=-1`、`overlay_id`、`grid=false`）在对应工具 description。Playbook 拆在 `skills/x-frame-import`、`x-frame-cutout`、`x-frame-gameplay`、`x-frame-godot`。`xsxb-frame-tuner` 只做路由。
 
-Godot 编辑器操作（开场景、跑游戏、改节点）用独立的 Godot editor MCP，例如 [godot-mcp](https://github.com/Coding-Solo/godot-mcp) 或 [satelliteoflove/godot-mcp](https://github.com/satelliteoflove/godot-mcp)。本仓库不同化编辑器，也不内置 rembg/SAM。`xsxb_validate_for_godot` 只做数据与 gameplay 门闩；`xsxb_diff_frames` 写出可打开的对比 PNG。导入或 sync 不是视觉验收。
+Godot 编辑器操作（开场景、跑游戏、改节点）用独立的 Godot editor MCP，例如 [godot-mcp](https://github.com/Coding-Solo/godot-mcp) 或 [satelliteoflove/godot-mcp](https://github.com/satelliteoflove/godot-mcp)。本仓库不同化编辑器，也不内置 rembg/SAM。`xsxb_validate_for_godot` 只做数据与 gameplay 门闩，回执带 `qa`、`godot` 磁盘快照和 `run_summary.path`；`xsxb_diff_frames` 写出可打开的对比 PNG（onion 会先抠底板）。`qa=warn` 必须停。导入或 sync 不是视觉验收。
 
 ## 当前工具
 

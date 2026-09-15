@@ -13,7 +13,7 @@ const INSTRUCTIONS = [
   "Video-to-loop: import, then xsxb_get_animation for basis_snapshot_id, xsxb_cutout (border_flood for white or black plates; inspect preview.path), xsxb_analyze, then xsxb_reorganize_frames with that order. Prefer xsxb_analyze after import. Do not export_sheet every candidate.",
   "Still-place: xsxb_overlay_grid → xsxb_plan_place → xsxb_place_image with overlay_id. Held object: detect_regions hand as target_anchor, layer=under_target. Do not mix still views with animation grid.cells. Do not OCR overlay digits.",
   "Smear: xsxb_plan_smear then a pixel crescent (polyline) or matching trail mesh.",
-  "Observation writes need basis_snapshot_id; still cells need overlay_id. Register/plant/estimate/reorganize/compress preview until apply or dry_run:false. Sync is opt-in. Godot handoff: xsxb_validate_for_godot (require_gameplay default).",
+  "Observation writes need basis_snapshot_id; still cells need overlay_id. Register/plant/estimate/reorganize/compress preview until apply or dry_run:false. Sync is opt-in. Godot handoff: xsxb_validate_for_godot (require_gameplay default). qa=warn means stop.",
   "Report actual results. Missing capability: tell the user and raise to X-Frame with tool, arguments, expected and actual.",
 ].join(" ");
 

@@ -25,7 +25,8 @@ function paintGroundedActor(width, height, pose) {
   const data = new Uint8ClampedArray(width * height * 4);
   const bodyW = pose.bodyW || 8;
   const bodyH = pose.bodyH || 14;
-  for (let i = 0; i < width * height; i += 1) data.set(PLATE, i * 4);
+  const plate = pose.plate || PLATE;
+  for (let i = 0; i < width * height; i += 1) data.set(plate, i * 4);
   for (let y = pose.originY; y < pose.originY + bodyH; y += 1) {
     for (let x = pose.originX; x < pose.originX + bodyW; x += 1) {
       if (x < 0 || y < 0 || x >= width || y >= height) continue;
@@ -164,6 +165,7 @@ async function runPlaybookAcceptance() {
     }
     assert.ok(magenta >= 20, `diff must mark the 4px stride, got ${magenta} magenta pixels`);
     assert.ok(diffed.data.changedPixelCount >= 20);
+    assert.equal(diffed.data.qa, "review");
 
     const onion = await callTool(service, "xsxb_diff_frames", {
       project_id: "hero",
@@ -174,13 +176,25 @@ async function runPlaybookAcceptance() {
     });
     assert.equal(onion.ok, true);
     const onionImage = decodePngRgba(onion.data.preview.path);
-    assert.ok(onionImage.data.some((value, index) => index % 4 === 0 && value >= 180));
+    let onionRed = 0;
+    let onionCyan = 0;
+    for (let i = 0; i < onionImage.data.length; i += 4) {
+      const r = onionImage.data[i];
+      const g = onionImage.data[i + 1];
+      const b = onionImage.data[i + 2];
+      const a = onionImage.data[i + 3];
+      if (r >= 180 && g <= 40 && b <= 40 && a > 200) onionRed += 1;
+      if (r <= 40 && g >= 180 && b >= 180 && a > 200) onionCyan += 1;
+    }
+    assert.ok(onionRed >= 20, `onion must mark vacated columns red, got ${onionRed}`);
+    assert.ok(onionCyan >= 20, `onion must mark new columns cyan, got ${onionCyan}`);
 
     const unfinished = await callTool(service, "xsxb_validate_for_godot", {
       project_id: "hero",
       require_gameplay: true,
     });
     assert.equal(unfinished.ok, false);
+    assert.equal(unfinished.data.qa, "warn");
     assert.ok(
       (unfinished.data.errors || []).some((message) => /xsxb_frame_actor/.test(message)),
       "missing gameplay scene must fail validate_for_godot",
@@ -192,9 +206,38 @@ async function runPlaybookAcceptance() {
       require_gameplay: true,
     });
     assert.equal(ready.ok, true, JSON.stringify(ready.data?.errors || ready.error || ready));
+    assert.equal(ready.data.qa, "clean");
     assert.ok(fs.existsSync(ready.data.evidence.path));
+    assert.ok(ready.data.godot?.runtime?.actorScript);
+    assert.ok(fs.existsSync(ready.data.run_summary.path));
+    const runSummary = JSON.parse(fs.readFileSync(ready.data.run_summary.path, "utf8"));
+    assert.equal(runSummary.ok, true);
+    assert.equal(runSummary.qa, "clean");
     const evidence = decodePngRgba(ready.data.evidence.path);
     assert.ok(evidence.width >= 32 && evidence.height >= 32);
+
+    const fxDir = path.join(root, "fx-seq");
+    fs.mkdirSync(fxDir);
+    const fxBurst = paintGroundedActor(32, 32, { originX: 6, originY: 2 });
+    fs.writeFileSync(path.join(fxDir, "00.png"), encodePngRgba(fxBurst, 32, 32));
+    fs.writeFileSync(path.join(fxDir, "01.png"), encodePngRgba(fxBurst, 32, 32));
+    await callTool(service, "xsxb_import_animation", {
+      project_id: "hero",
+      source: "png_sequence",
+      directory: fxDir,
+      profile_id: "hero",
+      animation_id: "hit_vfx",
+      fps: 8,
+      sync: true,
+    });
+    await callTool(service, "xsxb_estimate_boxes", { animation_id: "hit_vfx", sync: true });
+    const withFx = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: true,
+    });
+    assert.equal(withFx.ok, true, JSON.stringify(withFx.data?.errors || withFx.error || withFx));
+    assert.equal(withFx.data.scale_contract.ok, true);
+    assert.ok(!(withFx.data.scale_contract.issues || []).some((issue) => /hit_vfx/.test(issue)));
 
     await callTool(service, "xsxb_import_animation", {
       project_id: "hero",
@@ -216,6 +259,7 @@ async function runPlaybookAcceptance() {
       strict: true,
     });
     assert.equal(driftedReceipt.ok, false);
+    assert.equal(driftedReceipt.data.qa, "warn");
     assert.equal(driftedReceipt.data.scale_contract.ok, false);
     assert.ok(
       driftedReceipt.data.scale_contract.issues.some((issue) => /feet/i.test(issue)),

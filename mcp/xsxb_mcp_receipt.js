@@ -249,6 +249,7 @@ function receiptSummary(receipt) {
   const snapshotId = receipt.observation?.snapshotId;
   if (typeof snapshotId === "string" && snapshotId.startsWith("obs_v1_")) parts.push(snapshotId);
   const data = receipt.data && typeof receipt.data === "object" ? receipt.data : null;
+  if (data?.qa) parts.push(`qa=${data.qa}`);
   const artifactPath = data?.preview?.path || data?.outputPath || receipt.execution?.artifacts?.[0]?.path;
   if (typeof artifactPath === "string" && artifactPath) {
     const base = artifactPath.replace(/\\/g, "/").split("/").pop();

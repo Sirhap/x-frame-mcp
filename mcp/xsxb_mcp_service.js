@@ -77,7 +77,9 @@ const { gateReceipt, successReceipt } = require("./xsxb_mcp_receipt");
 const { composeFrameDiff } = require("./xsxb_mcp_diff_frames");
 const {
   assembleGodotValidation,
+  classifyInspectQa,
   composeValidationEvidence,
+  describeGodotHandoff,
   evaluateScaleContract,
   isFxOrAirborne,
   measureKeyedSubject,
@@ -2101,6 +2103,7 @@ function createXsxbMcpService(options = {}) {
     });
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(composed.data, composed.width, composed.height));
+    const qa = classifyInspectQa({ changedPixelCount: composed.changedPixelCount });
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -2109,6 +2112,11 @@ function createXsxbMcpService(options = {}) {
       frameB,
       mode: composed.mode,
       changedPixelCount: composed.changedPixelCount,
+      qa,
+      next:
+        qa === "warn"
+          ? "stop; frames are identical — confirm the wrong pair was not selected"
+          : "open preview.path; import is not a visual pass",
       preview: { path: outputPath, width: composed.width, height: composed.height },
     };
   }
@@ -2144,7 +2152,6 @@ function createXsxbMcpService(options = {}) {
           if (evidenceFrames.length < 4) evidenceFrames.push(image);
           geos.push(measureKeyedSubject(image));
         }
-        const first = geos[0] || { feetY: 0, bodyH: 0 };
         clips.push({
           id: animationId,
           kind: profile.kind || animation.type || "actor",
@@ -2156,8 +2163,8 @@ function createXsxbMcpService(options = {}) {
             type: animation.type,
             kind: profile.kind,
           }),
-          feetY: first.feetY,
-          bodyH: first.bodyH,
+          feetYs: geos.map((geometry) => geometry.feetY),
+          bodyHs: geos.map((geometry) => geometry.bodyH),
         });
       }
     }
@@ -2170,14 +2177,41 @@ function createXsxbMcpService(options = {}) {
       extensionPattern: /\.png$/i,
       extensionLabel: ".png",
     });
+    const summaryPath = resolveMcpArtifactPath("", {
+      root,
+      artifactDir: currentArtifactDir(project),
+      defaultName: `${project.id}_godot_run_summary.json`,
+      extensionPattern: /\.json$/i,
+      extensionLabel: ".json",
+    });
     fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
     fs.writeFileSync(evidencePath, encodePngRgba(sheet.data, sheet.width, sheet.height));
-    return assembleGodotValidation(
+    const godot = describeGodotHandoff(project.projectRoot || "", project.id);
+    const assembled = assembleGodotValidation(
       raw,
       scaleContract,
       { path: evidencePath, width: sheet.width, height: sheet.height },
-      { strict },
+      { strict, godot, summaryPath },
     );
+    fs.writeFileSync(
+      summaryPath,
+      `${JSON.stringify(
+        {
+          ok: assembled.ok,
+          qa: assembled.qa,
+          next: assembled.next,
+          projectId: project.id,
+          errors: assembled.errors,
+          warnings: assembled.warnings,
+          scale_contract: assembled.scale_contract,
+          godot,
+          evidence: assembled.evidence,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return assembled;
   }
 
   function setActiveProject(args = {}) {
