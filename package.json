@@ -16,6 +16,7 @@
     "check:mcp-v2": "npm run check",
     "check:mcp": "npm run check",
     "test": "node tools/check_project.js --test",
+    "acceptance:playbooks": "node tools/acceptance_playbooks.js",
     "check": "node tools/check_project.js",
     "benchmark:mcp": "node tools/benchmark_mcp.js"
   },

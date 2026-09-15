@@ -7,14 +7,14 @@ const { errorReceipt, receiptSummary, successReceipt } = require("./xsxb_mcp_rec
 
 const SERVER_INFO = Object.freeze({ name: "x-frame", version: "0.2.0" });
 const INSTRUCTIONS = [
-  "XSXB MCP receipt v2: business results are under data; execution and verification are separate; ok is not a visual pass.",
-  "State the user goal in one sentence, then xsxb_list_projects or xsxb_get_project, and pick a playbook. Multi-step work uses an ordered todo; after each mutation open preview.path, overlay, gif, or a grid=false sheet — confirmed/keyed is not done. If the eye fails, stop and do not continue the playbook.",
-  "Walk-lock: xsxb_measure_frames → xsxb_register_clip (apply bakes about the feet) → xsxb_export_sheet normalize=feet|none and xsxb_export_overlay; plant with xsxb_plant_feet at y=-1, not 0,0. Do not use xsxb_place_image or xsxb_add_attack_trail.",
-  "Video-to-loop: import, then xsxb_get_animation for basis_snapshot_id, xsxb_cutout (border_flood for white or black plates; inspect preview.path), xsxb_analyze, then xsxb_reorganize_frames with that order. Prefer xsxb_analyze after import; finders are focused queries. Do not export_sheet every candidate.",
-  "Still-place: xsxb_overlay_grid → xsxb_plan_place → xsxb_place_image with overlay_id. For a held object, detect_regions hand returns a fresh region reference: use it as target_anchor with layer=under_target so only hand pixels cover the grip; do not mix still views with animation grid.cells or OCR pixel coordinates. Do not OCR overlay digits.",
-  "Smear: xsxb_plan_smear then a pixel crescent (polyline) or trail mesh only if the arc already matches. xsxb_add_attack_trail render_mode=sweep needs explicit blade-edge sticks on two frames and bakes a time-decaying sweep in MCP exports.",
-  "Observation-derived writes need basis_snapshot_id; still-image cells need overlay_id. Registration, planting, visual estimation, reorganization and compression preview until apply or dry_run:false. Sync is opt-in.",
-  "Report actual results. If a capability is missing or you must leave MCP, tell the user and raise it to X-Frame with the tool, arguments, expected result and actual result.",
+  "XSXB MCP receipt v2: results live under data; execution and verification are separate; ok is not a visual pass.",
+  "State the user goal in one sentence, then xsxb_list_projects or xsxb_get_project, and pick skills/x-frame-import, x-frame-cutout, x-frame-gameplay, or x-frame-godot. Multi-step work uses an ordered todo; after each mutation open preview.path, overlay, gif, or a grid=false sheet — confirmed/keyed is not done. If the eye fails, stop and do not continue the playbook.",
+  "Walk-lock: xsxb_measure_frames → xsxb_register_clip (apply bakes about the feet) → xsxb_export_sheet normalize=feet|none, xsxb_export_overlay or xsxb_diff_frames; plant with xsxb_plant_feet at y=-1, not 0,0. Do not use xsxb_place_image or xsxb_add_attack_trail.",
+  "Video-to-loop: import, then xsxb_get_animation for basis_snapshot_id, xsxb_cutout (border_flood for white or black plates; inspect preview.path), xsxb_analyze, then xsxb_reorganize_frames with that order. Prefer xsxb_analyze after import. Do not export_sheet every candidate.",
+  "Still-place: xsxb_overlay_grid → xsxb_plan_place → xsxb_place_image with overlay_id. Held object: detect_regions hand as target_anchor, layer=under_target. Do not mix still views with animation grid.cells. Do not OCR overlay digits.",
+  "Smear: xsxb_plan_smear then a pixel crescent (polyline) or matching trail mesh.",
+  "Observation writes need basis_snapshot_id; still cells need overlay_id. Register/plant/estimate/reorganize/compress preview until apply or dry_run:false. Sync is opt-in. Godot handoff: xsxb_validate_for_godot (require_gameplay default).",
+  "Report actual results. Missing capability: tell the user and raise to X-Frame with tool, arguments, expected and actual.",
 ].join(" ");
 
 /**

@@ -73,7 +73,15 @@ const {
   observeFile,
   sha256,
 } = require("./xsxb_mcp_observation");
-const { successReceipt } = require("./xsxb_mcp_receipt");
+const { gateReceipt, successReceipt } = require("./xsxb_mcp_receipt");
+const { composeFrameDiff } = require("./xsxb_mcp_diff_frames");
+const {
+  assembleGodotValidation,
+  composeValidationEvidence,
+  evaluateScaleContract,
+  isFxOrAirborne,
+  measureKeyedSubject,
+} = require("./xsxb_mcp_validate_godot");
 const {
   borderFloodKey,
   composeRbOverlay,
@@ -2060,6 +2068,118 @@ function createXsxbMcpService(options = {}) {
     return layerValidation({ ...raw, strict: args.strict === true }, args.layer || "all");
   }
 
+  /**
+   * Writes a magenta change-map or red/cyan onion of two animation frames.
+   * @param {object} args Tool arguments.
+   * @returns {object} Diff receipt with a real preview PNG.
+   */
+  function diffFrames(args = {}) {
+    const selection = animationFor(args);
+    const { project, profile, animation } = selection;
+    const frames = animation.frames || [];
+    if (frames.length < 1) throw new Error("Cannot diff an animation without frames.");
+    const last = frames.length - 1;
+    const frameA = args.frame_a === undefined ? 0 : requireFrameIndex(args.frame_a, last);
+    const frameB =
+      args.frame_b === undefined ? Math.min(frameA + 1, last) : requireFrameIndex(args.frame_b, last);
+    const pathA = resolveAnimationFramePath(project, frames[frameA].path, animation);
+    const pathB = resolveAnimationFramePath(project, frames[frameB].path, animation);
+    if (!pathA || !fs.existsSync(pathA) || !pathB || !fs.existsSync(pathB)) {
+      throw new Error("Both frames must exist on disk before xsxb_diff_frames.");
+    }
+    const imageA = decodePngRgba(pathA);
+    const imageB = decodePngRgba(pathB);
+    const composed = composeFrameDiff(imageA, imageB, { mode: args.mode || "diff" });
+    const animationId = String(animation.id || animation.name);
+    const outputPath = resolveMcpArtifactPath(args.output_path, {
+      root,
+      artifactDir: currentArtifactDir(project),
+      defaultName: `${profile.id}_${animationId}_${frameA}_${frameB}_${composed.mode}.png`,
+      extensionPattern: /\.png$/i,
+      extensionLabel: ".png",
+      allowOutsideRoot: true,
+    });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, encodePngRgba(composed.data, composed.width, composed.height));
+    return {
+      projectId: project.id,
+      profileId: profile.id,
+      animationId,
+      frameA,
+      frameB,
+      mode: composed.mode,
+      changedPixelCount: composed.changedPixelCount,
+      preview: { path: outputPath, width: composed.width, height: composed.height },
+    };
+  }
+
+  /**
+   * Validates Godot handoff including gameplay wiring and the idle scale contract.
+   * @param {object} args Tool arguments.
+   * @returns {object} Gate payload; `ok` is the domain pass.
+   */
+  function validateForGodot(args = {}) {
+    const project = registryProject(args.project_id || args.project, false);
+    const requireGameplay = booleanFlag(args.require_gameplay, true);
+    const strict = booleanFlag(args.strict, false);
+    const raw = validateImport(
+      {
+        project: project.id,
+        strict,
+        "require-gameplay": requireGameplay,
+      },
+      { root, projectStore },
+    );
+    const manifest = manifestFor(project);
+    const evidenceFrames = [];
+    const clips = [];
+    for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
+      for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
+        const animationId = String(animation.id || animation.name);
+        const geos = [];
+        for (const frame of animation.frames || []) {
+          const filePath = resolveAnimationFramePath(project, frame.path, animation);
+          if (!filePath || !fs.existsSync(filePath)) continue;
+          const image = decodePngRgba(filePath);
+          if (evidenceFrames.length < 4) evidenceFrames.push(image);
+          geos.push(measureKeyedSubject(image));
+        }
+        const first = geos[0] || { feetY: 0, bodyH: 0 };
+        clips.push({
+          id: animationId,
+          kind: profile.kind || animation.type || "actor",
+          type: animation.type || "",
+          name: animation.name || animationId,
+          grounded: !isFxOrAirborne({
+            id: animationId,
+            name: animation.name,
+            type: animation.type,
+            kind: profile.kind,
+          }),
+          feetY: first.feetY,
+          bodyH: first.bodyH,
+        });
+      }
+    }
+    const scaleContract = evaluateScaleContract(clips);
+    const sheet = composeValidationEvidence(evidenceFrames);
+    const evidencePath = resolveMcpArtifactPath("", {
+      root,
+      artifactDir: currentArtifactDir(project),
+      defaultName: `${project.id}_godot_evidence.png`,
+      extensionPattern: /\.png$/i,
+      extensionLabel: ".png",
+    });
+    fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+    fs.writeFileSync(evidencePath, encodePngRgba(sheet.data, sheet.width, sheet.height));
+    return assembleGodotValidation(
+      raw,
+      scaleContract,
+      { path: evidencePath, width: sheet.width, height: sheet.height },
+      { strict },
+    );
+  }
+
   function setActiveProject(args = {}) {
     const project = registryProject(args.project_id || args.project, false);
     projectStore.setActiveProject(project.id);
@@ -3778,6 +3898,8 @@ function createXsxbMcpService(options = {}) {
     xsxb_plan_place: planPlace,
     xsxb_place_image: placeImage,
     xsxb_validate_project: validateProject,
+    xsxb_validate_for_godot: validateForGodot,
+    xsxb_diff_frames: diffFrames,
     xsxb_add_attack_trail: addAttackTrail,
     xsxb_plan_smear: compileSmearBrief,
     xsxb_add_attachment: addAttachment,
@@ -3821,7 +3943,7 @@ function createXsxbMcpService(options = {}) {
   function receiptRoute(name, readOnly) {
     if (readOnly) return "domain_read";
     if (/export_|import_video|sync_godot/u.test(name)) return "external_process";
-    if (/place|plant|shift|register|measure|overlay/u.test(name)) return "geometry";
+    if (/place|plant|shift|register|measure|overlay|diff/u.test(name)) return "geometry";
     return "domain_mutation";
   }
 
@@ -3985,14 +4107,16 @@ function createXsxbMcpService(options = {}) {
         evidence: ["geometric_only_visual_fit_unproven"],
       };
     }
-    return successReceipt(name, raw, {
+    const receiptOptions = {
       readOnly: definition?.annotations?.readOnlyHint === true && !metadata.execution,
       route: receiptRoute(name, definition?.annotations?.readOnlyHint === true),
       observation,
       execution,
       verification,
       escalation: metadata.escalation || null,
-    });
+    };
+    if (name === "xsxb_validate_for_godot") return gateReceipt(name, raw, receiptOptions);
+    return successReceipt(name, raw, receiptOptions);
   }
 
   let serviceCallQueue = Promise.resolve();

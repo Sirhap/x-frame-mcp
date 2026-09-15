@@ -46,12 +46,14 @@ const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_delete_animation",
   "xsxb_sync_godot",
   "xsxb_validate_project",
+  "xsxb_validate_for_godot",
   "xsxb_set_active_project",
   "xsxb_bind_godot",
   "xsxb_cutout",
   "xsxb_export_gif",
   "xsxb_export_sheet",
   "xsxb_export_overlay",
+  "xsxb_diff_frames",
   "xsxb_export_pack_slot",
   "xsxb_measure_image",
   "xsxb_detect_regions",
@@ -1310,6 +1312,25 @@ function toolDefinitions() {
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     {
+      name: "xsxb_validate_for_godot",
+      description:
+        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height). require_gameplay defaults true. Scale drift is a warning unless strict. ok is the gate, not a visual pass — open evidence.path. Compose with an editor MCP; this tool does not drive Godot.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: projectProperty,
+          strict: { type: "boolean", default: false },
+          require_gameplay: {
+            type: "boolean",
+            default: true,
+            description: "Require a non-runtime gameplay scene that uses xsxb_frame_actor. Default true.",
+          },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
       name: "xsxb_set_active_project",
       description: "Set the registry active XSXB project used when project_id is omitted.",
       inputSchema: {
@@ -1545,6 +1566,28 @@ function toolDefinitions() {
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: "xsxb_diff_frames",
+      description:
+        "Write a real PNG comparing two animation frames. mode=diff paints changed pixels magenta; mode=onion is red/cyan/white. Open preview.path — import or sync is not a visual pass. Same-size frames only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...animationProperties,
+          frame_a: { type: "integer", minimum: 0, default: 0 },
+          frame_b: { type: "integer", minimum: 0, description: "Defaults to frame_a + 1." },
+          mode: {
+            type: "string",
+            enum: ["diff", "onion"],
+            default: "diff",
+            description: "diff marks changed pixels magenta. onion composites red/cyan intersection.",
+          },
+          output_path: { type: "string", description: "Optional PNG path. May leave the XSXB root." },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     {
       name: "xsxb_export_pack_slot",

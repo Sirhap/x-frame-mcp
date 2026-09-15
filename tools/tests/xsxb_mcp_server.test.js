@@ -575,6 +575,8 @@ test("MCP catalog includes the production editing tools", () => {
     "xsxb_update_frame_boxes",
     "xsxb_update_timing",
     "xsxb_sync_godot",
+    "xsxb_validate_for_godot",
+    "xsxb_diff_frames",
     "xsxb_get_project",
     "xsxb_create_project",
     "xsxb_delete_animation",

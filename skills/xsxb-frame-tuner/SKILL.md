@@ -17,6 +17,13 @@ description: >-
 
 Deliver the complete user-visible result from a natural-language request. Do not require the user to run importer commands or enumerate internal data files.
 
+MCP playbooks live in four focused skills — pick one after the goal sentence:
+
+- [x-frame-import](../x-frame-import/SKILL.md) — folders, video, bind
+- [x-frame-cutout](../x-frame-cutout/SKILL.md) — plate key, magenta `preview.path`
+- [x-frame-gameplay](../x-frame-gameplay/SKILL.md) — idle scale/feet, boxes, `xsxb_diff_frames`
+- [x-frame-godot](../x-frame-godot/SKILL.md) — sync, `xsxb_validate_for_godot`, compose with an editor MCP
+
 ## Required References
 
 For every actor import, animation import, replacement, or gameplay wiring task, read all three references before editing:

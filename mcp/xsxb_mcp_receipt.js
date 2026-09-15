@@ -257,12 +257,41 @@ function receiptSummary(receipt) {
   return parts.join(" ");
 }
 
+/**
+ * Wraps a domain gate whose `data.ok` is the user-visible pass/fail.
+ * Keeps the structured payload when the project is not ready for Godot.
+ * @param {string} tool Tool name.
+ * @param {object} data Handler payload that includes `ok`.
+ * @param {object} [options] Observation and route metadata.
+ * @returns {object} Versioned receipt.
+ */
+function gateReceipt(tool, data, options = {}) {
+  const receipt = successReceipt(tool, data, options);
+  if (!data || data.ok !== false) return receipt;
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  return {
+    ...receipt,
+    ok: false,
+    error: {
+      code: "XSXB_VALIDATE_FAILED",
+      message: errors[0] || `${tool} failed its domain gate.`,
+      details: { errors, warnings: data.warnings || [] },
+    },
+    verification: {
+      status: "unsatisfied",
+      checks: errors,
+      evidence: data.evidence?.path ? [data.evidence.path] : [],
+    },
+  };
+}
+
 module.exports = {
   EFFECTS,
   RECEIPT_SCHEMA_VERSION,
   ROUTES,
   VERIFICATION_STATUSES,
   errorReceipt,
+  gateReceipt,
   receiptEnvelopeSchema,
   receiptSummary,
   successReceipt,
