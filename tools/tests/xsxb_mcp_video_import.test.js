@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const test = require("node:test");
 const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
 const { createProjectStore } = require("../../mcp/lib/project_store");
+const { GODOT_SYNC_ROOT } = require("../../mcp/lib/godot_sync");
 const { encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
 
 /**
@@ -123,7 +124,7 @@ test("video and base64 imports produce equal frame bytes, metadata, tuning and G
       assert.deepEqual(hashes, frames.slice(1).map(digest));
       const syncManifest = JSON.parse(
         fs.readFileSync(
-          path.join(game, "xsxb_frame_tuner/data/projects/video/animation_manifest.json"),
+          path.join(game, GODOT_SYNC_ROOT, "data/projects/video/animation_manifest.json"),
           "utf8",
         ),
       );

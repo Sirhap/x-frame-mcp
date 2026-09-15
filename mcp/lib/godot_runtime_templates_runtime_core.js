@@ -35,7 +35,7 @@ func _load_frame_runtime() -> void:
 	_last_visual_state_key = ""
 	_runtime_ready = false
 
-	var data_dir: String = "res://xsxb_frame_tuner/data/projects/%s" % frame_project_id
+	var data_dir: String = "res://x_frame/data/projects/%s" % frame_project_id
 	var manifest: Dictionary = _read_json_dict("%s/animation_manifest.json" % data_dir)
 	var tuning: Dictionary = _read_json_dict("%s/animation_tuning.json" % data_dir)
 	var profile: Dictionary = _select_profile(manifest)

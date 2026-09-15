@@ -307,7 +307,7 @@ func _ensure_runtime_nodes() -> void:
 	if _attack_trails_behind == null:
 		_attack_trails_behind = Node2D.new()
 		_attack_trails_behind.name = "AttackTrailsBehind"
-		_attack_trails_behind.set_script(load("res://xsxb_frame_tuner/runtime/xsxb_attack_trail_renderer.gd"))
+		_attack_trails_behind.set_script(load("res://x_frame/runtime/xsxb_attack_trail_renderer.gd"))
 		add_child(_attack_trails_behind)
 		move_child(_attack_trails_behind, _visual_owner.get_index())
 	if _frame_sprite == null:
@@ -321,7 +321,7 @@ func _ensure_runtime_nodes() -> void:
 	if _attack_trails_front == null:
 		_attack_trails_front = Node2D.new()
 		_attack_trails_front.name = "AttackTrailsFront"
-		_attack_trails_front.set_script(load("res://xsxb_frame_tuner/runtime/xsxb_attack_trail_renderer.gd"))
+		_attack_trails_front.set_script(load("res://x_frame/runtime/xsxb_attack_trail_renderer.gd"))
 		add_child(_attack_trails_front)
 		move_child(_attack_trails_front, _visual_owner.get_index() + 1)
 	if _body_collision == null:

@@ -31,8 +31,8 @@ function runtimeScript(projectId) {
 function actorScene(projectId, target) {
   return `[gd_scene load_steps=6 format=3]
 
-[ext_resource type="Script" path="res://xsxb_frame_tuner/runtime/xsxb_frame_actor.gd" id="1_script"]
-[ext_resource type="Script" path="res://xsxb_frame_tuner/runtime/xsxb_attack_trail_renderer.gd" id="2_trail"]
+[ext_resource type="Script" path="res://x_frame/runtime/xsxb_frame_actor.gd" id="1_script"]
+[ext_resource type="Script" path="res://x_frame/runtime/xsxb_attack_trail_renderer.gd" id="2_trail"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
 size = Vector2(40, 90)
@@ -43,7 +43,7 @@ size = Vector2(44, 90)
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_hitbox"]
 size = Vector2(80, 40)
 
-[node name="XSXBFrameActor" type="CharacterBody2D"]
+[node name="XFrameActor" type="CharacterBody2D"]
 script = ExtResource("1_script")
 frame_project_id = ${gdString(projectId)}
 frame_profile_id = ${gdString(target.profileId)}
@@ -92,11 +92,11 @@ disabled = true
 function testScene() {
   return `[gd_scene load_steps=2 format=3]
 
-[ext_resource type="PackedScene" path="res://xsxb_frame_tuner/runtime/xsxb_frame_actor.tscn" id="1_actor"]
+[ext_resource type="PackedScene" path="res://x_frame/runtime/xsxb_frame_actor.tscn" id="1_actor"]
 
-[node name="XSXBRuntimeTest" type="Node2D"]
+[node name="XFrameRuntimeTest" type="Node2D"]
 
-[node name="XSXBFrameActor" parent="." instance=ExtResource("1_actor")]
+[node name="XFrameActor" parent="." instance=ExtResource("1_actor")]
 position = Vector2(640, 640)
 `;
 }

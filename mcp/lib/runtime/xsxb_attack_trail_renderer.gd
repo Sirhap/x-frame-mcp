@@ -1,6 +1,6 @@
 extends Node2D
 
-const TRAIL_SHADER: Shader = preload("res://xsxb_frame_tuner/runtime/xsxb_attack_trail.gdshader")
+const TRAIL_SHADER: Shader = preload("res://x_frame/runtime/xsxb_attack_trail.gdshader")
 const SPEED_PROFILE = [0.94, 1.015, 0.985, 1.025, 1.035, 1.02, 0.97, 1.04]
 const TAIL_WIDTH_SPEED_INFLUENCE := 0.18
 const DEFAULT_BEFORE_CHASE_MULTIPLIER := 0.12

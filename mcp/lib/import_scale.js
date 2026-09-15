@@ -2,13 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createOpaqueBoundsCache, opaqueBoundsForPng } = require("./box_estimator");
 
-const SKIP_DIRS = new Set([
-  ".git",
-  ".godot",
-  "addons",
-  "node_modules",
-  "xsxb_frame_tuner",
-]);
+const SKIP_DIRS = new Set([".git", ".godot", "addons", "node_modules", "x_frame", "xsxb_frame_tuner"]);
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));

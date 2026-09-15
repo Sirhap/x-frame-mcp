@@ -6,10 +6,10 @@
   const smartCutoutDefaults =
     typeof module === "object" && module.exports
       ? require("./smart_cutout_defaults")
-      : root?.XSXBSmartCutoutDefaults;
+      : root?.XFrameSmartCutoutDefaults;
   const api = factory(cutoutCore, smartCutoutDefaults);
   if (typeof module === "object" && module.exports) module.exports = api;
-  if (root) root.XSXBScatterSliceSmartCutout = api;
+  if (root) root.XFrameScatterSliceSmartCutout = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, (cutoutCore, smartCutoutDefaults) => {
   "use strict";
 

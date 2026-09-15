@@ -4,10 +4,11 @@ const { animationLooksAttack, frameBoxKey } = require("./box_estimator");
 const { EMPTY_ATTACK_TRAILS, normalizeAttackTrails, pngInfo } = require("./attack_trails");
 const { EMPTY_MANIFEST, EMPTY_TUNING, createProjectStore, slug } = require("./project_store");
 const { resolveXsxbRoot } = require("./xsxb_root");
+const { GODOT_SYNC_ROOT } = require("./godot_sync");
 
 const ROOT = resolveXsxbRoot(__dirname);
 const projectStore = createProjectStore(ROOT);
-const SKIP_DIRS = new Set([".git", ".godot", "addons", "node_modules", "xsxb_frame_tuner"]);
+const SKIP_DIRS = new Set([".git", ".godot", "addons", "node_modules", "x_frame", "xsxb_frame_tuner"]);
 
 function parseArgs(argv) {
   const args = {};
@@ -201,7 +202,7 @@ function validateImport(args, options = {}) {
   }
 
   const gameDataDir = projectRoot
-    ? path.join(projectRoot, "xsxb_frame_tuner", "data", "projects", project.id)
+    ? path.join(projectRoot, GODOT_SYNC_ROOT, "data", "projects", project.id)
     : "";
   const gameManifestPath = path.join(gameDataDir, "animation_manifest.json");
   const gameTuningPath = path.join(gameDataDir, "animation_tuning.json");
@@ -327,7 +328,7 @@ function validateImport(args, options = {}) {
     if (!localAttackTrails.bindings[key]) errors.push(`${key}: unexpected game-local attack trail binding.`);
   }
 
-  const runtimeDir = path.join(projectRoot, "xsxb_frame_tuner", "runtime");
+  const runtimeDir = path.join(projectRoot, GODOT_SYNC_ROOT, "runtime");
   const runtimeScriptPath = path.join(runtimeDir, "xsxb_frame_actor.gd");
   for (const fileName of [
     "xsxb_frame_actor.gd",
@@ -363,7 +364,7 @@ function validateImport(args, options = {}) {
   if (projectRoot && fs.existsSync(projectRoot)) {
     const gameplayFiles = walkTextFiles(projectRoot);
     const usesRuntime = gameplayFiles.some((entry) =>
-      /xsxb_frame_tuner\/runtime\/xsxb_frame_actor\.(?:tscn|gd)/.test(entry.text),
+      new RegExp(`${GODOT_SYNC_ROOT}/runtime/xsxb_frame_actor\\.(?:tscn|gd)`).test(entry.text),
     );
     if (args["require-gameplay"] && !usesRuntime)
       errors.push("No non-runtime gameplay scene or script uses xsxb_frame_actor.");

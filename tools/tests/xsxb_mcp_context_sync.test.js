@@ -8,6 +8,7 @@ const test = require("node:test");
 const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
 const { handleMessage } = require("../../mcp/xsxb_mcp_server");
 const { createProjectStore } = require("../../mcp/lib/project_store");
+const { GODOT_SYNC_ROOT } = require("../../mcp/lib/godot_sync");
 const { encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
 
 /**
@@ -93,7 +94,7 @@ for (const [tool, args] of [
       const paths = store.projectPaths(store.activeProject("a"));
       const affected = tool === "xsxb_update_timing" ? paths.tuning : png;
       const original = fs.readFileSync(affected);
-      const targetTuning = path.join(game, "xsxb_frame_tuner/data/projects/a/animation_tuning.json");
+      const targetTuning = path.join(game, GODOT_SYNC_ROOT, "data/projects/a/animation_tuning.json");
       const rename = fs.renameSync;
       let response;
       fs.renameSync = (source, target) => {
@@ -170,7 +171,7 @@ test("a standalone failed sync keeps partial status without claiming a new local
     const store = createProjectStore(root);
     const paths = store.projectPaths(store.activeProject("b"));
     const original = fs.readFileSync(paths.tuning);
-    const targetManifest = path.join(game, "xsxb_frame_tuner/data/projects/b/animation_manifest.json");
+    const targetManifest = path.join(game, GODOT_SYNC_ROOT, "data/projects/b/animation_manifest.json");
     const rename = fs.renameSync;
     fs.renameSync = (source, target) => {
       if (target === targetManifest) throw new Error("injected sync failure");

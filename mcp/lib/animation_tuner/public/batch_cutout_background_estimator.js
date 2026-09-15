@@ -43,7 +43,7 @@
         classify = null;
       }
     } else if (typeof globalThis !== "undefined") {
-      classify = globalThis.XSXBSmartCutoutDefaults?.classifySmartBackground;
+      classify = globalThis.XFrameSmartCutoutDefaults?.classifySmartBackground;
     }
     if (typeof classify === "function") return classify(color) === "plate";
     const max = Math.max(color.r, color.g, color.b);
@@ -164,10 +164,7 @@
       imageWide.g > imageWide.r + 24 &&
       imageWide.g > imageWide.b + 24;
     const leftoverStudioPlate =
-      thinPlate &&
-      isNearNeutralPlate(thinPlate) &&
-      perimeter &&
-      !isNearNeutralPlate(perimeter);
+      thinPlate && isNearNeutralPlate(thinPlate) && perimeter && !isNearNeutralPlate(perimeter);
     const selected = chromaBehindChrome ? imageWide : leftoverStudioPlate ? thinPlate : perimeter;
     if (!selected) {
       return { r: 255, g: 255, b: 255, hex: "#ffffff", sampleCount: 0 };
@@ -184,7 +181,10 @@
     const normalizedWidth = Math.max(0, Math.trunc(Number(width) || 0));
     const normalizedHeight = Math.max(0, Math.trunc(Number(height) || 0));
     if (!rgba || normalizedWidth < 2 || normalizedHeight < 2) return false;
-    const edgeDepth = Math.max(3, Math.min(12, Math.ceil(Math.min(normalizedWidth, normalizedHeight) * 0.04)));
+    const edgeDepth = Math.max(
+      3,
+      Math.min(12, Math.ceil(Math.min(normalizedWidth, normalizedHeight) * 0.04)),
+    );
     let ringPixels = 0;
     let clearPixels = 0;
     let interiorOpaque = 0;

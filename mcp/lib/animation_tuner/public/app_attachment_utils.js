@@ -1,9 +1,9 @@
-(function attachXsxbAttachmentUtils(root, factory) {
+(function attachXFrameAttachmentUtils(root, factory) {
   "use strict";
 
   const api = factory(root);
   if (typeof module === "object" && module.exports) module.exports = api;
-  if (root) root.XSXBAttachmentUtils = api;
+  if (root) root.XFrameAttachmentUtils = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, (root) => {
   "use strict";
 
@@ -28,7 +28,10 @@
     const rawScale = transform.scale;
     const scaleFromVector =
       rawScale && typeof rawScale === "object" ? Number(rawScale.x ?? rawScale.y) : Number(rawScale);
-    const scale = Math.max(0.001, Number.isFinite(scaleFromVector) && scaleFromVector > 0 ? scaleFromVector : 1);
+    const scale = Math.max(
+      0.001,
+      Number.isFinite(scaleFromVector) && scaleFromVector > 0 ? scaleFromVector : 1,
+    );
     return {
       scale,
       scaleX: Math.max(
