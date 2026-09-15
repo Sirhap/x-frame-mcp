@@ -10,7 +10,7 @@
   const smartCutoutDefaults =
     (typeof module === "object" && module.exports
       ? require("./smart_cutout_defaults")
-      : root?.XSXBSmartCutoutDefaults) || {};
+      : root?.XFrameSmartCutoutDefaults) || {};
 
   const NUMERIC_CONTROLS = Object.freeze([
     ["cutoutTolerance", "cutoutToleranceValue", "tolerance"],

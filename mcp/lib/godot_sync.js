@@ -5,7 +5,7 @@ const { EMPTY_MANIFEST, EMPTY_TUNING, reslash, writeJson } = require("./project_
 const { ensureGodotRuntime } = require("./godot_runtime");
 const { EMPTY_ATTACK_TRAILS, clone: cloneAttackTrails, normalizeAttackTrails } = require("./attack_trails");
 
-const GODOT_SYNC_ROOT = "xsxb_frame_tuner";
+const GODOT_SYNC_ROOT = "x_frame";
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));

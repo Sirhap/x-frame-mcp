@@ -422,10 +422,7 @@
     }
     const strongestSimilarity = Math.max(...comparisons.map((entry) => entry.similarity));
     const adjustedThreshold = Math.floor(strongestSimilarity);
-    if (
-      adjustedThreshold <= ORGANIZER_SIMILARITY_THRESHOLD.min ||
-      adjustedThreshold >= requestedThreshold
-    ) {
+    if (adjustedThreshold <= ORGANIZER_SIMILARITY_THRESHOLD.min || adjustedThreshold >= requestedThreshold) {
       return { matches, autoAdjustedThreshold: null };
     }
     const adjustedMatches = [];

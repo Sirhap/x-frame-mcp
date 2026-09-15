@@ -14,7 +14,7 @@ Treat tuner Save as the synchronization point. The bound Godot project must rece
 - `runtime/xsxb_frame_actor.tscn`
 - `runtime/xsxb_runtime_test.tscn`
 
-Read game data only from `res://xsxb_frame_tuner/`. Never make the game depend on the standalone tuner clone.
+Read game data only from `res://x_frame/`. Never make the game depend on the standalone tuner clone.
 
 ## Gameplay Wiring
 

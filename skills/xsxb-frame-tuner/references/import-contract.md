@@ -67,4 +67,4 @@ Record and verify:
 - animation IDs, FPS, anchor modes, and source facing
 - saved box entry count versus actor frame count
 - attack groups and active hitbox coverage
-- stable tuner-local and `res://xsxb_frame_tuner/` paths
+- stable tuner-local and `res://x_frame/` paths

@@ -98,7 +98,7 @@
       (typeof module === "object" && module.exports
         ? require("./smart_cutout_defaults")
         : typeof globalThis !== "undefined"
-          ? globalThis.XSXBSmartCutoutDefaults
+          ? globalThis.XFrameSmartCutoutDefaults
           : null) || {};
     if (typeof smartDefaults.overlaySmartCutoutParameters === "function") {
       item.processingParameters = smartDefaults.overlaySmartCutoutParameters(

@@ -3,7 +3,7 @@ const path = require("node:path");
 const { reslash } = require("./project_store");
 const { actorScene, runtimeScript, testScene } = require("./godot_runtime_templates");
 
-const GODOT_SYNC_ROOT = "xsxb_frame_tuner";
+const GODOT_SYNC_ROOT = "x_frame";
 
 function validGodotProjectRoot(project) {
   const projectRoot = project?.projectRoot ? path.resolve(String(project.projectRoot)) : "";
