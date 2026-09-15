@@ -49,7 +49,10 @@ test("Godot sync writes the X-Frame workbench root", async () => {
     );
     assert.match(actor, /res:\/\/x_frame\/runtime\/xsxb_frame_actor\.gd/);
     assert.match(actor, /\[node name="XFrameActor"/);
-    const script = fs.readFileSync(path.join(game, GODOT_SYNC_ROOT, "runtime", "xsxb_frame_actor.gd"), "utf8");
+    const script = fs.readFileSync(
+      path.join(game, GODOT_SYNC_ROOT, "runtime", "xsxb_frame_actor.gd"),
+      "utf8",
+    );
     assert.match(script, /res:\/\/x_frame\/data\/projects\/%s/);
     const trail = fs.readFileSync(
       path.join(game, GODOT_SYNC_ROOT, "runtime", "xsxb_attack_trail_renderer.gd"),
