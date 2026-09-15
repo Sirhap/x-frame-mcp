@@ -21,8 +21,7 @@ test("composeFrameDiff marks the vacated and newly occupied columns", () => {
   assert.ok(png.length > 80);
   let magenta = 0;
   for (let i = 0; i < composed.data.length; i += 4) {
-    if (composed.data[i] >= 220 && composed.data[i + 1] <= 40 && composed.data[i + 2] >= 180)
-      magenta += 1;
+    if (composed.data[i] >= 220 && composed.data[i + 1] <= 40 && composed.data[i + 2] >= 180) magenta += 1;
   }
   assert.ok(magenta >= 20);
 });
