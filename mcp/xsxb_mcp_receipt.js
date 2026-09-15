@@ -281,7 +281,7 @@ function gateReceipt(tool, data, options = {}) {
     verification: {
       status: "unsatisfied",
       checks: errors,
-      evidence: data.evidence?.path ? [data.evidence.path] : [],
+      evidence: [data.qa ? `qa=${data.qa}` : "", data.evidence?.path || ""].filter(Boolean),
     },
   };
 }

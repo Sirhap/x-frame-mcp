@@ -160,6 +160,12 @@ test("receiptSummary includes snapshot id and artifact basename without dumping 
   assert.doesNotMatch(text, /\/workspace\/projects\/demo/);
   assert.equal(text.includes("\n"), false);
   assert.ok(text.length < JSON.stringify(receipt).length / 2);
+  const withQa = receiptSummary({
+    ...receipt,
+    tool: "xsxb_diff_frames",
+    data: { ...receipt.data, qa: "review" },
+  });
+  assert.match(withQa, /qa=review/);
 
   const service = { tools: toolDefinitions(), callMcp: async () => receipt };
   const response = await handleMessage(

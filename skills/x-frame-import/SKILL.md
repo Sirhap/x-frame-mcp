@@ -16,4 +16,4 @@ State the user goal in one sentence. `xsxb_list_projects` or `xsxb_get_project`.
 4. Prefer `xsxb_analyze` after import. Do not `xsxb_export_sheet` every candidate.
 5. Reorder with `xsxb_reorganize_frames` and the analyze `basis_snapshot_id`.
 
-Then hand off to `skills/x-frame-cutout` or `skills/x-frame-gameplay`. Do not call import or `xsxb_sync_godot` a visual pass.
+Idle is the scale reference for later grounded clips. Import idle before walk/run when both exist. Then hand off to `skills/x-frame-cutout` or `skills/x-frame-gameplay`. Do not call import or `xsxb_sync_godot` a visual pass. `qa=warn` from a later tool means stop.
