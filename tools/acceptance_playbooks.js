@@ -189,6 +189,17 @@ async function runPlaybookAcceptance() {
     assert.ok(onionRed >= 20, `onion must mark vacated columns red, got ${onionRed}`);
     assert.ok(onionCyan >= 20, `onion must mark new columns cyan, got ${onionCyan}`);
 
+    const identical = await callTool(service, "xsxb_diff_frames", {
+      project_id: "hero",
+      animation_id: "idle",
+      frame_a: 0,
+      frame_b: 0,
+      mode: "diff",
+    });
+    assert.equal(identical.ok, true);
+    assert.equal(identical.data.qa, "warn");
+    assert.equal(identical.data.changedPixelCount, 0);
+
     const unfinished = await callTool(service, "xsxb_validate_for_godot", {
       project_id: "hero",
       require_gameplay: true,
@@ -265,6 +276,34 @@ async function runPlaybookAcceptance() {
       driftedReceipt.data.scale_contract.issues.some((issue) => /feet/i.test(issue)),
       "walk planted on a different sole row must fail the scale contract",
     );
+
+    const mixedDir = path.join(root, "mixed-seq");
+    fs.mkdirSync(mixedDir);
+    fs.writeFileSync(
+      path.join(mixedDir, "00.png"),
+      encodePngRgba(paintGroundedActor(32, 32, { originX: 8, originY: 10 }), 32, 32),
+    );
+    fs.writeFileSync(
+      path.join(mixedDir, "01.png"),
+      encodePngRgba(paintGroundedActor(16, 16, { originX: 4, originY: 2 }), 16, 16),
+    );
+    await callTool(service, "xsxb_import_animation", {
+      project_id: "hero",
+      source: "png_sequence",
+      directory: mixedDir,
+      profile_id: "hero",
+      animation_id: "mixed_size",
+      fps: 8,
+    });
+    const mismatched = await callTool(service, "xsxb_diff_frames", {
+      project_id: "hero",
+      animation_id: "mixed_size",
+      frame_a: 0,
+      frame_b: 1,
+      mode: "diff",
+    });
+    assert.equal(mismatched.ok, false);
+    assert.match(String(mismatched.error?.message || ""), /same width and height/);
 
     return {
       root,
