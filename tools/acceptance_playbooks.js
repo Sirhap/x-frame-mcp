@@ -154,7 +154,13 @@ async function runPlaybookAcceptance() {
     assert.equal(preview.height, 32);
     let magenta = 0;
     for (let i = 0; i < preview.data.length; i += 4) {
-      if (preview.data[i] >= 220 && preview.data[i + 2] >= 180 && preview.data[i + 3] > 200) magenta += 1;
+      if (
+        preview.data[i] >= 220 &&
+        preview.data[i + 1] <= 40 &&
+        preview.data[i + 2] >= 180 &&
+        preview.data[i + 3] > 200
+      )
+        magenta += 1;
     }
     assert.ok(magenta >= 20, `diff must mark the 4px stride, got ${magenta} magenta pixels`);
     assert.ok(diffed.data.changedPixelCount >= 20);
