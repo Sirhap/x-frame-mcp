@@ -642,6 +642,35 @@ test("export_overlay paints A red, B cyan, intersection white", async () => {
   }
 });
 
+test("export_overlay returns preview.path for walk-lock visual QA", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "pair");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8, { left: 4 });
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8, { left: 6 });
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "pair",
+    });
+    const overlay = await current.service.call("xsxb_export_overlay", {
+      animation_id: "pair",
+      frame_a: 0,
+      frame_b: 1,
+    });
+    assert.equal(typeof overlay.preview, "object");
+    assert.ok(overlay.preview);
+    assert.equal(overlay.preview.path, overlay.outputPath);
+    assert.ok(fs.existsSync(overlay.preview.path));
+    const image = decodePngRgba(overlay.outputPath);
+    assert.equal(overlay.preview.width, image.width);
+    assert.equal(overlay.preview.height, image.height);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("export_pack_slot copies frames into a game-pack destination", async () => {
   const current = fixture();
   try {
