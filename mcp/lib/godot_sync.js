@@ -384,6 +384,8 @@ function syncFrameImageAttachments(root, projectStore, project, attachmentsInput
   const attachments = Array.isArray(raw) ? raw.filter((entry) => entry && typeof entry === "object") : [];
   const localAttachments = [];
   let copiedImageAttachments = 0;
+  const attachmentRoot = path.join(projectRoot, GODOT_SYNC_ROOT, "attachments", "projects", project.id);
+  const retainedAttachments = new Set();
 
   attachments.forEach((attachment, index) => {
     const next = clone(attachment);
@@ -394,12 +396,14 @@ function syncFrameImageAttachments(root, projectStore, project, attachmentsInput
     const nextRel = godotProjectRelPath("attachments", "projects", project.id, `${hash}${ext.toLowerCase()}`);
     const target = path.join(projectRoot, nextRel);
     if (copyFileIfChanged(source, target)) copiedImageAttachments += 1;
+    retainedAttachments.add(path.resolve(target));
     next.path = `res://${nextRel}`;
     next.assetHash = hash;
     assignStableFrameBindingKey(next, attachment, index);
     localAttachments.push(next);
   });
 
+  pruneGeneratedDirectory(attachmentRoot, retainedAttachments);
   const targetFile = path.join(godotDataDir(projectRoot, project), "frame_image_attachments.json");
   writeJson(targetFile, localAttachments);
   return { imageAttachmentCount: localAttachments.length, copiedImageAttachments };
