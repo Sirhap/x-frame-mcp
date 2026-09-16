@@ -375,9 +375,9 @@ test("estimateFrameBoxes hitbox covers the generated attack gold crescent", () =
   }
 });
 
-test("estimateFrameBoxes disables hitbox on generated attack idle-b (sword, no crescent)", () => {
+test("estimateFrameBoxes hitbox covers the generated attack follow-through crescent", () => {
   assert.ok(fs.existsSync(GENERATED_ATTACK_1), `missing fixture ${GENERATED_ATTACK_1}`);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-atk-idleb-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-atk-followthrough-"));
   try {
     const filePath = path.join(root, "attack1.png");
     const image = writeKeyedGeneratedPng(GENERATED_ATTACK_1, filePath);
@@ -390,9 +390,35 @@ test("estimateFrameBoxes disables hitbox on generated attack idle-b (sword, no c
       groupCanvasWidth: image.width,
       groupCanvasHeight: image.height,
     });
+    assert.ok(boxes.hitbox && boxes.hitbox.enabled !== false, `hitbox missing: ${JSON.stringify(boxes)}`);
     assert.ok(
-      !boxes.hitbox || boxes.hitbox.enabled === false,
-      `idle-b must not emit an enabled junk hitbox: ${JSON.stringify(boxes.hitbox)}`,
+      boxes.hitbox.size.x > 20 && boxes.hitbox.size.y > 16,
+      `hitbox is a stamp ${boxes.hitbox.size.x}x${boxes.hitbox.size.y}`,
+    );
+    const hit = boxRectOnCanvas(boxes.hitbox, image.width, image.height);
+    let gold = 0;
+    let inside = 0;
+    const x0 = Math.round(image.width * 0.55);
+    const y0 = Math.round(image.height * 0.35);
+    for (let y = 0; y < image.height; y += 1) {
+      for (let x = 0; x < image.width; x += 1) {
+        if (x < x0 || y < y0) continue;
+        const offset = (y * image.width + x) * 4;
+        const r = image.data[offset];
+        const g = image.data[offset + 1];
+        const b = image.data[offset + 2];
+        const a = image.data[offset + 3];
+        if (a < 160) continue;
+        const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        if (!(r >= 220 && g >= 180 && b <= 180 && r - b >= 50 && g - b >= 20 && sat >= 40)) continue;
+        gold += 1;
+        if (x >= hit.minX && x <= hit.maxX && y >= hit.minY && y <= hit.maxY) inside += 1;
+      }
+    }
+    assert.ok(gold >= 160, `follow-through fixture lost the gold crescent (${gold} px)`);
+    assert.ok(
+      inside / gold >= 0.2,
+      `hitbox overlaps ${inside}/${gold} crescent pixels; stamp beside the arc is not enough ${JSON.stringify(boxes.hitbox)}`,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

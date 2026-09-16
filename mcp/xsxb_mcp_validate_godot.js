@@ -13,8 +13,10 @@ const { borderFloodKey, measureSpriteGeometry } = require("./xsxb_mcp_lock");
 
 const FX_TYPES = new Set(["vfx", "prop", "scene_prop_attachment", "overlay", "fx", "effect"]);
 const FX_TOKENS = new Set(["vfx", "fx", "effect", "overlay", "prop", "airborne", "jump"]);
+const ACTION_HEIGHT_TOKENS = new Set(["attack", "slash", "hurt"]);
 const DEFAULT_FEET_TOLERANCE = 2;
 const DEFAULT_HEIGHT_TOLERANCE = 2;
+const ACTION_HEIGHT_TOLERANCE = 6;
 const DEFAULT_CANVAS_TOLERANCE = 0;
 const SYNC_ROOT_ALIASES = Object.freeze(["xsxb_frame_tuner", "x_frame"]);
 
@@ -41,6 +43,18 @@ function isFxOrAirborne(clip) {
   const typeKind = [clip?.type, clip?.kind].map((value) => String(value || "").toLowerCase());
   if (typeKind.some((value) => FX_TYPES.has(value))) return true;
   return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) => FX_TOKENS.has(token));
+}
+
+/**
+ * True when a recovered combat pose may be a few pixels shorter than idle.
+ * Walk/run stay on the tight default; only whole attack/slash/hurt tokens qualify.
+ * @param {{id?:string,name?:string}} clip Animation or profile fields.
+ * @returns {boolean} True for slash-like clips.
+ */
+function isActionHeightClip(clip) {
+  return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) =>
+    ACTION_HEIGHT_TOKENS.has(token),
+  );
 }
 
 /**
@@ -86,7 +100,8 @@ function resolveClipCanvas(clip, axis) {
 /**
  * Compares grounded clips to idle (or the first grounded clip) for feet, height, and canvas size.
  * Canvas mismatch uses 0px slop so a 256-tall walk against a 264-tall idle cannot pass as clean.
- * @param {Array<{id:string,grounded?:boolean,feetY?:number,bodyH?:number,feetYs?:number[],bodyHs?:number[],canvasW?:number,canvasH?:number,canvasWs?:number[],canvasHs?:number[]}>} clips
+ * Attack/slash/hurt clips may be a few pixels shorter than idle; walk/run stay at 2px.
+ * @param {Array<{id:string,name?:string,grounded?:boolean,feetY?:number,bodyH?:number,feetYs?:number[],bodyHs?:number[],canvasW?:number,canvasH?:number,canvasWs?:number[],canvasHs?:number[]}>} clips
  *   Measured animations.
  * @param {{feetTolerance?:number,heightTolerance?:number,canvasTolerance?:number}} [options] Pixel slop.
  * @returns {{ok:boolean,reference:string|null,issues:string[],clips:object[]}} Contract.
@@ -130,6 +145,9 @@ function evaluateScaleContract(clips, options = {}) {
     if (clip.id === reference.id) continue;
     const dFeet = Math.abs(Number(clip.feetY || 0) - Number(reference.feetY || 0));
     const dHeight = Math.abs(Number(clip.bodyH || 0) - Number(reference.bodyH || 0));
+    const clipHeightTolerance = isActionHeightClip(clip)
+      ? Math.max(heightTolerance, ACTION_HEIGHT_TOLERANCE)
+      : heightTolerance;
     const dCanvasW =
       clip.canvasW != null && reference.canvasW != null ? Math.abs(clip.canvasW - reference.canvasW) : 0;
     const dCanvasH =
@@ -139,7 +157,7 @@ function evaluateScaleContract(clips, options = {}) {
         `${clip.id}: feet row drifted ${dFeet}px from ${reference.id} (sole ${clip.feetY} vs ${reference.feetY})`,
       );
     }
-    if (dHeight > heightTolerance) {
+    if (dHeight > clipHeightTolerance) {
       issues.push(
         `${clip.id}: body height drifted ${dHeight}px from ${reference.id} (${clip.bodyH} vs ${reference.bodyH})`,
       );

@@ -9,8 +9,10 @@ const { cutoutFrameFiles, decodePngRgba, encodePngRgba } = require("../xsxb_mcp_
 const { flattenFrameBackground, resolvePreviewBackground } = require("../xsxb_mcp_lock");
 
 const FIXTURE = path.join(__dirname, "../fixtures/generated_hero/attack/00.png");
+const FIXTURE_FOLLOWTHROUGH = path.join(__dirname, "../fixtures/generated_hero/attack/01.png");
 const PROTECTED_GOLDS = ["#ffe040", "#ffe080", "#ffd070", "#ffcc33"];
 const PREVIEW_PATH = "/tmp/xsxb_cutout_gold_preview.png";
+const PREVIEW_FOLLOWTHROUGH_PATH = "/tmp/xsxb_cutout_gold_followthrough_preview.png";
 
 /**
  * True when a pixel is saturated yellow/gold glow, not brown hair or white plate.
@@ -244,6 +246,58 @@ test("border_flood + key_color keeps a gold crescent off the steel blade", () =>
 
     const preview = flattenFrameBackground(cut, resolvePreviewBackground("magenta"));
     fs.writeFileSync(PREVIEW_PATH, encodePngRgba(preview.data, preview.width, preview.height));
+    assertNavyCoatIntoBoots(preview);
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test("fixture attack follow-through plate contains a gold crescent, not idle-b sparks", () => {
+  const source = decodePngRgba(FIXTURE_FOLLOWTHROUGH);
+  const blobs = slashGoldBlobs(source);
+  assert.ok(blobs.length, "attack/01.png must decode");
+  const largest = blobs[0];
+  assert.ok(
+    largest && largest.count >= 160 && largest.width >= 28 && largest.height >= 20,
+    `follow-through art has no crescent (largest blob ${JSON.stringify(largest)})`,
+  );
+});
+
+test("border_flood + key_color keeps follow-through gold crescent off the steel blade", () => {
+  assert.equal(fs.existsSync(FIXTURE_FOLLOWTHROUGH), true, "generated_hero attack/01.png is required");
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-cutout-gold-ft-"));
+  const dest = path.join(folder, "01.png");
+  try {
+    fs.copyFileSync(FIXTURE_FOLLOWTHROUGH, dest);
+    const receipt = cutoutFrameFiles([dest], {
+      keyMode: "border_flood",
+      keyColor: "#F8F8F8",
+      protectedColors: PROTECTED_GOLDS,
+      force: true,
+    });
+    assert.equal(receipt.keyed, true);
+    assert.ok(receipt.processedFrameCount >= 1, "must re-cut from the plated fixture, not skip");
+
+    const cut = decodePngRgba(dest);
+    const blobs = slashGoldBlobs(cut);
+    const largest = blobs[0];
+    const versus = goldVersusBladeBox(cut);
+    assert.ok(largest, "cutout left no slash-region gold");
+    assert.ok(
+      largest.count >= 160,
+      `gold crescent area collapsed to a sliver (${largest.count} px, bbox ${largest.width}x${largest.height}; off-blade ${versus.offBlade})`,
+    );
+    assert.ok(
+      largest.width >= 28 && largest.height >= 20,
+      `gold remains a blade-line sliver, not an arc (bbox ${largest.width}x${largest.height} at ${largest.minX},${largest.minY})`,
+    );
+    assert.ok(
+      versus.offBlade >= 200,
+      `gold off the steel box is ${versus.offBlade} (need crescent wings, not a blade highlight; on-blade ${versus.onBlade})`,
+    );
+
+    const preview = flattenFrameBackground(cut, resolvePreviewBackground("magenta"));
+    fs.writeFileSync(PREVIEW_FOLLOWTHROUGH_PATH, encodePngRgba(preview.data, preview.width, preview.height));
     assertNavyCoatIntoBoots(preview);
   } finally {
     fs.rmSync(folder, { recursive: true, force: true });

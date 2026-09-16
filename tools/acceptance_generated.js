@@ -33,7 +33,7 @@ const ASSET_CANDIDATES = Object.freeze({
   idle: Object.freeze(["hero_idle_a.png", "hero_idle_b.png"]),
   walk: Object.freeze(["hero_walk.png", "hero_walk_b.png", "hero_walk.png"]),
   jump: Object.freeze(["hero_jump.png", "hero_jump_b.png", "hero_jump.png"]),
-  attack: Object.freeze(["hero_attack.png", "hero_idle_b.png"]),
+  attack: Object.freeze(["hero_attack.png", "hero_attack_followthrough.png"]),
   hit_vfx: Object.freeze(["hero_vfx_burst.png", "hero_vfx_burst_b.png", "hero_vfx_burst.png"]),
   ink_idle: Object.freeze(["hero_idle_black.png", "hero_idle_black.png"]),
 });
@@ -852,7 +852,7 @@ function countCrescentOverlap(image, blob, rect) {
  * Hurtbox top must reach the hair (subject minY), not start at the neck.
  * Attack frames with a gold slash crescent need a hitbox that overlaps that
  * arc and still reaches past the body. Attack frames with a sword but no
- * crescent (generated attack 01 / idle-b) must not keep an enabled junk hit.
+ * crescent (sword-only, no slash) must not keep an enabled junk hit.
  * @param {string} animationId Clip id.
  * @param {number} frameIndex Frame index.
  * @param {object} boxes Group-space overrides.
@@ -901,7 +901,7 @@ function assertFrameBoxes(animationId, frameIndex, boxes, image) {
     if (!crescent) {
       assert.ok(
         !boxPresent(boxes?.hitbox),
-        `${label} has an enabled hitbox but no slash crescent (idle-b / sword-only must disable or omit hit)`,
+        `${label} has an enabled hitbox but no slash crescent (sword-only must disable or omit hit)`,
       );
       return;
     }
@@ -1295,10 +1295,16 @@ async function runGeneratedAcceptance(options = {}) {
       animation_id: "attack",
     });
     assert.equal(attackKeyed.ok, true, JSON.stringify(attackKeyed.error || attackKeyed));
-    report.goldCrescent = inspectGoldCrescent(
-      decodePngRgba(attackKeyed.data.animation.frames[0].absolutePath),
-      "attack keyed frame 0",
-    );
+    report.goldCrescent = {
+      0: inspectGoldCrescent(
+        decodePngRgba(attackKeyed.data.animation.frames[0].absolutePath),
+        "attack keyed frame 0",
+      ),
+      1: inspectGoldCrescent(
+        decodePngRgba(attackKeyed.data.animation.frames[1].absolutePath),
+        "attack keyed frame 1",
+      ),
+    };
     const attackLock = await callTool(service, "xsxb_register_clip", {
       project_id: "generated",
       animation_id: "attack",

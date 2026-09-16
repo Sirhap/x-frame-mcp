@@ -102,6 +102,41 @@ test("evaluateScaleContract accepts matching canvases with 1px feet slop", () =>
   assert.equal(contract.clips[1].dFeet, -1);
 });
 
+test("evaluateScaleContract accepts 3px shorter attack when feet and canvas match", () => {
+  const contract = evaluateScaleContract([
+    { id: "idle", grounded: true, feetY: 256, bodyH: 196, canvasW: 256, canvasH: 264 },
+    { id: "attack", grounded: true, feetY: 256, bodyH: 193, canvasW: 256, canvasH: 264 },
+  ]);
+  assert.equal(contract.ok, true);
+  const attack = contract.clips.find((clip) => clip.id === "attack");
+  assert.ok(attack);
+  assert.equal(attack.dBody, -3);
+  assert.equal(attack.dFeet, 0);
+  assert.equal(attack.dCanvasH, 0);
+});
+
+test("evaluateScaleContract fails walk with 3px body height drift", () => {
+  const contract = evaluateScaleContract([
+    { id: "idle", grounded: true, feetY: 256, bodyH: 196, canvasW: 256, canvasH: 264 },
+    { id: "walk", grounded: true, feetY: 256, bodyH: 193, canvasW: 256, canvasH: 264 },
+  ]);
+  assert.equal(contract.ok, false);
+  const walk = contract.clips.find((clip) => clip.id === "walk");
+  assert.ok(walk);
+  assert.equal(walk.dBody, -3);
+  assert.ok(contract.issues.some((issue) => /walk/.test(issue) && /height/.test(issue)));
+});
+
+test("evaluateScaleContract uses attack height slop for slash and hurt tokens", () => {
+  for (const clip of [{ id: "slash" }, { id: "hurt" }, { id: "combo_01", name: "sword slash" }]) {
+    const contract = evaluateScaleContract([
+      { id: "idle", grounded: true, feetY: 256, bodyH: 196, canvasW: 256, canvasH: 264 },
+      { ...clip, grounded: true, feetY: 256, bodyH: 193, canvasW: 256, canvasH: 264 },
+    ]);
+    assert.equal(contract.ok, true, String(clip.id || clip.name));
+  }
+});
+
 test("validate_for_godot scale contract fails 256-tall walk against 264-tall idle", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-canvas-gate-"));
   const godotRoot = path.join(root, "godot");
