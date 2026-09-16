@@ -1007,6 +1007,92 @@ test("bind_godot retarget forgets stale Godot imported ctex from pruned slices",
   }
 });
 
+test("bind_godot retarget forgets stale Godot imported sample from pruned audio slices", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const hit = path.join(current.root, "hit.wav");
+    fs.writeFileSync(hit, createTestWav());
+    const added = await current.service.call("xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hit,
+      id: "hit",
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+
+    const audioDir = path.join(current.godotRoot, "xsxb_frame_tuner", "audio", "projects", "mcp-test");
+    const wavs = [];
+    const walkWavs = (directory) => {
+      if (!fs.existsSync(directory)) return;
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) walkWavs(fullPath);
+        else if (/\.wav$/i.test(entry.name)) wavs.push(fullPath);
+      }
+    };
+    walkWavs(audioDir);
+    assert.ok(wavs.length >= 1, "add_sfx+sync must copy a WAV into Godot audio/projects");
+    const wavPath = wavs[0];
+    const stem = path.basename(wavPath, path.extname(wavPath));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${wavPath}.import`, `path="res://.godot/imported/${stem}.sample"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.sample`), "stale-sample");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-sample");
+
+    const leftoverRuntime = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "runtime",
+      "xsxb_frame_actor.tscn",
+    );
+    fs.mkdirSync(path.dirname(leftoverRuntime), { recursive: true });
+    fs.writeFileSync(leftoverRuntime, "[gd_scene leftover]\n");
+
+    const oldDataDir = path.join(current.godotRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test");
+    assert.equal(fs.existsSync(oldDataDir), true);
+
+    const secondRoot = path.join(current.root, "godot-second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    fs.writeFileSync(path.join(secondRoot, "project.godot"), '[application]\nconfig/name="Second"\n');
+
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(bound.projectId, "mcp-test");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
+    assert.equal(fs.existsSync(wavPath), false, "retarget must drop previous audio WAV");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.sample`)),
+      false,
+      `pruned ${stem}.sample must be forgotten from .godot/imported`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `pruned ${stem}.md5 must be forgotten from .godot/imported`,
+    );
+    assert.equal(fs.existsSync(leftoverRuntime), true, "shared runtime under the old root must stay");
+    assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("xsxb_create_project adds a registry project without changing list/get/set_active shapes", async () => {
   const current = fixture();
   try {
