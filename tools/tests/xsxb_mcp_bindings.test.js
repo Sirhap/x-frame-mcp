@@ -736,3 +736,107 @@ test("add_attack_trail rebind unlinks leftover workspace texture png", async () 
     current.cleanup();
   }
 });
+
+test("replace import unlinks leftover workspace binding copies", async () => {
+  const current = await importedFixture();
+  try {
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 0,
+      id: "glow",
+    });
+
+    const trailA = path.join(current.root, "trail-a.png");
+    fs.writeFileSync(trailA, bodyFrame(3));
+    const slash = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailA,
+      sticks: [
+        { frame: 0, top: { x: -10, y: -40 }, bottom: { x: 10, y: -8 } },
+        { frame: 1, top: { x: 40, y: -12 }, bottom: { x: 8, y: -6 } },
+      ],
+      sync: false,
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    const trailAbs = path.resolve(current.root, slash.segment.texture.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash exists before replace");
+    assert.equal(fs.existsSync(attachmentAbs), true, "attachment hash exists before replace");
+    assert.equal(fs.existsSync(trailAbs), true, "trail texture exists before replace");
+    assert.match(slash.segment.texture.path, /[/\\]attack_trails[/\\]/);
+    assert.ok(!slash.segment.texture.path.includes("presets"), "trail path under attack_trails, not presets");
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "walk",
+      replace: true,
+      sync: false,
+    });
+
+    const walk = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["sfx", "attachments", "trails"],
+    });
+    assert.equal(walk.sfx.length, 0, "walk sfx stripped");
+    assert.equal(walk.attachments.length, 0, "walk attachments stripped");
+    assert.equal(
+      !walk.trails?.length || !walk.trails.some((trail) => trail.id === "slash"),
+      true,
+      "walk slash trail stripped",
+    );
+
+    const idle = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idle.sfx.length, 1, "idle sfx remains");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash stays while idle refs it");
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+    assert.equal(fs.existsSync(trailAbs), false, "unreferenced trail workspace copy must be unlinked");
+
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "sfx",
+      id: "hit-sound",
+      dry_run: false,
+    });
+    assert.equal(fs.existsSync(sfxAbs), false, "sfx workspace copy unlinks after last binding");
+  } finally {
+    current.cleanup();
+  }
+});
