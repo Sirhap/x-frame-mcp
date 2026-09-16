@@ -1830,7 +1830,7 @@ function createXsxbMcpService(options = {}) {
     const payload = { source, applied: false };
     let project = null;
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
       payload.animationId = String(selection.animation.id || selection.animation.name);
@@ -2207,7 +2207,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function validateProject(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+    const project = lookupProject(args.project_id || args.project);
     const raw = validateImport(
       {
         project: project.id,
@@ -2225,7 +2225,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Diff receipt with a real preview PNG.
    */
   function diffFrames(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const frames = animation.frames || [];
     if (frames.length < 1) throw new Error("Cannot diff an animation without frames.");
@@ -2285,7 +2285,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Gate payload; `ok` is the domain pass.
    */
   function validateForGodot(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+    const project = lookupProject(args.project_id || args.project);
     const requireGameplay = booleanFlag(args.require_gameplay, true);
     const strict = booleanFlag(args.strict, false);
     if (validGodotProjectRoot(project) && gameLocalAuthoringStale(project, projectStore, root)) {
@@ -4110,7 +4110,7 @@ function createXsxbMcpService(options = {}) {
         artifactDir: currentArtifactDir(),
       };
     }
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const filePaths = collectFramePaths(selection.project, selection.animation);
     const requestedFrame =
       args.frame === undefined ? null : requireFrameIndex(args.frame, filePaths.length - 1);
@@ -4231,6 +4231,7 @@ function createXsxbMcpService(options = {}) {
     root,
     projectStore,
     animationFor,
+    lookupProject,
     registryProject,
     currentArtifactDir,
     resolveAnimationFramePath,

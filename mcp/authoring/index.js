@@ -51,10 +51,13 @@ function createAuthoringTools(context) {
       projectId: project(args).id,
       ...revisions.save(project(args), args.label),
     }),
-    xsxb_list_revisions: (args) => ({
-      projectId: project(args).id,
-      revisions: revisions.list(project(args)),
-    }),
+    xsxb_list_revisions: (args) => {
+      const selected = context.lookupProject(args.project_id);
+      return {
+        projectId: selected.id,
+        revisions: revisions.list(selected),
+      };
+    },
     xsxb_compare_revisions: (args) => revisions.compare(project(args), args),
     xsxb_restore_revision: restore,
     xsxb_undo: (args) => {
