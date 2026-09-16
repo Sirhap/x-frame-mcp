@@ -340,7 +340,11 @@ animations = [{
       typed.animationType !== "vfx" ||
       typedAnim.animation?.type !== "vfx"
     ) {
-      return verdict("xsxb_import_animation", "fail", JSON.stringify({ png, sprite, inplace, typed, typedAnim }));
+      return verdict(
+        "xsxb_import_animation",
+        "fail",
+        JSON.stringify({ png, sprite, inplace, typed, typedAnim }),
+      );
     }
     return verdict(
       "xsxb_import_animation",

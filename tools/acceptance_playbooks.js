@@ -362,7 +362,11 @@ async function runPlaybookAcceptance() {
       project_id: "ink",
       require_gameplay: true,
     });
-    assert.equal(blackReady.ok, true, JSON.stringify(blackReady.data?.errors || blackReady.error || blackReady));
+    assert.equal(
+      blackReady.ok,
+      true,
+      JSON.stringify(blackReady.data?.errors || blackReady.error || blackReady),
+    );
     assert.equal(blackReady.data.qa, "clean");
 
     const spark = await callTool(service, "xsxb_import_animation", {
@@ -391,7 +395,11 @@ async function runPlaybookAcceptance() {
       project_id: "ink",
       require_gameplay: true,
     });
-    assert.equal(withTypedFx.ok, true, JSON.stringify(withTypedFx.data?.errors || withTypedFx.error || withTypedFx));
+    assert.equal(
+      withTypedFx.ok,
+      true,
+      JSON.stringify(withTypedFx.data?.errors || withTypedFx.error || withTypedFx),
+    );
     assert.equal(withTypedFx.data.scale_contract.ok, true);
     assert.ok(!(withTypedFx.data.scale_contract.issues || []).some((issue) => /spark/.test(issue)));
 
