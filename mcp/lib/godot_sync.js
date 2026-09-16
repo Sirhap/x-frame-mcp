@@ -144,6 +144,53 @@ function localFrameRelPath(framePath, fallbackName = "frame.png") {
   return godotProjectRelPath(path.posix.basename(raw || fallbackName));
 }
 
+/**
+ * Resolves Godot-manifest frame paths that already live under GODOT_SYNC_ROOT.
+ * @param {object|null|undefined} manifest Previously synced animation manifest.
+ * @param {string} projectRoot Bound Godot project root.
+ * @returns {string[]} Absolute synced frame paths.
+ */
+function resolveSyncedManifestFramePaths(manifest, projectRoot) {
+  const syncRoot = path.join(projectRoot, GODOT_SYNC_ROOT);
+  const resolved = [];
+  for (const profile of Array.isArray(manifest?.profiles) ? manifest.profiles : []) {
+    for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
+      for (const frame of Array.isArray(animation.frames) ? animation.frames : []) {
+        const raw = String(frame?.path || "").trim();
+        if (!raw) continue;
+        const fullPath = path.resolve(projectRoot, raw);
+        if (isInside(fullPath, syncRoot)) resolved.push(path.resolve(fullPath));
+      }
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Drops leftover synced frame files and empty clip directories after a shrink or delete.
+ * Prunes only parent directories of retained ∪ previous frame paths, never GODOT_SYNC_ROOT itself.
+ * @param {string[]} previousPaths Absolute frame paths from the last Godot manifest.
+ * @param {Set<string>} retained Absolute frame PNG paths this sync keeps.
+ * @param {string} syncRoot Absolute GODOT_SYNC_ROOT directory.
+ * @returns {void}
+ */
+function pruneStaleSyncedFrames(previousPaths, retained, syncRoot) {
+  const resolvedSyncRoot = path.resolve(syncRoot);
+  for (const previous of previousPaths) {
+    const fullPath = path.resolve(previous);
+    if (retained.has(fullPath)) continue;
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) continue;
+    fs.rmSync(fullPath, { force: true });
+  }
+  const parents = new Set();
+  for (const filePath of [...retained, ...previousPaths]) {
+    const parent = path.dirname(path.resolve(filePath));
+    if (parent === resolvedSyncRoot || !isInside(parent, resolvedSyncRoot)) continue;
+    parents.add(parent);
+  }
+  for (const directory of parents) pruneGeneratedDirectory(directory, retained);
+}
+
 function syncManifest(root, projectStore, project, manifestInput = null, options = {}) {
   const projectRoot = validGodotProjectRoot(project);
   if (!projectRoot) return { manifest: manifestInput || EMPTY_MANIFEST, copiedFrames: 0, frameCount: 0 };
@@ -153,6 +200,18 @@ function syncManifest(root, projectStore, project, manifestInput = null, options
   let copiedFrames = 0;
   let frameCount = 0;
   let invalidatedImports = 0;
+  const syncRoot = path.join(projectRoot, GODOT_SYNC_ROOT);
+  const targetManifest = path.join(godotDataDir(projectRoot, project), "animation_manifest.json");
+  let previousManifest = EMPTY_MANIFEST;
+  if (fs.existsSync(targetManifest)) {
+    try {
+      previousManifest = JSON.parse(fs.readFileSync(targetManifest, "utf8"));
+    } catch {
+      previousManifest = EMPTY_MANIFEST;
+    }
+  }
+  const previousPaths = resolveSyncedManifestFramePaths(previousManifest, projectRoot);
+  const retained = new Set();
 
   for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
     for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
@@ -164,15 +223,16 @@ function syncManifest(root, projectStore, project, manifestInput = null, options
         const target = path.join(projectRoot, nextRel);
         frame.path = nextRel;
         frameCount += 1;
-        if (!isInside(target, path.join(projectRoot, GODOT_SYNC_ROOT))) continue;
+        if (!isInside(target, syncRoot)) continue;
         if (!source || path.extname(source).toLowerCase() !== ".png") continue;
+        retained.add(path.resolve(target));
         if (copyFileIfChanged(source, target, options.force === true)) copiedFrames += 1;
         if (fs.existsSync(target)) invalidatedImports += invalidateGodotImport(projectRoot, target);
       }
     }
   }
 
-  const targetManifest = path.join(godotDataDir(projectRoot, project), "animation_manifest.json");
+  pruneStaleSyncedFrames(previousPaths, retained, syncRoot);
   writeJson(targetManifest, manifest);
   return { copiedFrames, frameCount, invalidatedImports };
 }
