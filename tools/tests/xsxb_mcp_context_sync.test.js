@@ -44,7 +44,10 @@ async function withProjects(operation) {
 for (const selector of ["xsxb_set_active_project", "xsxb_get_project", "xsxb_create_project"]) {
   test(`${selector} switching projects clears the previous animation selection`, async () => {
     await withProjects(async ({ call }) => {
-      await call(selector, { project_id: "a" });
+      await call(
+        selector,
+        selector === "xsxb_create_project" ? { project_id: "a", set_active: true } : { project_id: "a" },
+      );
       const selected = await call("xsxb_get_animation");
       assert.equal(selected.project.id, "a");
       assert.equal(selected.profile.id, "hero");
@@ -73,6 +76,15 @@ test("switching profiles clears only the old animation and same-project selectio
     assert.equal((await call("xsxb_get_animation")).profile.id, "enemy");
     await call("xsxb_create_project", { project_id: "background", set_active: false });
     assert.equal((await call("xsxb_get_animation")).project.id, "b");
+  });
+});
+
+test("create_project_existing_omit_set_active_keeps_active_project", async () => {
+  await withProjects(async ({ call }) => {
+    const again = await call("xsxb_create_project", { project_id: "a" });
+    assert.equal(again.created, false);
+    const listed = await call("xsxb_list_projects");
+    assert.equal(listed.activeProjectId, "b");
   });
 });
 

@@ -260,6 +260,11 @@ test("create_project and import_video window fields stay optional and lenient", 
   assert.deepEqual(setActive.inputSchema.required, ["project_id"]);
   assert.ok(create, "xsxb_create_project is catalogued");
   assert.ok(!create.inputSchema.required || create.inputSchema.required.length === 0);
+  assert.equal(
+    create.inputSchema.properties.set_active.default,
+    undefined,
+    "omit set_active on an existing id must not advertise a default activate",
+  );
   assert.ok(video.inputSchema.properties.start_time);
   assert.ok(video.inputSchema.properties.duration);
   assert.ok(animation.inputSchema.properties.start_time);
