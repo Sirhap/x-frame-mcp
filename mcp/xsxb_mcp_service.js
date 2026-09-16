@@ -3923,6 +3923,7 @@ function createXsxbMcpService(options = {}) {
         throw new Error(`Compress refused missing on-disk frame ${index}: ${rawPath || absolute}`);
       }
       const result = compressPngFile(absolute, { dryRun });
+      if (result.wrote) forgetImportCacheIfInsideGodot(absolute);
       receipts.push({
         index,
         path: reslash(path.relative(root, result.path)),
