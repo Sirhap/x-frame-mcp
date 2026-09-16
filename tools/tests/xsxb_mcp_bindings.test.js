@@ -916,3 +916,46 @@ test("reorganize drop-frame unlinks leftover workspace binding copies", async ()
     current.cleanup();
   }
 });
+
+test("reorganize drop-frame removes empty trail segment and texture", async () => {
+  const current = await importedFixture();
+  try {
+    const trailA = path.join(current.root, "trail-a.png");
+    fs.writeFileSync(trailA, bodyFrame(3));
+    const slash = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailA,
+      sticks: [
+        { frame: 1, top: { x: -10, y: -40 }, bottom: { x: 10, y: -8 } },
+        { frame: 1, top: { x: 40, y: -12 }, bottom: { x: 8, y: -6 } },
+      ],
+      sync: false,
+    });
+    const trailAbs = path.resolve(current.root, slash.segment.texture.path);
+    assert.equal(fs.existsSync(trailAbs), true, "trail texture exists before reorganize");
+    assert.match(slash.segment.texture.path, /[/\\]attack_trails[/\\]/);
+    assert.ok(!slash.segment.texture.path.includes("presets"), "trail path under attack_trails, not presets");
+
+    const observed = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    await callTool(current.service, "xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0],
+      basis_snapshot_id: observed.observation.snapshotId,
+      sync: false,
+    });
+
+    const walk = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["trails"],
+    });
+    assert.equal(
+      !walk.trails?.length || !walk.trails.some((trail) => trail.id === "slash"),
+      true,
+      "walk slash trail dropped with frame 1",
+    );
+    assert.equal(fs.existsSync(trailAbs), false, "unreferenced trail workspace copy must be unlinked");
+  } finally {
+    current.cleanup();
+  }
+});
