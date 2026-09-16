@@ -34,7 +34,7 @@ const {
   persistAnnotationDocuments,
   translateAnnotations,
 } = require("./authoring/common");
-const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
+const { GODOT_SYNC_ROOT, syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
 const { gameLocalAuthoringStale, validateImport } = require("./lib/validate_import");
@@ -155,6 +155,32 @@ const {
 } = require("./xsxb_mcp_processes");
 
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
+
+/**
+ * Removes this project's generated Godot slices from a previous bind root.
+ * Shared runtime and attack_trails presets stay so other projects on that root keep working.
+ * @param {string} previousRoot Previous Godot project root.
+ * @param {string} nextRoot Newly bound Godot project root.
+ * @param {string} projectId Registry project id.
+ * @returns {void}
+ */
+function prunePreviousGodotProjectSlices(previousRoot, nextRoot, projectId) {
+  const previous = String(previousRoot || "").trim();
+  if (!previous) return;
+  const resolvedPrevious = path.resolve(previous);
+  const resolvedNext = path.resolve(String(nextRoot || ""));
+  if (resolvedPrevious === resolvedNext) return;
+  if (!fs.existsSync(resolvedPrevious) || !fs.statSync(resolvedPrevious).isDirectory()) return;
+  if (!fs.existsSync(path.join(resolvedPrevious, "project.godot"))) return;
+  const id = String(projectId || "");
+  if (!id || id.includes("..") || /[\\/]/.test(id) || path.basename(id) !== id) return;
+  for (const kind of ["data", "audio", "attachments", "attack_trails", "workspace"]) {
+    const slice = path.resolve(resolvedPrevious, GODOT_SYNC_ROOT, kind, "projects", id);
+    const parent = path.resolve(resolvedPrevious, GODOT_SYNC_ROOT, kind, "projects");
+    if (slice === parent || !slice.startsWith(`${parent}${path.sep}`)) continue;
+    fs.rmSync(slice, { recursive: true, force: true });
+  }
+}
 
 /**
  * Resolves group/frame visual_size for baking or GIF rematch.
@@ -2452,6 +2478,7 @@ function createXsxbMcpService(options = {}) {
     }
     const updated = projectStore.setProjectRoot(project.id, projectRoot).project;
     selectProject(updated.id);
+    prunePreviousGodotProjectSlices(previousRoot, projectRoot, updated.id);
     return {
       projectId: updated.id,
       projectRoot: updated.projectRoot,
