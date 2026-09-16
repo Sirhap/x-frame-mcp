@@ -262,6 +262,55 @@ test("plant keeps hanging ice below the sole by padding the canvas", async () =>
   }
 });
 
+test("plant apply pads every clip frame to the max canvas after one frame grows", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "seq");
+    fs.mkdirSync(directory);
+    const grown = bodyWithHangingIce(32);
+    const tight = bodyFrame(32, 8, 12);
+    const grownBefore = measureSpriteGeometry(grown.data, grown.width, grown.height);
+    const tightBefore = measureSpriteGeometry(tight.data, tight.width, tight.height);
+    assert.ok(grownBefore.maxY > grownBefore.feetY, "frame 0 must have hanging ice that plant will keep");
+    assert.equal(tightBefore.maxY, tightBefore.feetY, "frame 1 must plant without extra overhang");
+    fs.writeFileSync(path.join(directory, "01.png"), encodePngRgba(grown.data, grown.width, grown.height));
+    fs.writeFileSync(path.join(directory, "02.png"), encodePngRgba(tight.data, tight.width, tight.height));
+    await importWalk(current, directory);
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "walk",
+      frames: [0],
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.frames.length, 1);
+    assert.ok(planted.frames[0].height > grown.height, "plant must grow frame 0 to keep hanging ice");
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const first = decodePngRgba(animation.animation.frames[0].absolutePath);
+    const second = decodePngRgba(animation.animation.frames[1].absolutePath);
+    const destWidth = Math.max(first.width, second.width);
+    const destHeight = Math.max(first.height, second.height);
+    assert.equal(first.width, destWidth);
+    assert.equal(first.height, destHeight);
+    assert.equal(second.width, destWidth);
+    assert.equal(second.height, destHeight);
+    assert.equal(animation.animation.frames[0].width, destWidth);
+    assert.equal(animation.animation.frames[0].height, destHeight);
+    assert.equal(animation.animation.frames[1].width, destWidth);
+    assert.equal(animation.animation.frames[1].height, destHeight);
+    assert.ok(destHeight > tight.height, "unplanted frame 1 must inherit the grown clip canvas");
+    const firstAfter = measureSpriteGeometry(first.data, first.width, first.height);
+    const secondAfter = measureSpriteGeometry(second.data, second.width, second.height);
+    assert.equal(firstAfter.feetY, grown.height - 1, "grown frame sole stays on its planted pixel row");
+    assert.equal(
+      canvasToGroup(0, secondAfter.feetY, second.width, second.height).y,
+      canvasToGroup(0, tightBefore.feetY, tight.width, tight.height).y,
+      "origin-preserving pad must keep the unplanted sole on the same group row",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("catalog plant_feet accepts reference_animation_id", () => {
   const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
   assert.ok(plant.inputSchema.properties.reference_animation_id);

@@ -3327,7 +3327,9 @@ function createXsxbMcpService(options = {}) {
    * (same origin-preserving pad as `xsxb_resize_canvas`). If `target_y` is
    * omitted or -1, plants onto the reference clip's measured sole (median
    * feetY of that clip, not the first hang-heavier frame). An explicit
-   * `target_y` other than -1 is honored after the pad.
+   * `target_y` other than -1 is honored after the pad. After apply plans
+   * every selected frame, pads all frames in this animation to the clip's
+   * on-disk max(width)×max(height) so canvases match for diff_frames.
    * @param {object} args Tool arguments.
    * @returns {object} Plant receipt.
    */
@@ -3434,6 +3436,44 @@ function createXsxbMcpService(options = {}) {
           width: outWidth,
           height: outHeight,
         });
+      }
+      if (apply && frames.length) {
+        const clipImages = [];
+        for (let index = 0; index < frames.length; index += 1) {
+          const target = resolveAnimationFramePath(project, frames[index].path, animation);
+          assertWritableAnimationFrame(
+            project,
+            animation,
+            target,
+            `Plant refused frame ${index} outside the project workspace.`,
+          );
+          if (!fs.existsSync(target)) throw new Error(`Plant refused missing on-disk frame ${index}.`);
+          clipImages.push({
+            index,
+            target,
+            image: decodePngRgba(transaction.readPath(target)),
+          });
+        }
+        const destWidth = Math.max(...clipImages.map((entry) => entry.image.width));
+        const destHeight = Math.max(...clipImages.map((entry) => entry.image.height));
+        for (const entry of clipImages) {
+          const padded = padFramePreserveOrigin(entry.image, destWidth, destHeight, animation.anchorMode);
+          if (padded.width !== entry.image.width || padded.height !== entry.image.height) {
+            transaction.writeFile(entry.target, encodePngRgba(padded.data, padded.width, padded.height));
+          }
+          if (
+            Number(frames[entry.index].width || 0) !== destWidth ||
+            Number(frames[entry.index].height || 0) !== destHeight
+          ) {
+            frames[entry.index].width = destWidth;
+            frames[entry.index].height = destHeight;
+            sizeChanged = true;
+          }
+        }
+        for (const receipt of receipts) {
+          receipt.width = destWidth;
+          receipt.height = destHeight;
+        }
       }
       if (apply && sizeChanged) {
         transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
