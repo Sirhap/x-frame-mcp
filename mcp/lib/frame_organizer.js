@@ -888,6 +888,49 @@ function reorganizeAnimation(options) {
     throw error;
   }
 
+  const attachmentAssets = projectStore.readJson(paths.attachmentAssets, []);
+  const retainedWorkspaceCopyPaths = new Set(
+    [...nextAudioBindings, ...nextImageAttachments, ...normalizeBindings(attachmentAssets)]
+      .map((entry) => resolveWorkspaceCopy(root, entry?.path || ""))
+      .filter(Boolean),
+  );
+  const retainedAttackTrailTexturePaths = new Set(
+    Object.values(nextAttackTrails.bindings || {})
+      .flat()
+      .map((segment) => resolveWorkspaceCopy(root, segment?.texture?.path || ""))
+      .filter(Boolean),
+  );
+  const audioWorkspaceRoot = path.join(workspaceDir, "audio");
+  const attachmentsWorkspaceRoot = path.join(workspaceDir, "attachments");
+  const attackTrailWorkspaceRoot = path.join(workspaceDir, "attack_trails");
+  for (const binding of normalizeBindings(originals.frameAudioBindings)) {
+    unlinkUnreferencedWorkspaceCopy(
+      binding.path,
+      audioWorkspaceRoot,
+      retainedWorkspaceCopyPaths,
+      root,
+      workspaceDir,
+    );
+  }
+  for (const binding of normalizeBindings(originals.frameImageAttachments)) {
+    unlinkUnreferencedWorkspaceCopy(
+      binding.path,
+      attachmentsWorkspaceRoot,
+      retainedWorkspaceCopyPaths,
+      root,
+      workspaceDir,
+    );
+  }
+  for (const segment of Object.values(originals.attackTrails?.bindings || {}).flat()) {
+    unlinkUnreferencedWorkspaceCopy(
+      segment?.texture?.path || "",
+      attackTrailWorkspaceRoot,
+      retainedAttackTrailTexturePaths,
+      root,
+      workspaceDir,
+    );
+  }
+
   return {
     manifest,
     tuning,
