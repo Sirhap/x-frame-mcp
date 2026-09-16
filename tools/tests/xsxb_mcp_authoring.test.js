@@ -275,6 +275,44 @@ test("attachment interpolation retains keyframes, uses shortest angle and steps 
     );
   }));
 
+test("interpolate attachment unlinks leftover workspace hash png", async () =>
+  fixture(async ({ call, png, root }) => {
+    const first = await call("xsxb_add_attachment", {
+      file_path: png,
+      id: "weapon",
+      frame: 0,
+      sync: false,
+    });
+    const pngB = path.join(root, "weapon-b.png");
+    const rgbaB = new Uint8ClampedArray(16 * 16 * 4);
+    for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) rgbaB.set([200, 40, 40, 255], (y * 16 + x) * 4);
+    fs.writeFileSync(pngB, encodePngRgba(rgbaB, 16, 16));
+    const second = await call("xsxb_add_attachment", {
+      file_path: pngB,
+      id: "weapon",
+      frame: 1,
+      sync: false,
+    });
+    const path0 = first.binding.path;
+    const oldB = path.resolve(root, second.binding.path);
+    assert.ok(fs.existsSync(oldB));
+    assert.notEqual(second.binding.path, path0);
+    await call("xsxb_interpolate_attachment", {
+      id: "weapon",
+      keyframes: [
+        { frame: 0, offset_x: 0, offset_y: 0 },
+        { frame: 2, offset_x: 10, offset_y: -10 },
+      ],
+      dry_run: false,
+      sync: false,
+    });
+    const state = await call("xsxb_get_animation", { include: ["attachments"] });
+    assert.equal(state.attachments.length, 3);
+    assert.ok(state.attachments.every((binding) => binding.path === path0));
+    assert.equal(fs.existsSync(oldB), false);
+    assert.ok(fs.existsSync(path.resolve(root, path0)));
+  }));
+
 test("restore repairs missing frames and removes authoring files created after the checkpoint", async () =>
   fixture(async ({ call, png, paths }) => {
     const before = await call("xsxb_get_animation"),
