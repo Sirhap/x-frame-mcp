@@ -762,11 +762,10 @@ function createXsxbMcpService(options = {}) {
       args.animation_id || args.animation,
       sourceLabel === "png_sequence" ? "png_sequence" : "imported",
     );
-    const replaced =
-      booleanFlag(args.replace) &&
-      (manifestFor(project).profiles || [])
-        .find((entry) => entry.id === profileId)
-        ?.animations?.some((entry) => String(entry.id || entry.name) === requestedId);
+    const existingAnimation = (manifestFor(project).profiles || [])
+      .find((entry) => entry.id === profileId)
+      ?.animations?.find((entry) => String(entry.id || entry.name) === requestedId);
+    const replaced = booleanFlag(args.replace) && Boolean(existingAnimation);
     const animationId = uniqueAnimationId(
       project,
       profileId,
@@ -788,6 +787,7 @@ function createXsxbMcpService(options = {}) {
         );
       }
     }
+    const fps = requireFps(args.fps, replaced ? existingAnimation.fps : 12);
     const imported = importAnimation({
       root,
       projectStore,
@@ -797,7 +797,7 @@ function createXsxbMcpService(options = {}) {
       animationId,
       animationName: String(args.animation_name || animationId),
       animationType: resolveAnimationType(args.animation_type || args.animationType),
-      fps: requireFps(args.fps),
+      fps,
       replace: replaced,
       inPlace,
       items: importItems,
@@ -830,7 +830,7 @@ function createXsxbMcpService(options = {}) {
       profileId,
       animationId,
       animationType: resolveAnimationType(args.animation_type || args.animationType),
-      fps: requireFps(args.fps),
+      fps,
       importedFrameCount: imported.frameCount,
       replaced: Boolean(replaced),
       inPlace: Boolean(imported.inPlace),

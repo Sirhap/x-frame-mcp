@@ -309,7 +309,7 @@ function toolDefinitions() {
           animation_type: ANIMATION_TYPE_PROPERTY,
           project_id: projectProperty,
           profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
-          fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
+          fps: { type: "number", minimum: 1, maximum: 120 },
           replace: { type: "boolean", default: false },
           sync: { type: "boolean", default: false },
           validate: { type: "boolean", default: false },
