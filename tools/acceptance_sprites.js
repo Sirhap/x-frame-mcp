@@ -109,7 +109,7 @@ function paintLeg(data, width, height, footX, hipY, soleY) {
 
 /**
  * Paints a 64×64-class hero: hair, face, coat, belt, two legs, boots, optional
- * sword and bright slash under the soles.
+ * sword and a reaching gold slash past the body (crescent-sized, not a hair spark).
  * @param {number} width Canvas width.
  * @param {number} height Canvas height.
  * @param {{
@@ -142,10 +142,11 @@ function paintHero(width, height, pose = {}) {
   const hairTop = headTop - 2;
   const shoulderY = torsoTop + 2;
   if (pose.slash) {
-    for (let i = 0; i < 12; i += 1) {
-      const x = feetX + 5 + i;
-      const y = soleY + 1 + Math.floor(i / 2);
-      fillRect(data, width, height, x, y, x + 1, y + 1, HERO_COLORS.glow);
+    const slashY = shoulderY + 2;
+    for (let i = 0; i < 22; i += 1) {
+      const x = feetX + 8 + i;
+      const y = slashY + Math.floor(i / 3);
+      fillRect(data, width, height, x, y, x + 2, y + 3, HERO_COLORS.glow);
     }
   }
   paintLeg(data, width, height, feetX - 4 - stride, hipY, soleY);

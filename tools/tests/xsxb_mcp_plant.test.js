@@ -503,6 +503,60 @@ test("plant_feet without reference_animation_id defaults walk to idle canvas and
   }
 });
 
+test("plant_feet without reference_animation_id defaults attack to idle canvas and median sole", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-attack-omit");
+    const attackDir = path.join(current.root, "attack-omit");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(attackDir);
+    const idleHang = bodyOnCanvas(64, 72, 62);
+    const idleSole = bodyOnCanvas(64, 72, 63);
+    const attack = bodyOnCanvas(64, 64, 63);
+    assert.equal(measureSpriteGeometry(idleHang.data, 64, 72).feetY, 62);
+    assert.equal(measureSpriteGeometry(idleSole.data, 64, 72).feetY, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idleHang.data, 64, 72));
+    fs.writeFileSync(path.join(idleDir, "02.png"), encodePngRgba(idleSole.data, 64, 72));
+    fs.writeFileSync(path.join(attackDir, "01.png"), encodePngRgba(attack.data, 64, 64));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: attackDir,
+      animation_id: "attack",
+    });
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "attack",
+      target_y: -1,
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.referenceAnimationId, "idle");
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "attack" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    assert.equal(image.width, 64);
+    assert.equal(image.height, 72);
+    assert.equal(animation.animation.frames[0].width, 64);
+    assert.equal(animation.animation.frames[0].height, 72);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.equal(
+      after.feetY,
+      63,
+      `attack must land on median idle sole 63, not padded last row 71 (got ${after.feetY})`,
+    );
+    assert.notEqual(
+      after.feetY,
+      image.height - 1,
+      "must not plant onto canvasH-1 of the padded attack canvas",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("plant_feet idle apply without reference stays on its own canvas y=-1", async () => {
   const current = fixture();
   try {

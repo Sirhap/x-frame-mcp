@@ -24,6 +24,22 @@ const {
   writePngSequence,
 } = require("./acceptance_sprites");
 
+/** Import order in `runSessionAcceptance`: idle, walk, attack, hit_spark. */
+const SESSION_CLIPS = Object.freeze(["idle", "walk", "attack", "hit_spark"]);
+
+/**
+ * Sheet-order evidence cells after cutout, estimate_boxes, and plant.
+ * Import order is SESSION_CLIPS. Idle/walk/hit_spark stay on 0; attack is
+ * first gold/enabled slash (01), not sword-only windup 00.
+ * @returns {Array<{id:string,frame:number}>} One `{id,frame}` per imported clip.
+ */
+function expectedSessionEvidenceCells() {
+  return SESSION_CLIPS.map((id) => ({
+    id,
+    frame: id === "attack" ? 1 : 0,
+  }));
+}
+
 /**
  * Reads a cutout snapshot id from get_animation.
  * @param {object} service MCP service.
@@ -346,6 +362,11 @@ async function runSessionAcceptance(options = {}) {
     assert.equal(gate.data.qa, "clean");
     assert.equal(gate.data.scale_contract.ok, true);
     assert.ok(!(gate.data.scale_contract.issues || []).some((issue) => /hit_spark/.test(issue)));
+    assert.deepEqual(
+      gate.data.evidence.cells,
+      expectedSessionEvidenceCells(),
+      "evidence.cells must pin attack=1 (slash), not windup 0",
+    );
     kept["session_godot_evidence.png"] = gate.data.evidence.path;
     kept["session_run_summary.json"] = gate.data.run_summary.path;
     log.push("validate_for_godot clean");
@@ -370,7 +391,7 @@ async function runSessionAcceptance(options = {}) {
   }
 }
 
-module.exports = { runSessionAcceptance };
+module.exports = { SESSION_CLIPS, expectedSessionEvidenceCells, runSessionAcceptance };
 
 if (require.main === module) {
   runSessionAcceptance()
