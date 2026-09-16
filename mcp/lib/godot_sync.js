@@ -29,6 +29,24 @@ function validGodotProjectRoot(project) {
   return projectRoot;
 }
 
+/**
+ * Walks up from startDir looking for a folder that contains project.godot.
+ * @param {string} startDir Directory that may sit inside a Godot project.
+ * @returns {string} Godot project root, or empty string at the filesystem root.
+ */
+function findGodotProjectRoot(startDir) {
+  if (!startDir) return "";
+  let current = path.resolve(String(startDir));
+  const { root } = path.parse(current);
+  while (true) {
+    if (fs.existsSync(path.join(current, "project.godot"))) return current;
+    if (current === root) return "";
+    const parent = path.dirname(current);
+    if (parent === current) return "";
+    current = parent;
+  }
+}
+
 function godotProjectRelPath(...parts) {
   return reslash(path.join(GODOT_SYNC_ROOT, ...parts));
 }
@@ -87,6 +105,38 @@ function invalidateGodotImport(projectRoot, pngPath) {
       stale = true;
     }
     if (!stale) continue;
+    for (const filePath of [ctex, md5Path]) {
+      if (!fs.existsSync(filePath)) continue;
+      fs.rmSync(filePath, { force: true });
+      deleted += 1;
+    }
+  }
+  return deleted;
+}
+
+/**
+ * Deletes Godot imported .ctex and .md5 referenced by a PNG's .import sidecar.
+ * Always forgets the cache (not only when source_md5 is stale) so overwritten
+ * numbered frames cannot keep showing old pixels after export_pack_slot.
+ * @param {string} projectRoot Godot root with project.godot.
+ * @param {string} pngPath Absolute PNG path inside the Godot project.
+ * @returns {number} Deleted cache files.
+ */
+function forgetGodotImportCache(projectRoot, pngPath) {
+  const importPath = `${pngPath}.import`;
+  if (!fs.existsSync(importPath) || !projectRoot) return 0;
+  const importRoot = path.join(projectRoot, ".godot", "imported");
+  const text = fs.readFileSync(importPath, "utf8");
+  const dests = new Set();
+  for (const match of text.matchAll(/res:\/\/(\.godot\/imported\/[^\s"\]]+)/g)) {
+    dests.add(match[1].replace(/\.md5$/i, ".ctex"));
+  }
+  if (!dests.size) return 0;
+  let deleted = 0;
+  for (const rel of dests) {
+    const ctex = path.join(projectRoot, rel);
+    if (!isInside(ctex, importRoot)) continue;
+    const md5Path = ctex.replace(/\.ctex$/i, ".md5");
     for (const filePath of [ctex, md5Path]) {
       if (!fs.existsSync(filePath)) continue;
       fs.rmSync(filePath, { force: true });
@@ -511,6 +561,8 @@ module.exports = {
   syncGodotProject,
   syncManifest,
   syncTuning,
+  findGodotProjectRoot,
+  forgetGodotImportCache,
   invalidateGodotImport,
   validGodotProjectRoot,
 };

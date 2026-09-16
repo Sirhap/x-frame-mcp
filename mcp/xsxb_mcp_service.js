@@ -34,7 +34,13 @@ const {
   persistAnnotationDocuments,
   translateAnnotations,
 } = require("./authoring/common");
-const { GODOT_SYNC_ROOT, syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
+const {
+  GODOT_SYNC_ROOT,
+  findGodotProjectRoot,
+  forgetGodotImportCache,
+  syncGodotProject,
+  validGodotProjectRoot,
+} = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
 const { gameLocalAuthoringStale, validateImport } = require("./lib/validate_import");
@@ -2196,6 +2202,18 @@ function createXsxbMcpService(options = {}) {
     const dest = path.resolve(String(args.dest || ""));
     if (!dest) throw new Error("dest is required.");
     fs.mkdirSync(dest, { recursive: true });
+    const godotRoot = findGodotProjectRoot(dest);
+    if (godotRoot) {
+      for (const name of fs.readdirSync(dest)) {
+        const pngName = /^\d+\.png$/i.test(name)
+          ? name
+          : /^\d+\.png\.import$/i.test(name)
+            ? name.replace(/\.import$/i, "")
+            : "";
+        if (!pngName) continue;
+        forgetGodotImportCache(godotRoot, path.join(dest, pngName));
+      }
+    }
     clearNumberedPngs(dest);
     const frames = animation.frames || [];
     const last = Math.max(0, frames.length - 1);
