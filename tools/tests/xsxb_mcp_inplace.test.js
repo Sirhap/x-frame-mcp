@@ -303,6 +303,50 @@ test("restore_in_place_revision_unlinks_ghost_pack_pngs", async () => {
   }
 });
 
+test("restore_in_place_revision_forgets_stale_godot_ctex_on_kept_pack_png", async () => {
+  const current = fixture();
+  const pack = path.join(current.godotRoot, "sprites", "run");
+  try {
+    const sources = writeSequence(pack, 2);
+    fs.writeFileSync(path.join(pack, "notes.txt"), "keep me\n");
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      in_place: true,
+    });
+    const saved = await current.service.call("xsxb_save_revision");
+    const png = sources[0];
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${png}.import`, 'path="res://.godot/imported/01.ctex"\n');
+    fs.writeFileSync(path.join(importedDir, "01.ctex"), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, "01.md5"), "stale-ctex");
+    fs.writeFileSync(png, encodePngRgba(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1));
+    const restored = await current.service.call("xsxb_restore_revision", {
+      revision_id: saved.revisionId,
+      dry_run: false,
+      restore_external: true,
+    });
+    assert.equal(restored.restored, true);
+    assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
+    assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
+    assert.ok(fs.existsSync(`${png}.import`), "01.png.import sidecar must stay");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "01.ctex")),
+      false,
+      "01.ctex must be forgotten from .godot/imported",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "01.md5")),
+      false,
+      "01.md5 must be forgotten from .godot/imported",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("import_in_place_replace_drops_stale_pack_pngs", async () => {
   const current = fixture();
   const pack = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-game-pack-"));
