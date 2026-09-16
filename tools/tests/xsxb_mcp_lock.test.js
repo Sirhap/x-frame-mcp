@@ -793,6 +793,55 @@ test("export_pack_slot copies frames into a game-pack destination", async () => 
   }
 });
 
+test("export_pack_slot clears stale numbered pngs when clip shrinks after reorganize", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "run");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "03.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "04.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "run",
+    });
+    const dest = path.join(current.root, "frost_armed-run-front");
+    const first = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(first.copied, 4);
+    for (const name of ["0.png", "1.png", "2.png", "3.png"]) {
+      assert.ok(fs.existsSync(path.join(dest, name)), name);
+    }
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "run",
+      order: [0, 1],
+    });
+    const exported = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(exported.copied, 2);
+    assert.ok(fs.existsSync(path.join(dest, "0.png")));
+    assert.ok(fs.existsSync(path.join(dest, "1.png")));
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "3.png")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("instructions lead with measure/register and demote smear for walk loops", () => {
   assert.match(INSTRUCTIONS, /xsxb_measure_frames/);
   assert.match(INSTRUCTIONS, /xsxb_register_clip/);
