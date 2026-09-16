@@ -18,6 +18,7 @@ const {
   pickValidationEvidenceFrameIndex,
 } = require("../../mcp/xsxb_mcp_validate_godot");
 const { composeFrameDiff } = require("../../mcp/xsxb_mcp_diff_frames");
+const { borderFloodKey } = require("../../mcp/xsxb_mcp_lock");
 const { paintGroundedActor } = require("../acceptance_playbooks");
 
 const BOOT = Object.freeze([210, 36, 42, 255]);
@@ -515,6 +516,20 @@ function evidenceCell(sheet, index, cellW) {
   return { data, width: cellW, height: cellH };
 }
 
+/**
+ * Counts subject pixels after studio-plate keying.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame or cell.
+ * @returns {number} Opaque occupancy (`a > 16`).
+ */
+function keyedOpaqueCount(image) {
+  const keyed = borderFloodKey(image.data, image.width, image.height, { mode: "any" });
+  let count = 0;
+  for (let offset = 3; offset < keyed.data.length; offset += 4) {
+    if (keyed.data[offset] > 16) count += 1;
+  }
+  return count;
+}
+
 test("pickValidationEvidenceFrameIndex skips plated windup gold and takes the slash crescent", () => {
   const windup = decodePngRgba(path.join(__dirname, "../fixtures/generated_hero/attack/00.png"));
   const slash = decodePngRgba(path.join(__dirname, "../fixtures/generated_hero/attack/01.png"));
@@ -698,6 +713,83 @@ test("validate_for_godot attack evidence cell is the slash, not windup", async (
     assert.equal(countCrescentGold(evidenceCell(sheet, 0, cellW)), 0, "idle cell stays pose 0");
     assert.ok(cellGold > 0, "attack evidence cell must show the gold crescent, not windup");
     assert.equal(cellGold, slashGold, "attack cell occupancy must match the slash frame");
+    assert.deepEqual(
+      gate.evidence.cells,
+      [
+        { id: "idle", frame: 0 },
+        { id: "attack", frame: 1 },
+      ],
+      "receipt must name the idle pose and attack slash indexes without decoding the PNG",
+    );
+  } finally {
+    service.close?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validate_for_godot generated jump evidence cell is apex 02", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-jump-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="EvidenceJump"\n');
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  const fixtureRoot = path.join(__dirname, "../fixtures/generated_hero");
+  const apex = decodePngRgba(path.join(fixtureRoot, "jump/02.png"));
+  const cellW = apex.width;
+  try {
+    const idleDir = path.join(root, "idle-seq");
+    const jumpDir = path.join(root, "jump-seq");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(jumpDir);
+    fs.copyFileSync(path.join(fixtureRoot, "idle/00.png"), path.join(idleDir, "00.png"));
+    for (const name of ["00", "01", "02", "03"]) {
+      fs.copyFileSync(path.join(fixtureRoot, "jump", `${name}.png`), path.join(jumpDir, `${name}.png`));
+    }
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: jumpDir,
+      animation_id: "jump",
+    });
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.deepEqual(
+      gate.evidence.cells,
+      [
+        { id: "idle", frame: 0 },
+        { id: "jump", frame: 2 },
+      ],
+      "receipt must name jump apex 02 so agents do not decode the evidence PNG",
+    );
+    assert.equal(gate.evidence.width, cellW * 2, "one cell per imported clip (idle + jump)");
+    const sheet = decodePngRgba(gate.evidence.path);
+    const jumpCell = evidenceCell(sheet, 1, cellW);
+    const cellGeometry = measureKeyedSubject(jumpCell);
+    const apexGeometry = measureKeyedSubject(apex);
+    assert.equal(
+      cellGeometry.headY,
+      apexGeometry.headY,
+      "jump cell headY must match generated 02, not takeoff 01",
+    );
+    assert.equal(
+      keyedOpaqueCount(jumpCell),
+      keyedOpaqueCount(apex),
+      "jump cell keyed occupancy must match generated 02",
+    );
+    const summary = JSON.parse(fs.readFileSync(gate.run_summary.path, "utf8"));
+    assert.deepEqual(summary.evidence.cells, gate.evidence.cells);
   } finally {
     service.close?.();
     fs.rmSync(root, { recursive: true, force: true });

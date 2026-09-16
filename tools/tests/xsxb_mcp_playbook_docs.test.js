@@ -45,6 +45,10 @@ test("godot skill names evidence as one cell per clip, not always frame 0", () =
   );
   assert.doesNotMatch(godot, /highest sole \/ apex/, "do not treat highest sole and apex as synonyms");
   assert.match(godot, /qa=review/);
+  assert.match(godot, /evidence\.cells/, "same evidence sentence must name receipt cells");
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_validate_for_godot");
+  assert.ok(tool, "xsxb_validate_for_godot must stay in the catalog");
+  assert.match(tool.description, /evidence\.cells/, "catalog must name per-cell id + frame index");
 });
 
 test("gameplay skill plants hurt and enables hit only on a gold crescent", () => {

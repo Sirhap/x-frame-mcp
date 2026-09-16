@@ -2202,6 +2202,7 @@ function createXsxbMcpService(options = {}) {
    * Validates Godot handoff including gameplay wiring and the idle scale contract.
    * When bound and standalone tuning/manifest diverge from game-local copies,
    * syncs through the same `synchronize` path as `xsxb_sync_godot` first.
+   * Evidence `cells` lists each blit `{id, frame}` in sheet order; empty clips omit a cell.
    * @param {object} args Tool arguments.
    * @returns {object} Gate payload; `ok` is the domain pass.
    */
@@ -2224,6 +2225,7 @@ function createXsxbMcpService(options = {}) {
     const paths = projectStore.projectPaths(project);
     const overrides = projectStore.readJson(paths.tuning, EMPTY_TUNING).frame_box_overrides || {};
     const evidenceFrames = [];
+    const evidenceCells = [];
     const clips = [];
     for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
       for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
@@ -2253,6 +2255,7 @@ function createXsxbMcpService(options = {}) {
             clipFrames,
           );
           evidenceFrames.push(clipFrames[picked].image);
+          evidenceCells.push({ id: animationId, frame: picked });
         }
         clips.push({
           id: animationId,
@@ -2294,7 +2297,7 @@ function createXsxbMcpService(options = {}) {
     const assembled = assembleGodotValidation(
       raw,
       scaleContract,
-      { path: evidencePath, width: sheet.width, height: sheet.height },
+      { path: evidencePath, width: sheet.width, height: sheet.height, cells: evidenceCells },
       { strict, godot, summaryPath },
     );
     fs.writeFileSync(
