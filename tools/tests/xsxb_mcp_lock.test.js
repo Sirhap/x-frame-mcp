@@ -579,6 +579,36 @@ test("export_sheet grid=false omit cell uses maxEdge; injected 220 blows the she
   }
 });
 
+test("export_sheet returns preview.path for walk-lock visual QA", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "walk");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "walk",
+    });
+    const sheet = await current.service.call("xsxb_export_sheet", {
+      animation_id: "walk",
+      grid: false,
+    });
+    assert.equal(typeof sheet.preview, "object");
+    assert.ok(sheet.preview);
+    assert.equal(sheet.preview.path, sheet.outputPath);
+    assert.ok(fs.existsSync(sheet.preview.path));
+    const image = decodePngRgba(sheet.preview.path);
+    assert.equal(sheet.preview.width, sheet.width);
+    assert.equal(sheet.width, image.width);
+    assert.equal(sheet.preview.height, sheet.height);
+    assert.equal(sheet.height, image.height);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("export_gif accepts an outside path, flattens onto magenta, and reports baked visual", async () => {
   const jobs = [];
   const current = fixture({
