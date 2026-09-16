@@ -353,6 +353,69 @@ test("import_in_place_replace_drops_stale_pack_pngs", async () => {
   }
 });
 
+test("import_in_place_replace_forgets_stale_godot_ctex", async () => {
+  const current = fixture();
+  const pack = path.join(current.godotRoot, "sprites", "run");
+  try {
+    const sources = writeSequence(pack, 4);
+    fs.writeFileSync(path.join(pack, "notes.txt"), "keep me\n");
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      in_place: true,
+    });
+    assert.equal(imported.importedFrameCount, 4);
+
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    for (const pngPath of [sources[2], sources[3]]) {
+      const stem = path.basename(pngPath, path.extname(pngPath));
+      fs.writeFileSync(`${pngPath}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+      fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+      fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-md5");
+    }
+
+    const replaced = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      replace: true,
+      in_place: true,
+      start_frame: 0,
+      end_frame: 1,
+    });
+    assert.equal(replaced.importedFrameCount, 2);
+    assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
+    assert.ok(fs.existsSync(sources[1]), "02.png must stay as the kept source");
+    assert.equal(
+      fs.existsSync(sources[2]),
+      false,
+      "03.png must be unlinked after in_place replace shrinks the clip",
+    );
+    assert.equal(
+      fs.existsSync(sources[3]),
+      false,
+      "04.png must be unlinked after in_place replace shrinks the clip",
+    );
+    assert.equal(fs.existsSync(`${sources[2]}.import`), false, "03.png.import sidecar must be unlinked");
+    assert.equal(fs.existsSync(`${sources[3]}.import`), false, "04.png.import sidecar must be unlinked");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "03.ctex")),
+      false,
+      "03.ctex must be forgotten from .godot/imported",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "04.ctex")),
+      false,
+      "04.ctex must be forgotten from .godot/imported",
+    );
+    assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
+  } finally {
+    current.cleanup();
+  }
+});
+
 /**
  * Decodes a PNG header by requiring the file to exist and start with PNG magic.
  * @param {string} filePath Absolute PNG path.
