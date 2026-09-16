@@ -7,9 +7,14 @@ const path = require("node:path");
 const test = require("node:test");
 const { estimateFrameBoxes } = require("../../mcp/lib/box_estimator");
 const { encodePngRgba, decodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
+const { borderFloodKey, measureSpriteGeometry } = require("../../mcp/xsxb_mcp_lock");
 const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
 const { createProjectStore } = require("../../mcp/lib/project_store");
 const { assertFrameBoxes, boxRectOnCanvas, drawBoxesOnMagenta } = require("../acceptance_generated");
+
+const GENERATED_IDLE_0 = path.join(__dirname, "../fixtures/generated_hero/idle/00.png");
+const GENERATED_ATTACK_0 = path.join(__dirname, "../fixtures/generated_hero/attack/00.png");
+const GENERATED_ATTACK_1 = path.join(__dirname, "../fixtures/generated_hero/attack/01.png");
 
 const CANVAS_W = 256;
 const CANVAS_H = 264;
@@ -33,9 +38,10 @@ function setPixel(rgba, width, x, y, color) {
 }
 
 /**
- * Builds a transparent-padded 256×264 actor with an optional right-hand slash.
+ * Builds a transparent-padded 256×264 actor with an optional right-hand slash
+ * or a left-hand steel sword (no gold crescent).
  * Soles sit one pixel above the last row, matching planted generated frames.
- * @param {{slash?:boolean}} [options] Attack reach.
+ * @param {{slash?:boolean,sword?:boolean}} [options] Attack reach.
  * @returns {{data:Uint8ClampedArray,width:number,height:number,left:number,top:number,feetY:number}}
  */
 function paddedActorFrame(options = {}) {
@@ -56,6 +62,14 @@ function paddedActorFrame(options = {}) {
       }
     }
   }
+  if (options.sword) {
+    const bladeX = left - 10;
+    for (let y = top + 8; y < top + 52; y += 1) {
+      for (let x = bladeX; x < bladeX + 3; x += 1) {
+        setPixel(rgba, CANVAS_W, x, y, [200, 204, 214, 255]);
+      }
+    }
+  }
   return { data: rgba, width: CANVAS_W, height: CANVAS_H, left, top, feetY };
 }
 
@@ -73,15 +87,34 @@ function writePaddedActorPng(filePath, options = {}) {
 }
 
 /**
- * Grounded collision plus a torso hurtbox for a planted 256×264 actor.
- * @param {{stamp?:boolean,floatCollision?:boolean,belowCanvas?:boolean,cloneHit?:boolean}} [options]
+ * Keys a generated-hero plate (studio white) the same way the session cutout does.
+ * @param {string} sourcePath Fixture PNG.
+ * @param {string} destPath Keyed output.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} Keyed frame.
+ */
+function writeKeyedGeneratedPng(sourcePath, destPath) {
+  const image = decodePngRgba(sourcePath);
+  const keyed = borderFloodKey(image.data, image.width, image.height, {
+    keyColor: "#F8F8F8",
+    protectedColors: ["#ffe040", "#ffe080", "#ffd070"],
+  });
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.writeFileSync(destPath, encodePngRgba(keyed.data, image.width, image.height));
+  return { data: keyed.data, width: image.width, height: image.height };
+}
+
+/**
+ * Grounded collision plus a torso hurtbox that reaches the hair.
+ * @param {{stamp?:boolean,neckOnly?:boolean,floatCollision?:boolean,belowCanvas?:boolean,cloneHit?:boolean}} [options]
  *   Failure modes.
  * @returns {object} Box override.
  */
 function plantedBoxes(options = {}) {
   const hurt = options.stamp
     ? { offset: { x: 0, y: -60 }, size: { x: 1, y: 1 }, enabled: true }
-    : { offset: { x: 0, y: -62 }, size: { x: 38, y: 98 }, enabled: true };
+    : options.neckOnly
+      ? { offset: { x: 0, y: -58 }, size: { x: 38, y: 80 }, enabled: true }
+      : { offset: { x: 0, y: -67 }, size: { x: 38, y: 112 }, enabled: true };
   const collision = options.floatCollision
     ? { offset: { x: 0, y: -140 }, size: { x: 20, y: 40 }, enabled: true }
     : options.belowCanvas
@@ -201,6 +234,10 @@ test("assertFrameBoxes rejects a 1px hurt stamp and a mid-torso collision", () =
     /hurtbox|stamp|torso/i,
   );
   assert.throws(
+    () => assertFrameBoxes("idle", 0, plantedBoxes({ neckOnly: true }), frame),
+    /neck|hair|minY|hurtbox/i,
+  );
+  assert.throws(
     () => assertFrameBoxes("walk", 0, plantedBoxes({ floatCollision: true }), frame),
     /sole|collision|torso/i,
   );
@@ -210,7 +247,11 @@ test("assertFrameBoxes rejects a 1px hurt stamp and a mid-torso collision", () =
   );
   assert.throws(
     () => assertFrameBoxes("attack", 0, plantedBoxes({ cloneHit: true }), frame),
-    /hitbox|identical|reach/i,
+    /hitbox|identical|reach|crescent/i,
+  );
+  assert.throws(
+    () => assertFrameBoxes("attack", 1, plantedBoxes(), paddedActorFrame({ sword: true })),
+    /hitbox|enabled|crescent/i,
   );
 });
 
@@ -240,6 +281,141 @@ test("drawBoxesOnMagenta paints a lime hurtbox outline on the flatten", () => {
     assert.deepEqual(
       [painted.data[offset], painted.data[offset + 1], painted.data[offset + 2], painted.data[offset + 3]],
       [...HURT_LIME],
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("estimateFrameBoxes hurtbox reaches the hair on generated idle, not the neck", () => {
+  assert.ok(fs.existsSync(GENERATED_IDLE_0), `missing fixture ${GENERATED_IDLE_0}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-idle-head-"));
+  try {
+    const filePath = path.join(root, "idle.png");
+    const image = writeKeyedGeneratedPng(GENERATED_IDLE_0, filePath);
+    const boxes = estimateFrameBoxes(filePath, {
+      type: "actor",
+      animationId: "idle",
+      animationName: "idle",
+      frameIndex: 0,
+      frameCount: 2,
+      groupCanvasWidth: image.width,
+      groupCanvasHeight: image.height,
+    });
+    const geometry = measureSpriteGeometry(image.data, image.width, image.height);
+    const hurt = boxRectOnCanvas(boxes.hurtbox, image.width, image.height);
+    assert.ok(
+      hurt.minY <= geometry.minY + 8,
+      `hurtbox top ${hurt.minY} starts at the neck; hair minY=${geometry.minY} size=${JSON.stringify(boxes.hurtbox)}`,
+    );
+    assert.ok(
+      hurt.maxY >= (geometry.minY + geometry.feetY) / 2,
+      `hurtbox misses chest: ${JSON.stringify(hurt)}`,
+    );
+    const collision = boxRectOnCanvas(boxes.collisionbox, image.width, image.height);
+    assert.equal(boxes.collisionbox.offset.y, -boxes.collisionbox.size.y / 2);
+    assert.ok(collision.maxY <= image.height, `collision floated past canvas ${JSON.stringify(collision)}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("estimateFrameBoxes hitbox covers the generated attack gold crescent", () => {
+  assert.ok(fs.existsSync(GENERATED_ATTACK_0), `missing fixture ${GENERATED_ATTACK_0}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-atk-crescent-"));
+  try {
+    const filePath = path.join(root, "attack0.png");
+    const image = writeKeyedGeneratedPng(GENERATED_ATTACK_0, filePath);
+    const boxes = estimateFrameBoxes(filePath, {
+      type: "actor",
+      animationId: "attack",
+      animationName: "slash",
+      frameIndex: 0,
+      frameCount: 2,
+      groupCanvasWidth: image.width,
+      groupCanvasHeight: image.height,
+    });
+    assert.ok(boxes.hitbox && boxes.hitbox.enabled !== false, `hitbox missing: ${JSON.stringify(boxes)}`);
+    assert.ok(
+      boxes.hitbox.size.x > 20 && boxes.hitbox.size.y > 16,
+      `hitbox is a stamp ${boxes.hitbox.size.x}x${boxes.hitbox.size.y}`,
+    );
+    const hurt = boxRectOnCanvas(boxes.hurtbox, image.width, image.height);
+    const hit = boxRectOnCanvas(boxes.hitbox, image.width, image.height);
+    assert.ok(
+      hit.maxX > hurt.maxX + 4 || hit.minX < hurt.minX - 4,
+      `hitbox does not reach past the body: hit=${JSON.stringify(hit)} hurt=${JSON.stringify(hurt)}`,
+    );
+    let gold = 0;
+    let inside = 0;
+    const x0 = Math.round(image.width * 0.55);
+    const y0 = Math.round(image.height * 0.35);
+    for (let y = 0; y < image.height; y += 1) {
+      for (let x = 0; x < image.width; x += 1) {
+        if (x < x0 || y < y0) continue;
+        const offset = (y * image.width + x) * 4;
+        const r = image.data[offset];
+        const g = image.data[offset + 1];
+        const b = image.data[offset + 2];
+        const a = image.data[offset + 3];
+        if (a < 160) continue;
+        const sat = Math.max(r, g, b) - Math.min(r, g, b);
+        if (!(r >= 220 && g >= 180 && b <= 180 && r - b >= 50 && g - b >= 20 && sat >= 40)) continue;
+        gold += 1;
+        if (x >= hit.minX && x <= hit.maxX && y >= hit.minY && y <= hit.maxY) inside += 1;
+      }
+    }
+    assert.ok(gold >= 160, `fixture lost the gold crescent (${gold} px)`);
+    assert.ok(
+      inside / gold >= 0.2,
+      `hitbox overlaps ${inside}/${gold} crescent pixels; stamp beside the arc is not enough ${JSON.stringify(boxes.hitbox)}`,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("estimateFrameBoxes disables hitbox on generated attack idle-b (sword, no crescent)", () => {
+  assert.ok(fs.existsSync(GENERATED_ATTACK_1), `missing fixture ${GENERATED_ATTACK_1}`);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-atk-idleb-"));
+  try {
+    const filePath = path.join(root, "attack1.png");
+    const image = writeKeyedGeneratedPng(GENERATED_ATTACK_1, filePath);
+    const boxes = estimateFrameBoxes(filePath, {
+      type: "actor",
+      animationId: "attack",
+      animationName: "slash",
+      frameIndex: 1,
+      frameCount: 2,
+      groupCanvasWidth: image.width,
+      groupCanvasHeight: image.height,
+    });
+    assert.ok(
+      !boxes.hitbox || boxes.hitbox.enabled === false,
+      `idle-b must not emit an enabled junk hitbox: ${JSON.stringify(boxes.hitbox)}`,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("estimateFrameBoxes disables hitbox on a padded sword-only attack frame", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-sword-only-"));
+  try {
+    const filePath = path.join(root, "attack.png");
+    writePaddedActorPng(filePath, { sword: true });
+    const boxes = estimateFrameBoxes(filePath, {
+      type: "actor",
+      animationId: "attack",
+      animationName: "slash",
+      frameIndex: 1,
+      frameCount: 2,
+      groupCanvasWidth: CANVAS_W,
+      groupCanvasHeight: CANVAS_H,
+    });
+    assert.ok(
+      !boxes.hitbox || boxes.hitbox.enabled === false,
+      `sword-only frame kept an enabled hitbox: ${JSON.stringify(boxes.hitbox)}`,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

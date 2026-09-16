@@ -807,9 +807,52 @@ function measureDarkBodySpan(image) {
   return { minX, minY, maxX, maxY };
 }
 
+/** Hurtbox top may sit this many pixels below subject minY (hair), not at the neck. */
+const HURT_HEAD_SLOP_PX = 8;
+/** Hitbox must cover at least this share of the slash-crescent gold pixels. */
+const CRESCENT_HIT_OVERLAP = 0.2;
+
+/**
+ * Largest slash-region gold blob that is a real crescent, not a belt spark.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame.
+ * @returns {{count:number,width:number,height:number,minX:number,minY:number,maxX:number,maxY:number}|null}
+ */
+function qualifyingSlashCrescent(image) {
+  const largest = slashGoldBlobs(image)[0];
+  if (!largest) return null;
+  if (largest.count < 80 || largest.width < 20 || largest.height < 8) return null;
+  return largest;
+}
+
+/**
+ * Counts crescent-gold pixels of the largest slash blob that sit inside a canvas rect.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame.
+ * @param {{minX:number,minY:number,maxX:number,maxY:number}} blob Crescent bbox.
+ * @param {{minX:number,minY:number,maxX:number,maxY:number}} rect Hitbox on canvas.
+ * @returns {{total:number,inside:number}} Pixel counts.
+ */
+function countCrescentOverlap(image, blob, rect) {
+  const { data, width, height } = image;
+  let total = 0;
+  let inside = 0;
+  for (let y = blob.minY; y <= blob.maxY; y += 1) {
+    for (let x = blob.minX; x <= blob.maxX; x += 1) {
+      const offset = (y * width + x) * 4;
+      if (!inSlashRegion(x, y, width, height)) continue;
+      if (!isCrescentGold(data[offset], data[offset + 1], data[offset + 2], data[offset + 3])) continue;
+      total += 1;
+      if (x >= rect.minX && x <= rect.maxX && y >= rect.minY && y <= rect.maxY) inside += 1;
+    }
+  }
+  return { total, inside };
+}
+
 /**
  * Asserts idle/walk/attack boxes cover the torso and sit on the soles.
- * Attack also needs a hitbox that is not a hurtbox clone and reaches past the body.
+ * Hurtbox top must reach the hair (subject minY), not start at the neck.
+ * Attack frames with a gold slash crescent need a hitbox that overlaps that
+ * arc and still reaches past the body. Attack frames with a sword but no
+ * crescent (generated attack 01 / idle-b) must not keep an enabled junk hit.
  * @param {string} animationId Clip id.
  * @param {number} frameIndex Frame index.
  * @param {object} boxes Group-space overrides.
@@ -837,6 +880,11 @@ function assertFrameBoxes(animationId, frameIndex, boxes, image) {
       hurt.minY <= torsoY && torsoY <= hurt.maxY,
       `${label} hurtbox misses torso row ${torsoY} (rect ${hurt.minY}..${hurt.maxY})`,
     );
+    const headSlop = Math.max(HURT_HEAD_SLOP_PX, Math.round(geometry.bodyH * 0.04));
+    assert.ok(
+      hurt.minY <= geometry.minY + headSlop,
+      `${label} hurtbox top ${hurt.minY} starts at the neck; hair/subject minY is ${geometry.minY} (slop ${headSlop})`,
+    );
     const collision = boxRectOnCanvas(boxes.collisionbox, width, height);
     assert.ok(
       collision.maxY <= height,
@@ -849,6 +897,14 @@ function assertFrameBoxes(animationId, frameIndex, boxes, image) {
     );
   }
   if (animationId === "attack") {
+    const crescent = qualifyingSlashCrescent(image);
+    if (!crescent) {
+      assert.ok(
+        !boxPresent(boxes?.hitbox),
+        `${label} has an enabled hitbox but no slash crescent (idle-b / sword-only must disable or omit hit)`,
+      );
+      return;
+    }
     assert.ok(boxPresent(boxes?.hitbox), `${label} missing hitbox`);
     assert.ok(!boxesIdentical(boxes.hitbox, boxes.hurtbox), `${label} hitbox is identical to the hurtbox`);
     const hit = boxRectOnCanvas(boxes.hitbox, width, height);
@@ -859,6 +915,12 @@ function assertFrameBoxes(animationId, frameIndex, boxes, image) {
     assert.ok(
       pastHurt || pastBody,
       `${label} hitbox does not reach 4px past the body (hit=${JSON.stringify(hit)} hurt=${JSON.stringify(hurt)} body=${JSON.stringify(body)})`,
+    );
+    const overlap = countCrescentOverlap(image, crescent, hit);
+    const fraction = overlap.total ? overlap.inside / overlap.total : 0;
+    assert.ok(
+      fraction >= CRESCENT_HIT_OVERLAP,
+      `${label} hitbox covers ${overlap.inside}/${overlap.total} crescent pixels (${fraction.toFixed(3)}); need a real fraction of the gold arc, not a stamp beside it`,
     );
   }
 }
