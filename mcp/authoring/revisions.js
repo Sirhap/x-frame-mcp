@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const { walkFiles, requireId } = require("./common");
 const { withFileTransaction } = require("../lib/file_transaction");
 const { unlinkUnreferencedInPlaceFrames } = require("../lib/frame_organizer");
+const { findGodotProjectRoot, forgetGodotImportCache } = require("../lib/godot_sync");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { renderContactSheet } = require("../xsxb_mcp_visual_qa");
 const { pruneRevisions } = require("./revision_retention");
@@ -265,6 +266,11 @@ function createRevisionStore(context) {
       }
       for (const entry of removed) transaction.removeFile(entry.target);
     });
+    for (const job of jobs) {
+      if (!/\.png$/i.test(job.target)) continue;
+      const godotRoot = findGodotProjectRoot(path.dirname(job.target));
+      if (godotRoot) forgetGodotImportCache(godotRoot, job.target);
+    }
     if (args.restore_external === true) {
       const previousExternal = previousFiles.filter((entry) => entry.external).map((entry) => entry.target);
       const keptExternal = snapshot.files.filter((entry) => entry.external).map((entry) => entry.target);
