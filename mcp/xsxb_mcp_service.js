@@ -3771,6 +3771,7 @@ function createXsxbMcpService(options = {}) {
       frameScales: appliedVisual ? selectedScales : undefined,
       totalDurationMs: Math.round(durations.reduce((sum, value) => sum + value, 0) * 1000),
       bytes: fs.statSync(outputPath).size,
+      preview: { path: outputPath },
     };
   }
 
