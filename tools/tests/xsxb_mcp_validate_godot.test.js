@@ -147,6 +147,145 @@ test("validate_for_godot scale contract fails 256-tall walk against 264-tall idl
   }
 });
 
+/**
+ * Bound Godot fixture with one imported idle clip and no Godot sync.
+ * @returns {Promise<{root:string,godotRoot:string,service:object,cleanup:Function}>} Isolated service.
+ */
+async function boundIdleWithoutSync() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-validate-stale-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="StaleTune"\n');
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  const idleDir = path.join(root, "idle-seq");
+  fs.mkdirSync(idleDir);
+  const idle = bodyOnCanvas(32, 32, 28);
+  fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+  fs.writeFileSync(path.join(idleDir, "02.png"), encodePngRgba(idle.data, idle.width, idle.height));
+  await service.call("xsxb_import_animation", {
+    source: "png_sequence",
+    directory: idleDir,
+    animation_id: "idle",
+    sync: false,
+  });
+  return {
+    root,
+    godotRoot,
+    service,
+    cleanup: () => {
+      service.close?.();
+      fs.rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test("validate_for_godot syncs stale game-local tuning after estimate_boxes without sync", async () => {
+  const current = await boundIdleWithoutSync();
+  try {
+    const estimated = await current.service.call("xsxb_estimate_boxes", {
+      animation_id: "idle",
+      sync: false,
+    });
+    assert.equal(estimated.sync.requested, false);
+
+    const gate = await current.service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.ok(
+      !gate.errors.includes("Standalone and game-local animation_tuning.json differ."),
+      `stale game-local tuning must be synced before validate: ${gate.errors.join("; ")}`,
+    );
+    assert.ok(
+      !gate.errors.some((error) => error.startsWith("Game-local XSXB data file is missing:")),
+      `missing game-local files must be synced: ${gate.errors.join("; ")}`,
+    );
+    const leftover = gate.errors.filter((error) => !/scale|canvas|feet|gameplay/i.test(error));
+    assert.deepEqual(leftover, [], `only scale/import issues may remain: ${gate.errors.join("; ")}`);
+    assert.equal(gate.scale_contract.ok, true);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("validate_for_godot does not sync when Godot is unbound", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-validate-unbound-"));
+  createProjectStore(root).addProject({ id: "hero", label: "Hero" });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  try {
+    const idleDir = path.join(root, "idle-seq");
+    fs.mkdirSync(idleDir);
+    const idle = bodyOnCanvas(32, 32, 28);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+      sync: false,
+    });
+    await service.call("xsxb_estimate_boxes", { animation_id: "idle", sync: false });
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.ok(Array.isArray(gate.errors));
+    assert.ok(
+      gate.errors.some((error) => /project\.godot not found/i.test(error)),
+      `unbound validate must report the missing bind, got: ${gate.errors.join("; ")}`,
+    );
+    assert.ok(
+      !gate.errors.some((error) => /Use xsxb_bind_godot to retarget/i.test(error)),
+      "unbound validate must not throw the sync-godot bind requirement",
+    );
+    assert.equal(fs.existsSync(path.join(root, "xsxb_frame_tuner")), false);
+  } finally {
+    service.close?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validate_for_godot still reports import errors after recovering stale tuning", async () => {
+  const current = await boundIdleWithoutSync();
+  try {
+    await current.service.call("xsxb_estimate_boxes", { animation_id: "idle", sync: false });
+    const store = createProjectStore(current.root);
+    const project = store.activeProject("hero");
+    const tuningPath = store.projectPaths(project).tuning;
+    const tuning = JSON.parse(fs.readFileSync(tuningPath, "utf8"));
+    const boxKey = Object.keys(tuning.frame_box_overrides || {})[0];
+    assert.ok(boxKey, "estimate_boxes must persist a standalone override");
+    tuning.frame_box_overrides[boxKey].hurtbox = { offset: { x: 0, y: 0 }, size: { x: 0, y: 0 } };
+    fs.writeFileSync(tuningPath, `${JSON.stringify(tuning, null, 2)}\n`);
+
+    const gate = await current.service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.ok(
+      !gate.errors.includes("Standalone and game-local animation_tuning.json differ."),
+      `stale tuning must not hide the invalid box: ${gate.errors.join("; ")}`,
+    );
+    assert.ok(
+      gate.errors.some((error) => /invalid hurtbox/.test(error)),
+      `invalid standalone boxes must remain visible: ${gate.errors.join("; ")}`,
+    );
+    assert.equal(gate.ok, false);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("validate_for_godot evidence is one cell per clip, not a 4-frame strip", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-clips-"));
   const godotRoot = path.join(root, "godot");

@@ -23,7 +23,7 @@ const { frameIndexes } = require("./authoring/common");
 const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
-const { validateImport } = require("./lib/validate_import");
+const { gameLocalAuthoringStale, validateImport } = require("./lib/validate_import");
 const {
   ALPHA_VISIBLE,
   collectWorkbenchExtras,
@@ -2172,6 +2172,8 @@ function createXsxbMcpService(options = {}) {
 
   /**
    * Validates Godot handoff including gameplay wiring and the idle scale contract.
+   * When bound and standalone tuning/manifest diverge from game-local copies,
+   * syncs through the same `synchronize` path as `xsxb_sync_godot` first.
    * @param {object} args Tool arguments.
    * @returns {object} Gate payload; `ok` is the domain pass.
    */
@@ -2179,6 +2181,9 @@ function createXsxbMcpService(options = {}) {
     const project = registryProject(args.project_id || args.project, false);
     const requireGameplay = booleanFlag(args.require_gameplay, true);
     const strict = booleanFlag(args.strict, false);
+    if (validGodotProjectRoot(project) && gameLocalAuthoringStale(project, projectStore)) {
+      synchronize(project, true);
+    }
     const raw = validateImport(
       {
         project: project.id,
