@@ -1390,6 +1390,64 @@ test("sync_godot_prunes_stale_synced_frame_pngs_after_clip_shrink_or_delete", as
   }
 });
 
+test("sync_godot_forgets_stale_imported_ctex_after_clip_shrink", async () => {
+  const current = fixture();
+  try {
+    const walkDir = path.join(current.root, "walk-sequence");
+    fs.mkdirSync(walkDir, { recursive: true });
+    for (let index = 1; index <= 4; index += 1) {
+      fs.writeFileSync(path.join(walkDir, `walk_${String(index).padStart(2, "0")}.png`), ONE_PIXEL_PNG);
+    }
+    const importedWalk = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: walkDir,
+      animation_id: "walk",
+      fps: 10,
+      sync: true,
+    });
+    assert.equal(importedWalk.importedFrameCount, 4);
+    assert.equal(importedWalk.sync.ok, true);
+    const walkBefore = syncedGodotFramePngs(current.godotRoot, "walk");
+    assert.equal(walkBefore.length, 4, "import+sync must copy four walk PNGs into xsxb_frame_tuner");
+
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    for (const pngPath of walkBefore) {
+      const stem = path.basename(pngPath, path.extname(pngPath));
+      fs.writeFileSync(`${pngPath}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+      fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+      fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+    }
+
+    const observation = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    const reorganized = await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0, 1],
+      basis_snapshot_id: observation.observation.snapshotId,
+      sync: true,
+    });
+    assert.equal(reorganized.applied, true);
+    assert.equal(reorganized.outputFrameCount, 2);
+    assert.equal(reorganized.sync.ok, true);
+    const walkAfter = syncedGodotFramePngs(current.godotRoot, "walk");
+    assert.equal(walkAfter.length, 2, "Godot walk dir must drop leftover frame_0003/0004 after shrink+sync");
+
+    const retained = new Set(walkAfter.map((filePath) => path.resolve(filePath)));
+    const dropped = walkBefore.filter((filePath) => !retained.has(path.resolve(filePath)));
+    for (const pngPath of dropped) {
+      const stem = path.basename(pngPath, path.extname(pngPath));
+      assert.equal(
+        fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+        false,
+        `dropped ${stem}.ctex must be forgotten from .godot/imported`,
+      );
+    }
+    assert.equal(syncedGodotFramePngs(current.godotRoot, "walk").length, 2);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("sync_godot_prunes_stale_synced_attachment_pngs_after_remove_binding", async () => {
   const current = fixture();
   try {
