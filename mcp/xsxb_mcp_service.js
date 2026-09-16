@@ -183,6 +183,16 @@ function forgetImportedPngCacheInDirectory(directory, godotRoot) {
 }
 
 /**
+ * Forgets .godot/imported .ctex/.md5 after overwriting a kept PNG inside a Godot project.
+ * @param {string} pngPath Absolute path of the overwritten PNG.
+ * @returns {void}
+ */
+function forgetImportCacheIfInsideGodot(pngPath) {
+  const godotRoot = findGodotProjectRoot(path.dirname(String(pngPath || "")));
+  if (godotRoot) forgetGodotImportCache(godotRoot, path.resolve(pngPath));
+}
+
+/**
  * Removes this project's generated Godot slices from a previous bind root.
  * Shared runtime and attack_trails presets stay so other projects on that root keep working.
  * @param {string} previousRoot Previous Godot project root.
@@ -2816,6 +2826,7 @@ function createXsxbMcpService(options = {}) {
         transaction.writeJson(paths.manifest, manifest);
         if (updatedTuning) transaction.writeJson(paths.tuning, updatedTuning);
       });
+      for (const job of stagedJobs) forgetImportCacheIfInsideGodot(job.sourcePath);
     } finally {
       fs.rmSync(staging, { recursive: true, force: true });
     }
@@ -3566,6 +3577,7 @@ function createXsxbMcpService(options = {}) {
     const tempPath = `${target}.tmp-${process.pid}`;
     fs.writeFileSync(tempPath, buffer);
     fs.renameSync(tempPath, target);
+    forgetImportCacheIfInsideGodot(target);
     const newSize = { width: info.width, height: info.height };
     const sizeChanged = newSize.width !== previousSize.width || newSize.height !== previousSize.height;
     if (sizeChanged) {
