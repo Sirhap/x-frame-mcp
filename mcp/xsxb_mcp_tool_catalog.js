@@ -980,7 +980,7 @@ function toolDefinitions() {
     {
       name: "xsxb_plant_feet",
       description:
-        "Plant opaque soles onto a target group-Y without computing dx/dy. Translate only — does not scale; lock height with xsxb_register_clip. Walk-loop plant after xsxb_measure_frames; still confirm on the overlay. Default target is y=-1 (last pixel row of the lock canvas). Yellow 0,0 is outside the bitmap — do not plant soles to 0,0. metrics.feetY is the boot sole and ignores connected bright slash/glow below it. Hanging VFX that would clip is kept by padding the PNG; apply writes the new height into the animation manifest so Tuner/Godot origin matches the bitmap. Pass reference_animation_id (usually idle) so apply pads this clip to at least that canvas with xsxb_resize_canvas pad rules, then plants at y=-1 of the shared canvas. Optional to accepts an overlay cell id (E5 / e5 / {cell:E5}) and maps to that cell's group coordinate. dry_run (default) returns the plan; apply bakes the translate. Reuses the shift_frames pixel pipeline.",
+        "Plant opaque soles onto a target group-Y without computing dx/dy. Translate only — does not scale; lock height with xsxb_register_clip. Walk-loop plant after xsxb_measure_frames; still confirm on the overlay. Default target is y=-1 (last pixel row of the lock canvas). Yellow 0,0 is outside the bitmap — do not plant soles to 0,0. metrics.feetY is the boot sole and ignores connected bright slash/glow below it. Hanging VFX that would clip is kept by padding the PNG; apply writes the new height into the animation manifest so Tuner/Godot origin matches the bitmap. Pass reference_animation_id (usually idle) so apply pads this clip to at least that canvas with xsxb_resize_canvas pad rules, then plants soles onto the reference clip's measured feetY (same group row as idle boots) when target_y is omitted or -1. Optional to accepts an overlay cell id (E5 / e5 / {cell:E5}) and maps to that cell's group coordinate. dry_run (default) returns the plan; apply bakes the translate. Reuses the shift_frames pixel pipeline.",
       inputSchema: {
         type: "object",
         properties: {
@@ -999,7 +999,7 @@ function toolDefinitions() {
           reference_animation_id: {
             type: "string",
             description:
-              "When set, pad this clip to at least the reference canvas (transparent, no resample; same origin-preserving pad as xsxb_resize_canvas) then plant soles at y=-1 of that canvas. Usually idle.",
+              "When set, pad this clip to at least the reference canvas (transparent, no resample; same origin-preserving pad as xsxb_resize_canvas) then plant soles onto that clip's measured feetY (same group row as idle boots) when target_y is omitted or -1. Usually idle.",
           },
           to: {
             description:

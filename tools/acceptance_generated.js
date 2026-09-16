@@ -509,43 +509,21 @@ async function assertGroundedCanvasesMatchIdle(service, projectId, animationIds 
 }
 
 /**
- * Plants a grounded clip onto idle's canvas at y=-1, then onto idle's sole row.
- * Reference plant pads to the idle bitmap; y=-1 of that bitmap is the last
- * pixel row, which sits below idle when plant kept hang/AA under the boots.
+ * Plants a grounded clip onto idle's canvas and idle's measured sole row.
  * @param {object} service MCP service.
  * @param {string} projectId Project id.
  * @param {string} animationId Clip to plant.
- * @returns {Promise<object>} Last plant receipt.
+ * @returns {Promise<object>} Plant receipt.
  */
 async function plantToIdleCanvas(service, projectId, animationId) {
   const planted = await callTool(service, "xsxb_plant_feet", {
     project_id: projectId,
     animation_id: animationId,
     reference_animation_id: "idle",
-    target_y: -1,
     apply: true,
   });
   assert.equal(planted.ok, true, JSON.stringify(planted.error || planted));
-  const idleCanvas = readClipCanvas(
-    await callTool(service, "xsxb_get_animation", { project_id: projectId, animation_id: "idle" }),
-  );
-  const measured = await callTool(service, "xsxb_measure_frames", {
-    project_id: projectId,
-    animation_id: animationId,
-    reference_animation_id: "idle",
-  });
-  assert.equal(measured.ok, true, JSON.stringify(measured.error || measured));
-  const idleFeetY = Number(measured.data.reference?.feetY);
-  const drift = Math.max(...measured.data.frames.map((frame) => Math.abs(Number(frame.dFeet) || 0)));
-  if (!Number.isFinite(idleFeetY) || drift <= 2) return planted;
-  const aligned = await callTool(service, "xsxb_plant_feet", {
-    project_id: projectId,
-    animation_id: animationId,
-    target_y: idleFeetY - idleCanvas.height,
-    apply: true,
-  });
-  assert.equal(aligned.ok, true, JSON.stringify(aligned.error || aligned));
-  return aligned;
+  return planted;
 }
 
 /**

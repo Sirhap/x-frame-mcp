@@ -3323,8 +3323,10 @@ function createXsxbMcpService(options = {}) {
   /**
    * Plants opaque soles onto a target group-Y. Translate only.
    * When `reference_animation_id` is set, pads to at least that canvas first
-   * (same origin-preserving pad as `xsxb_resize_canvas`) then plants at y=-1
-   * of the shared canvas.
+   * (same origin-preserving pad as `xsxb_resize_canvas`). If `target_y` is
+   * omitted or -1, plants onto the reference clip's measured feetY (same
+   * group row as idle boots). An explicit `target_y` other than -1 is honored
+   * after the pad.
    * @param {object} args Tool arguments.
    * @returns {object} Plant receipt.
    */
@@ -3346,6 +3348,7 @@ function createXsxbMcpService(options = {}) {
     const referenceAnimationId = String(args.reference_animation_id || "").trim();
     let lockWidth = 0;
     let lockHeight = 0;
+    let referenceSoleGroupY = Number.NaN;
     if (referenceAnimationId) {
       const reference = (profile.animations || []).find(
         (entry) => String(entry.id || entry.name) === referenceAnimationId,
@@ -3356,7 +3359,26 @@ function createXsxbMcpService(options = {}) {
       );
       lockWidth = Math.max(0, ...referenceImages.map((image) => image.width));
       lockHeight = Math.max(0, ...referenceImages.map((image) => image.height));
+      const refImage =
+        referenceImages.find((image) => image.width === lockWidth && image.height === lockHeight) ||
+        referenceImages[0];
+      if (refImage) {
+        const geometry = measureSpriteGeometry(refImage.data, refImage.width, refImage.height);
+        const origin = canvasAnchor(
+          refImage.width,
+          refImage.height,
+          reference.anchorMode || animation.anchorMode || "canvas_bottom_center",
+        );
+        referenceSoleGroupY = Number(geometry.feetY) - origin.y;
+      }
     }
+    const rawTargetY = args.target_y;
+    const defaultPlantTarget =
+      rawTargetY === undefined || rawTargetY === null || rawTargetY === "" || Number(rawTargetY) === -1;
+    const targetY =
+      referenceAnimationId && defaultPlantTarget && Number.isFinite(referenceSoleGroupY)
+        ? referenceSoleGroupY
+        : rawTargetY;
     const receipts = [];
     let sizeChanged = false;
     withFileTransaction((transaction) => {
@@ -3374,7 +3396,7 @@ function createXsxbMcpService(options = {}) {
         const destHeight = Math.max(image.height, lockHeight);
         const padded = padFramePreserveOrigin(image, destWidth, destHeight, animation.anchorMode);
         const planned = planPlantFeet(padded.data, padded.width, padded.height, {
-          targetY: args.target_y,
+          targetY,
           to: args.to,
           ...writePointOptions(animation, frames[index], args, padded),
         });
