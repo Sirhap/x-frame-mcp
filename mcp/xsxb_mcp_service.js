@@ -3006,6 +3006,10 @@ function createXsxbMcpService(options = {}) {
     };
     if (args.before_stop_chase !== undefined) segment.beforeStopChaseMultiplier = args.before_stop_chase;
     if (args.after_stop_chase !== undefined) segment.afterStopChaseMultiplier = args.after_stop_chase;
+    const previousPaths = new Set();
+    for (const entry of trails.bindings[bindingKey] || []) {
+      if (entry && entry.id === segment.id && entry.texture?.path) previousPaths.add(entry.texture.path);
+    }
     trails.bindings[bindingKey] = [
       ...(trails.bindings[bindingKey] || []).filter((entry) => entry.id !== segment.id),
       segment,
@@ -3013,7 +3017,20 @@ function createXsxbMcpService(options = {}) {
     const normalized = normalizeAttackTrails(trails);
     const warnings = validateAttackTrails(normalized, selection.manifest);
     projectStore.writeJson(paths.attackTrails, normalized);
-    const written = normalized.bindings[bindingKey].find((entry) => entry.id === segment.id);
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const remainingTrails = normalizeAttackTrails(
+      projectStore.readJson(paths.attackTrails, EMPTY_ATTACK_TRAILS),
+    );
+    const retained = new Set();
+    for (const remaining of Object.values(remainingTrails.bindings || {}).flat()) {
+      const texturePath = safeResolve(root, remaining?.texture?.path || "");
+      if (texturePath) retained.add(texturePath);
+    }
+    const allowedRoot = path.join(workspaceDir, "attack_trails");
+    for (const oldPath of previousPaths) {
+      unlinkUnreferencedWorkspaceCopy(oldPath, allowedRoot, retained, root, workspaceDir);
+    }
+    const written = remainingTrails.bindings[bindingKey].find((entry) => entry.id === segment.id);
     return {
       projectId: project.id,
       bindingKey,
