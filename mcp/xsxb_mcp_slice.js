@@ -217,11 +217,7 @@ function clearNumberedPngs(dest) {
       }
       continue;
     }
-    if (
-      NUMBERED_PNG_SIDECAR.test(name) &&
-      fs.existsSync(filePath) &&
-      fs.statSync(filePath).isFile()
-    ) {
+    if (NUMBERED_PNG_SIDECAR.test(name) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
       fs.unlinkSync(filePath);
     }
   }
