@@ -163,6 +163,26 @@ const {
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
 
 /**
+ * Forgets .godot/imported .ctex/.md5 for PNGs under a project-id slice while .import sidecars still exist.
+ * @param {string} directory Slice directory under xsxb_frame_tuner/.../projects/<id>.
+ * @param {string} godotRoot Previous Godot root with project.godot.
+ * @returns {void}
+ */
+function forgetImportedPngCacheInDirectory(directory, godotRoot) {
+  if (!directory || !godotRoot || !fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      forgetImportedPngCacheInDirectory(fullPath, godotRoot);
+      continue;
+    }
+    if (!/\.png(?:\.import)?$/i.test(entry.name)) continue;
+    const pngPath = /\.png\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
+    forgetGodotImportCache(godotRoot, pngPath);
+  }
+}
+
+/**
  * Removes this project's generated Godot slices from a previous bind root.
  * Shared runtime and attack_trails presets stay so other projects on that root keep working.
  * @param {string} previousRoot Previous Godot project root.
@@ -184,6 +204,7 @@ function prunePreviousGodotProjectSlices(previousRoot, nextRoot, projectId) {
     const slice = path.resolve(resolvedPrevious, GODOT_SYNC_ROOT, kind, "projects", id);
     const parent = path.resolve(resolvedPrevious, GODOT_SYNC_ROOT, kind, "projects");
     if (slice === parent || !slice.startsWith(`${parent}${path.sep}`)) continue;
+    forgetImportedPngCacheInDirectory(slice, resolvedPrevious);
     fs.rmSync(slice, { recursive: true, force: true });
   }
 }
