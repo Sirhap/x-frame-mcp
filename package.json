@@ -18,6 +18,7 @@
     "test": "node tools/check_project.js --test",
     "acceptance:playbooks": "node tools/acceptance_playbooks.js",
     "acceptance:session": "node tools/acceptance_session.js",
+    "acceptance:generated": "node tools/acceptance_generated.js",
     "check": "node tools/check_project.js",
     "benchmark:mcp": "node tools/benchmark_mcp.js"
   },
