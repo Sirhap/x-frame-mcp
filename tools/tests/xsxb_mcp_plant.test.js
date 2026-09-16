@@ -317,7 +317,7 @@ test("catalog plant_feet accepts reference_animation_id", () => {
   assert.match(plant.inputSchema.properties.reference_animation_id.description, /idle|canvas/i);
   assert.match(
     `${plant.description} ${plant.inputSchema.properties.reference_animation_id.description}`,
-    /omitted reference on walk defaults to idle/i,
+    /omitted reference on (?:a )?grounded non-idle/i,
   );
 });
 

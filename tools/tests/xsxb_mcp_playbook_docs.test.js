@@ -79,6 +79,34 @@ test("gameplay skill plants hurt and enables hit only on a gold crescent", () =>
   assert.doesNotMatch(gameplay, /Attacks need a hitbox\./);
 });
 
+test("plant_feet catalog omitted reference defaults grounded non-idle to idle", () => {
+  const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
+  assert.ok(plant, "xsxb_plant_feet must stay in the catalog");
+  assert.match(
+    plant.description,
+    /omitted reference on (?:a )?grounded non-idle/i,
+    "handler defaults any grounded non-idle clip; do not name only walk",
+  );
+  assert.match(plant.description, /defaults to(?: profile)? idle/i);
+  assert.doesNotMatch(
+    plant.description,
+    /omitted reference on walk defaults to idle/i,
+    "walk-only wording hides attack/hurt inheriting idle",
+  );
+  assert.doesNotMatch(
+    plant.description,
+    /omitted reference on (?:vfx|jump|airborne)/i,
+    "do not claim VFX/jump get the idle default",
+  );
+  const gameplay = fs.readFileSync(path.join(repoRoot, "skills/x-frame-gameplay/SKILL.md"), "utf8");
+  assert.match(
+    gameplay,
+    /omitted reference on (?:a )?grounded non-idle/i,
+    "gameplay skill must match the plantFeet handler default",
+  );
+  assert.doesNotMatch(gameplay, /Omitted reference on walk defaults to idle/);
+});
+
 test("README reorganize defaults match runtime commit-on-order", () => {
   const readme = fs.readFileSync(path.join(repoRoot, "mcp/README.md"), "utf8");
   const defaults = readme.split("### 默认提交规则")[1]?.split("## ")[0] || "";
