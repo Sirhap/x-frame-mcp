@@ -8,34 +8,23 @@ const path = require("node:path");
 const { handleMessage } = require("../mcp/xsxb_mcp_server");
 const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
 const { GODOT_SYNC_ROOT } = require("../mcp/lib/godot_sync");
-const { decodePngRgba, encodePngRgba } = require("../mcp/xsxb_mcp_cutout");
+const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
+const {
+  HERO,
+  HERO_COLORS,
+  countPixels,
+  heroFrame,
+  isOnionCyan,
+  isOnionRed,
+  isTrueMagenta,
+  paintBurst,
+  paintCrate,
+  paintGroundedActor,
+  paintHero,
+  writePngSequence,
+} = require("./acceptance_sprites");
 
-const PLATE = Object.freeze([248, 248, 248, 255]);
-const BODY = Object.freeze([24, 48, 96, 255]);
-const BOOT = Object.freeze([12, 20, 40, 255]);
-
-/**
- * Paints a navy body and darker boots on a light plate.
- * @param {number} width Canvas width.
- * @param {number} height Canvas height.
- * @param {{originX:number,originY:number,bodyW?:number,bodyH?:number,plate?:number[]}} pose Body top-left and size.
- * @returns {Uint8ClampedArray} RGBA pixels.
- */
-function paintGroundedActor(width, height, pose) {
-  const data = new Uint8ClampedArray(width * height * 4);
-  const bodyW = pose.bodyW || 8;
-  const bodyH = pose.bodyH || 14;
-  const plate = pose.plate || PLATE;
-  for (let i = 0; i < width * height; i += 1) data.set(plate, i * 4);
-  for (let y = pose.originY; y < pose.originY + bodyH; y += 1) {
-    for (let x = pose.originX; x < pose.originX + bodyW; x += 1) {
-      if (x < 0 || y < 0 || x >= width || y >= height) continue;
-      const boot = y >= pose.originY + bodyH - 2;
-      data.set(boot ? BOOT : BODY, (y * width + x) * 4);
-    }
-  }
-  return data;
-}
+const BLACK_PLATE = Object.freeze([0, 0, 0, 255]);
 
 /**
  * Sends one public JSON-RPC tools/call and returns the v2 receipt.
@@ -95,105 +84,181 @@ function writeGameplayScene(game) {
 }
 
 /**
- * Runs the playbook acceptance against a disposable Godot project.
- * Writes preview and evidence PNGs, then asserts pixel and gate behavior.
+ * Imports a PNG sequence and estimates boxes.
+ * @param {object} service MCP service.
+ * @param {object} args Import arguments.
+ * @returns {Promise<object>} Import receipt.
+ */
+async function importClip(service, args) {
+  const imported = await callTool(service, "xsxb_import_animation", {
+    source: "png_sequence",
+    fps: 8,
+    sync: true,
+    ...args,
+  });
+  assert.equal(imported.ok, true, JSON.stringify(imported.error || imported));
+  await callTool(service, "xsxb_estimate_boxes", {
+    project_id: args.project_id,
+    profile_id: args.profile_id,
+    animation_id: args.animation_id,
+    sync: true,
+  });
+  return imported;
+}
+
+/**
+ * Reads one clip from a Godot validation receipt.
+ * @param {object} receipt Validation receipt.
+ * @param {string} id Animation id.
+ * @returns {object|undefined} Scale-contract clip.
+ */
+function scaleClip(receipt, id) {
+  return (receipt.data.scale_contract?.clips || []).find((clip) => clip.id === id);
+}
+
+/**
+ * Asserts hair and boot colors are still in a sheet, not a lone torso block.
+ * @param {{data:Uint8ClampedArray}} image Decoded PNG.
+ * @param {string} label Assertion label.
+ * @returns {void}
+ */
+function assertHeroPresent(image, label) {
+  const hair = countPixels(
+    image,
+    (r, g, b) => r === HERO_COLORS.hair[0] && g === HERO_COLORS.hair[1] && b === HERO_COLORS.hair[2],
+  );
+  const boot = countPixels(
+    image,
+    (r, g, b) => r === HERO_COLORS.boot[0] && g === HERO_COLORS.boot[1] && b === HERO_COLORS.boot[2],
+  );
+  const pant = countPixels(
+    image,
+    (r, g, b) => r === HERO_COLORS.pant[0] && g === HERO_COLORS.pant[1] && b === HERO_COLORS.pant[2],
+  );
+  assert.ok(hair >= 16, `${label} missing hair (${hair})`);
+  assert.ok(boot >= 16, `${label} missing boots (${boot})`);
+  assert.ok(pant >= 16, `${label} missing pants (${pant})`);
+}
+
+/**
+ * Copies existing files into a keep directory.
+ * @param {string} dest Destination.
+ * @param {Record<string,string>} files Basename to source path.
+ * @returns {void}
+ */
+function keepFiles(dest, files) {
+  if (!dest) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const [name, from] of Object.entries(files)) {
+    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dest, name));
+  }
+}
+
+/**
+ * Runs playbook acceptance against disposable Godot projects.
+ * Uses 64×64 heroes with hair, coat, two legs, and boots — not a single block.
+ * @param {{keepDir?:string}} [options] When set, copies preview/evidence PNGs there.
  * @returns {Promise<object>} Paths and metrics for the caller.
  */
-async function runPlaybookAcceptance() {
+async function runPlaybookAcceptance(options = {}) {
+  const keepDir = options.keepDir || process.env.XSXB_ACCEPTANCE_KEEP || "";
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-playbook-accept-"));
   const service = createXsxbMcpService({ root, florenceDetectImpl: null });
+  const kept = {};
   try {
+    const idleFrames = [
+      heroFrame({ stride: -1, arm: 0 }),
+      heroFrame({ stride: 0, arm: 1 }),
+      heroFrame({ stride: 1, arm: 2, sword: true }),
+      heroFrame({ stride: 0, arm: -1 }),
+    ];
+    const walkFrames = [
+      heroFrame({ stride: -3, arm: 2 }),
+      heroFrame({ stride: 0, arm: 0 }),
+      heroFrame({ stride: 3, arm: -2 }),
+      heroFrame({ stride: 1, arm: 1 }),
+    ];
+    const jumpFrames = [
+      heroFrame({ stride: 0, arm: 1, lift: 0 }),
+      heroFrame({ stride: 1, arm: 2, lift: 10 }),
+    ];
+    const slashFrames = [
+      heroFrame({ stride: 1, arm: 2, sword: true }),
+      heroFrame({ stride: 1, arm: 2, sword: true, slash: true }),
+    ];
+    const burstFrames = [
+      {
+        width: HERO.width,
+        height: HERO.height,
+        data: paintBurst(HERO.width, HERO.height, { cy: 16, radius: 10 }),
+      },
+      {
+        width: HERO.width,
+        height: HERO.height,
+        data: paintBurst(HERO.width, HERO.height, { cy: 18, radius: 13 }),
+      },
+    ];
+    const idleDir = writePngSequence(path.join(root, "idle-seq"), idleFrames);
+    const walkDir = writePngSequence(path.join(root, "walk-seq"), walkFrames);
+    const jumpDir = writePngSequence(path.join(root, "jump-seq"), jumpFrames);
+    const slashDir = writePngSequence(path.join(root, "slash-seq"), slashFrames);
+    const burstDir = writePngSequence(path.join(root, "burst-seq"), burstFrames);
+
     const game = path.join(root, "game");
     fs.mkdirSync(game);
     fs.writeFileSync(path.join(game, "project.godot"), '[application]\nconfig/name="Accept"\n');
-    const idleA = paintGroundedActor(32, 32, { originX: 8, originY: 10 });
-    const idleB = paintGroundedActor(32, 32, { originX: 12, originY: 10 });
-    const drifted = paintGroundedActor(32, 32, { originX: 10, originY: 4 });
-    const idleDir = path.join(root, "idle-seq");
-    const walkDir = path.join(root, "walk-seq");
-    fs.mkdirSync(idleDir);
-    fs.mkdirSync(walkDir);
-    fs.writeFileSync(path.join(idleDir, "00.png"), encodePngRgba(idleA, 32, 32));
-    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idleB, 32, 32));
-    fs.writeFileSync(path.join(walkDir, "00.png"), encodePngRgba(drifted, 32, 32));
-    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(drifted, 32, 32));
-
-    const created = await callTool(service, "xsxb_create_project", { project_id: "hero", label: "Hero" });
-    assert.equal(created.ok, true);
+    assert.equal(
+      (await callTool(service, "xsxb_create_project", { project_id: "hero", label: "Hero" })).ok,
+      true,
+    );
     await callTool(service, "xsxb_bind_godot", { project_id: "hero", project_root: game });
-    const imported = await callTool(service, "xsxb_import_animation", {
+    const imported = await importClip(service, {
       project_id: "hero",
-      source: "png_sequence",
       directory: idleDir,
       profile_id: "hero",
       animation_id: "idle",
-      fps: 8,
-      sync: true,
     });
-    assert.equal(imported.ok, true);
-    assert.equal(imported.data.importedFrameCount, 2);
+    assert.equal(imported.data.importedFrameCount, 4);
     assert.equal(imported.data.animationType, "actor");
     const synced = await callTool(service, "xsxb_sync_godot", { project_id: "hero" });
     assert.equal(synced.ok, true);
     assert.equal(synced.data.godot?.runtime?.actorScript, true);
-    assert.ok(Array.isArray(synced.data.godot?.runtime?.files));
     assert.ok((synced.data.godot?.animations || []).some((clip) => clip.id === "idle"));
-    await callTool(service, "xsxb_estimate_boxes", {
-      project_id: "hero",
-      profile_id: "hero",
-      animation_id: "idle",
-      sync: true,
-    });
 
     const diffed = await callTool(service, "xsxb_diff_frames", {
       project_id: "hero",
       profile_id: "hero",
       animation_id: "idle",
       frame_a: 0,
-      frame_b: 1,
+      frame_b: 2,
       mode: "diff",
     });
     assert.equal(diffed.ok, true, JSON.stringify(diffed.error || diffed));
     const previewPath = diffed.data.preview.path;
-    assert.ok(fs.existsSync(previewPath), "diff preview must be a real file");
+    assert.ok(fs.existsSync(previewPath));
     const preview = decodePngRgba(previewPath);
-    assert.equal(preview.width, 32);
-    assert.equal(preview.height, 32);
-    let magenta = 0;
-    for (let i = 0; i < preview.data.length; i += 4) {
-      if (
-        preview.data[i] >= 220 &&
-        preview.data[i + 1] <= 40 &&
-        preview.data[i + 2] >= 180 &&
-        preview.data[i + 3] > 200
-      )
-        magenta += 1;
-    }
-    assert.ok(magenta >= 20, `diff must mark the 4px stride, got ${magenta} magenta pixels`);
-    assert.ok(diffed.data.changedPixelCount >= 20);
+    assert.equal(preview.width, 64);
+    assert.equal(preview.height, 64);
+    const magenta = countPixels(preview, isTrueMagenta);
+    assert.ok(magenta >= 40, `arm/stride motion must mark real magenta, got ${magenta}`);
+    assert.equal(diffed.data.changedPixelCount, magenta);
     assert.equal(diffed.data.qa, "review");
+    kept["playbook_diff_magenta.png"] = previewPath;
 
     const onion = await callTool(service, "xsxb_diff_frames", {
       project_id: "hero",
       animation_id: "idle",
       frame_a: 0,
-      frame_b: 1,
+      frame_b: 2,
       mode: "onion",
     });
     assert.equal(onion.ok, true);
     const onionImage = decodePngRgba(onion.data.preview.path);
-    let onionRed = 0;
-    let onionCyan = 0;
-    for (let i = 0; i < onionImage.data.length; i += 4) {
-      const r = onionImage.data[i];
-      const g = onionImage.data[i + 1];
-      const b = onionImage.data[i + 2];
-      const a = onionImage.data[i + 3];
-      if (r >= 180 && g <= 40 && b <= 40 && a > 200) onionRed += 1;
-      if (r <= 40 && g >= 180 && b >= 180 && a > 200) onionCyan += 1;
-    }
-    assert.ok(onionRed >= 20, `onion must mark vacated columns red, got ${onionRed}`);
-    assert.ok(onionCyan >= 20, `onion must mark new columns cyan, got ${onionCyan}`);
+    const onionRed = countPixels(onionImage, isOnionRed);
+    const onionCyan = countPixels(onionImage, isOnionCyan);
+    assert.ok(onionRed >= 20, `onion vacated must be red, got ${onionRed}`);
+    assert.ok(onionCyan >= 20, `onion new must be cyan, got ${onionCyan}`);
+    kept["playbook_onion_red_cyan.png"] = onion.data.preview.path;
 
     const identical = await callTool(service, "xsxb_diff_frames", {
       project_id: "hero",
@@ -212,10 +277,7 @@ async function runPlaybookAcceptance() {
     });
     assert.equal(unfinished.ok, false);
     assert.equal(unfinished.data.qa, "warn");
-    assert.ok(
-      (unfinished.data.errors || []).some((message) => /xsxb_frame_actor/.test(message)),
-      "missing gameplay scene must fail validate_for_godot",
-    );
+    assert.ok((unfinished.data.errors || []).some((message) => /xsxb_frame_actor/.test(message)));
 
     writeGameplayScene(game);
     const ready = await callTool(service, "xsxb_validate_for_godot", {
@@ -224,30 +286,61 @@ async function runPlaybookAcceptance() {
     });
     assert.equal(ready.ok, true, JSON.stringify(ready.data?.errors || ready.error || ready));
     assert.equal(ready.data.qa, "clean");
-    assert.ok(fs.existsSync(ready.data.evidence.path));
+    assertHeroPresent(decodePngRgba(ready.data.evidence.path), "hero evidence");
     assert.ok(ready.data.godot?.runtime?.actorScript);
-    assert.ok(fs.existsSync(ready.data.run_summary.path));
-    const runSummary = JSON.parse(fs.readFileSync(ready.data.run_summary.path, "utf8"));
-    assert.equal(runSummary.ok, true);
-    assert.equal(runSummary.qa, "clean");
-    const evidence = decodePngRgba(ready.data.evidence.path);
-    assert.ok(evidence.width >= 32 && evidence.height >= 32);
+    assert.equal(JSON.parse(fs.readFileSync(ready.data.run_summary.path, "utf8")).qa, "clean");
+    kept["playbook_evidence_hero.png"] = ready.data.evidence.path;
+    kept["playbook_run_summary_hero.json"] = ready.data.run_summary.path;
 
-    const fxDir = path.join(root, "fx-seq");
-    fs.mkdirSync(fxDir);
-    const fxBurst = paintGroundedActor(32, 32, { originX: 6, originY: 2 });
-    fs.writeFileSync(path.join(fxDir, "00.png"), encodePngRgba(fxBurst, 32, 32));
-    fs.writeFileSync(path.join(fxDir, "01.png"), encodePngRgba(fxBurst, 32, 32));
-    await callTool(service, "xsxb_import_animation", {
+    await importClip(service, {
       project_id: "hero",
-      source: "png_sequence",
-      directory: fxDir,
+      directory: walkDir,
+      profile_id: "hero",
+      animation_id: "walk",
+    });
+    const planted = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: true,
+    });
+    assert.equal(planted.ok, true, JSON.stringify(planted.data?.errors || planted.error || planted));
+    assert.equal(planted.data.scale_contract.ok, true);
+    assert.equal(scaleClip(planted, "idle").feetY, HERO.feetY);
+    assert.equal(scaleClip(planted, "walk").feetY, HERO.feetY);
+
+    await importClip(service, {
+      project_id: "hero",
+      directory: jumpDir,
+      profile_id: "hero",
+      animation_id: "jump",
+    });
+    const withJump = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: true,
+    });
+    assert.equal(withJump.ok, true, JSON.stringify(withJump.data?.errors || withJump.error || withJump));
+    assert.equal(withJump.data.scale_contract.ok, true);
+    assert.ok(!(withJump.data.scale_contract.issues || []).some((issue) => /jump/.test(issue)));
+
+    await importClip(service, {
+      project_id: "hero",
+      directory: slashDir,
+      profile_id: "hero",
+      animation_id: "attack",
+    });
+    const withSlash = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: true,
+    });
+    assert.equal(withSlash.ok, true, JSON.stringify(withSlash.data?.errors || withSlash.error || withSlash));
+    assert.equal(withSlash.data.scale_contract.ok, true);
+    assert.equal(scaleClip(withSlash, "attack").feetY, HERO.feetY);
+
+    await importClip(service, {
+      project_id: "hero",
+      directory: burstDir,
       profile_id: "hero",
       animation_id: "hit_vfx",
-      fps: 8,
-      sync: true,
     });
-    await callTool(service, "xsxb_estimate_boxes", { animation_id: "hit_vfx", sync: true });
     const withFx = await callTool(service, "xsxb_validate_for_godot", {
       project_id: "hero",
       require_gameplay: true,
@@ -256,43 +349,14 @@ async function runPlaybookAcceptance() {
     assert.equal(withFx.data.scale_contract.ok, true);
     assert.ok(!(withFx.data.scale_contract.issues || []).some((issue) => /hit_vfx/.test(issue)));
 
-    await callTool(service, "xsxb_import_animation", {
-      project_id: "hero",
-      source: "png_sequence",
-      directory: walkDir,
-      profile_id: "hero",
-      animation_id: "walk",
-      fps: 8,
-      sync: true,
-    });
-    await callTool(service, "xsxb_estimate_boxes", {
-      project_id: "hero",
-      animation_id: "walk",
-      sync: true,
-    });
-    const driftedReceipt = await callTool(service, "xsxb_validate_for_godot", {
-      project_id: "hero",
-      require_gameplay: true,
-      strict: true,
-    });
-    assert.equal(driftedReceipt.ok, false);
-    assert.equal(driftedReceipt.data.qa, "warn");
-    assert.equal(driftedReceipt.data.scale_contract.ok, false);
-    assert.ok(
-      driftedReceipt.data.scale_contract.issues.some((issue) => /feet/i.test(issue)),
-      "walk planted on a different sole row must fail the scale contract",
-    );
-
-    const mixedDir = path.join(root, "mixed-seq");
-    fs.mkdirSync(mixedDir);
-    fs.writeFileSync(
-      path.join(mixedDir, "00.png"),
-      encodePngRgba(paintGroundedActor(32, 32, { originX: 8, originY: 10 }), 32, 32),
-    );
-    fs.writeFileSync(
-      path.join(mixedDir, "01.png"),
-      encodePngRgba(paintGroundedActor(16, 16, { originX: 4, originY: 2 }), 16, 16),
-    );
+    const mixedDir = writePngSequence(path.join(root, "mixed-seq"), [
+      heroFrame({ stride: 0 }),
+      {
+        width: 32,
+        height: 32,
+        data: paintGroundedActor(32, 32, { originX: 8, originY: 10 }),
+      },
+    ]);
     await callTool(service, "xsxb_import_animation", {
       project_id: "hero",
       source: "png_sequence",
@@ -321,43 +385,138 @@ async function runPlaybookAcceptance() {
     assert.equal(badType.ok, false);
     assert.match(String(badType.error?.message || ""), /animation_type/);
 
+    const driftGame = path.join(root, "game-drift");
+    fs.mkdirSync(driftGame);
+    fs.writeFileSync(path.join(driftGame, "project.godot"), '[application]\nconfig/name="Drift"\n');
+    const bounceDir = writePngSequence(path.join(root, "bounce-seq"), [
+      heroFrame({ stride: -2, arm: 1, lift: 0 }),
+      heroFrame({ stride: 2, arm: -1, lift: 8 }),
+    ]);
+    const tallDir = writePngSequence(path.join(root, "tall-seq"), [
+      heroFrame({ stride: 2, arm: 1, tall: 6 }),
+      heroFrame({ stride: -2, arm: -1, tall: 6 }),
+    ]);
+    const jumperDir = writePngSequence(path.join(root, "jumper-seq"), [
+      heroFrame({ stride: 1, lift: 8 }),
+      heroFrame({ stride: -1, lift: 8 }),
+    ]);
+    const propositionDir = writePngSequence(path.join(root, "proposition-seq"), [
+      heroFrame({ stride: 0, lift: 8 }),
+      heroFrame({ stride: 1, lift: 8 }),
+    ]);
+    await callTool(service, "xsxb_create_project", { project_id: "drift", label: "Drift" });
+    await callTool(service, "xsxb_bind_godot", { project_id: "drift", project_root: driftGame });
+    writeGameplayScene(driftGame);
+    await importClip(service, {
+      project_id: "drift",
+      directory: idleDir,
+      profile_id: "drift",
+      animation_id: "idle",
+    });
+    await importClip(service, {
+      project_id: "drift",
+      directory: bounceDir,
+      profile_id: "drift",
+      animation_id: "walk",
+    });
+    const bounceSoft = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "drift",
+      require_gameplay: true,
+    });
+    assert.equal(bounceSoft.ok, true);
+    assert.equal(bounceSoft.data.qa, "review");
+    assert.equal(bounceSoft.data.scale_contract.ok, false);
+    assert.ok(
+      bounceSoft.data.scale_contract.issues.some((issue) => /walk/.test(issue) && /spans/.test(issue)),
+    );
+    const bounceStrict = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "drift",
+      require_gameplay: true,
+      strict: true,
+    });
+    assert.equal(bounceStrict.ok, false);
+    assert.equal(bounceStrict.data.qa, "warn");
+
+    await importClip(service, {
+      project_id: "drift",
+      directory: tallDir,
+      profile_id: "drift",
+      animation_id: "run",
+    });
+    const tallReceipt = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "drift",
+      require_gameplay: true,
+      strict: true,
+    });
+    assert.equal(tallReceipt.ok, false);
+    assert.ok(
+      tallReceipt.data.scale_contract.issues.some((issue) => /run/.test(issue) && /height/.test(issue)),
+    );
+
+    await importClip(service, {
+      project_id: "drift",
+      directory: jumperDir,
+      profile_id: "drift",
+      animation_id: "jumper",
+    });
+    await importClip(service, {
+      project_id: "drift",
+      directory: propositionDir,
+      profile_id: "drift",
+      animation_id: "proposition",
+    });
+    const named = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "drift",
+      require_gameplay: true,
+      strict: true,
+    });
+    assert.equal(named.ok, false);
+    assert.ok(named.data.scale_contract.issues.some((issue) => /jumper/.test(issue) && /feet/i.test(issue)));
+    assert.ok(
+      named.data.scale_contract.issues.some((issue) => /proposition/.test(issue) && /feet/i.test(issue)),
+    );
+    kept["playbook_run_summary_drift.json"] = named.data.run_summary.path;
+
     const inkGame = path.join(root, "game-ink");
     fs.mkdirSync(inkGame);
     fs.writeFileSync(path.join(inkGame, "project.godot"), '[application]\nconfig/name="Ink"\n');
-    const blackIdle = paintGroundedActor(32, 32, { originX: 8, originY: 10, plate: [0, 0, 0, 255] });
-    const blackDrift = paintGroundedActor(32, 32, { originX: 10, originY: 4, plate: [0, 0, 0, 255] });
-    const blackIdleDir = path.join(root, "ink-idle");
-    const sparkDir = path.join(root, "ink-spark");
-    const jumperDir = path.join(root, "ink-jumper");
-    fs.mkdirSync(blackIdleDir);
-    fs.mkdirSync(sparkDir);
-    fs.mkdirSync(jumperDir);
-    fs.writeFileSync(path.join(blackIdleDir, "00.png"), encodePngRgba(blackIdle, 32, 32));
-    fs.writeFileSync(path.join(blackIdleDir, "01.png"), encodePngRgba(blackIdle, 32, 32));
-    fs.writeFileSync(path.join(sparkDir, "00.png"), encodePngRgba(blackDrift, 32, 32));
-    fs.writeFileSync(path.join(sparkDir, "01.png"), encodePngRgba(blackDrift, 32, 32));
-    fs.writeFileSync(path.join(jumperDir, "00.png"), encodePngRgba(blackDrift, 32, 32));
-    fs.writeFileSync(path.join(jumperDir, "01.png"), encodePngRgba(blackDrift, 32, 32));
-
+    const blackIdle = writePngSequence(path.join(root, "ink-idle"), [
+      heroFrame({ plate: BLACK_PLATE, stride: -1, arm: 0 }),
+      heroFrame({ plate: BLACK_PLATE, stride: 1, arm: 2, sword: true }),
+    ]);
+    const sparkDir = writePngSequence(path.join(root, "ink-spark"), [
+      {
+        width: HERO.width,
+        height: HERO.height,
+        data: paintBurst(HERO.width, HERO.height, { plate: BLACK_PLATE, cy: 14, radius: 9 }),
+      },
+      {
+        width: HERO.width,
+        height: HERO.height,
+        data: paintBurst(HERO.width, HERO.height, { plate: BLACK_PLATE, cy: 20, radius: 12 }),
+      },
+    ]);
+    const crateDir = writePngSequence(path.join(root, "ink-crate"), [
+      {
+        width: HERO.width,
+        height: HERO.height,
+        data: paintCrate(HERO.width, HERO.height, { plate: BLACK_PLATE, y: 18 }),
+      },
+      {
+        width: HERO.width,
+        height: HERO.height,
+        data: paintCrate(HERO.width, HERO.height, { plate: BLACK_PLATE, y: 22 }),
+      },
+    ]);
     await callTool(service, "xsxb_create_project", { project_id: "ink", label: "Ink" });
     await callTool(service, "xsxb_bind_godot", { project_id: "ink", project_root: inkGame });
-    const inkIdle = await callTool(service, "xsxb_import_animation", {
-      project_id: "ink",
-      source: "png_sequence",
-      directory: blackIdleDir,
-      profile_id: "ink",
-      animation_id: "idle",
-      fps: 8,
-      sync: true,
-    });
-    assert.equal(inkIdle.ok, true);
-    await callTool(service, "xsxb_estimate_boxes", {
-      project_id: "ink",
-      profile_id: "ink",
-      animation_id: "idle",
-      sync: true,
-    });
     writeGameplayScene(inkGame);
+    await importClip(service, {
+      project_id: "ink",
+      directory: blackIdle,
+      profile_id: "ink",
+      animation_id: "idle",
+    });
     const blackReady = await callTool(service, "xsxb_validate_for_godot", {
       project_id: "ink",
       require_gameplay: true,
@@ -368,74 +527,53 @@ async function runPlaybookAcceptance() {
       JSON.stringify(blackReady.data?.errors || blackReady.error || blackReady),
     );
     assert.equal(blackReady.data.qa, "clean");
+    assertHeroPresent(decodePngRgba(blackReady.data.evidence.path), "black evidence");
+    kept["playbook_evidence_ink.png"] = blackReady.data.evidence.path;
 
-    const spark = await callTool(service, "xsxb_import_animation", {
+    const spark = await importClip(service, {
       project_id: "ink",
-      source: "png_sequence",
       directory: sparkDir,
       profile_id: "ink",
       animation_id: "spark",
       animation_type: "vfx",
-      fps: 8,
-      sync: true,
     });
-    assert.equal(spark.ok, true);
     assert.equal(spark.data.animationType, "vfx");
-    const sparkAnim = await callTool(service, "xsxb_get_animation", {
+    await importClip(service, {
       project_id: "ink",
-      animation_id: "spark",
-    });
-    assert.equal(sparkAnim.data.animation?.type, "vfx");
-    await callTool(service, "xsxb_estimate_boxes", {
-      project_id: "ink",
-      animation_id: "spark",
-      sync: true,
-    });
-    const withTypedFx = await callTool(service, "xsxb_validate_for_godot", {
-      project_id: "ink",
-      require_gameplay: true,
-    });
-    assert.equal(
-      withTypedFx.ok,
-      true,
-      JSON.stringify(withTypedFx.data?.errors || withTypedFx.error || withTypedFx),
-    );
-    assert.equal(withTypedFx.data.scale_contract.ok, true);
-    assert.ok(!(withTypedFx.data.scale_contract.issues || []).some((issue) => /spark/.test(issue)));
-
-    await callTool(service, "xsxb_import_animation", {
-      project_id: "ink",
-      source: "png_sequence",
-      directory: jumperDir,
+      directory: crateDir,
       profile_id: "ink",
-      animation_id: "jumper",
-      fps: 8,
-      sync: true,
+      animation_id: "barrel",
+      animation_type: "prop",
     });
-    await callTool(service, "xsxb_estimate_boxes", {
-      project_id: "ink",
-      animation_id: "jumper",
-      sync: true,
-    });
-    const jumperDrift = await callTool(service, "xsxb_validate_for_godot", {
+    const inkFx = await callTool(service, "xsxb_validate_for_godot", {
       project_id: "ink",
       require_gameplay: true,
-      strict: true,
     });
-    assert.equal(jumperDrift.ok, false);
-    assert.equal(jumperDrift.data.qa, "warn");
-    assert.equal(jumperDrift.data.scale_contract.ok, false);
-    assert.ok(
-      jumperDrift.data.scale_contract.issues.some((issue) => /jumper/.test(issue) && /feet/i.test(issue)),
-      "jumper is a grounded actor name and must fail the scale contract when soles drift",
-    );
+    assert.equal(inkFx.ok, true, JSON.stringify(inkFx.data?.errors || inkFx.error || inkFx));
+    assert.equal(inkFx.data.scale_contract.ok, true);
+    assert.ok(!(inkFx.data.scale_contract.issues || []).some((issue) => /spark|barrel/.test(issue)));
+    kept["playbook_run_summary_ink.json"] = inkFx.data.run_summary.path;
+    keepFiles(keepDir, kept);
+    keepFiles(keepDir, {
+      "source_idle_00.png": path.join(idleDir, "00.png"),
+      "source_idle_02.png": path.join(idleDir, "02.png"),
+      "source_walk_00.png": path.join(walkDir, "00.png"),
+      "source_jump_01.png": path.join(jumpDir, "01.png"),
+      "source_slash_01.png": path.join(slashDir, "01.png"),
+      "source_burst_00.png": path.join(burstDir, "00.png"),
+      "source_black_idle_01.png": path.join(blackIdle, "01.png"),
+    });
 
     return {
       root,
+      keepDir,
       previewPath,
       evidencePath: ready.data.evidence.path,
       magenta,
+      onionRed,
+      onionCyan,
       changedPixelCount: diffed.data.changedPixelCount,
+      idleFeetY: HERO.feetY,
     };
   } finally {
     service.close();
@@ -443,13 +581,18 @@ async function runPlaybookAcceptance() {
   }
 }
 
-module.exports = { paintGroundedActor, runPlaybookAcceptance, writeGameplayScene };
+module.exports = {
+  paintGroundedActor,
+  paintHero,
+  runPlaybookAcceptance,
+  writeGameplayScene,
+};
 
 if (require.main === module) {
   runPlaybookAcceptance()
     .then((report) => {
       process.stdout.write(
-        `Playbook acceptance passed. magenta=${report.magenta} changed=${report.changedPixelCount}\n`,
+        `Playbook acceptance passed. magenta=${report.magenta} changed=${report.changedPixelCount} onion=${report.onionRed}/${report.onionCyan} feetY=${report.idleFeetY}\n`,
       );
     })
     .catch((error) => {
