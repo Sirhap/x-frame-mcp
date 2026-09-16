@@ -79,6 +79,7 @@ const { composeFrameDiff } = require("./xsxb_mcp_diff_frames");
 const {
   assembleGodotValidation,
   classifyInspectQa,
+  clipHasMeasurableSubject,
   composeValidationEvidence,
   describeGodotHandoff,
   evaluateScaleContract,
@@ -2203,8 +2204,8 @@ function createXsxbMcpService(options = {}) {
    * Validates Godot handoff including gameplay wiring and the idle scale contract.
    * When bound and standalone tuning/manifest diverge from game-local copies,
    * syncs through the same `synchronize` path as `xsxb_sync_godot` first.
-   * Evidence `cells` lists each blit `{id, frame}` in sheet order for decodable clips.
-   * Clips with empty frames or with frames but zero decodable PNGs are listed in evidence `skipped`.
+   * Evidence `cells` lists each blit `{id, frame}` in sheet order for measurable clips.
+   * Clips with empty frames, zero decodable PNGs, or no measurable subject are listed in evidence `skipped`.
    * @param {object} args Tool arguments.
    * @returns {object} Gate payload; `ok` is the domain pass.
    */
@@ -2253,12 +2254,20 @@ function createXsxbMcpService(options = {}) {
           geos.push(measureKeyedSubject(image));
         }
         if (clipFrames.length) {
-          const picked = pickValidationEvidenceFrameIndex(
-            { id: animationId, name: animation.name },
-            clipFrames,
-          );
-          evidenceFrames.push(clipFrames[picked].image);
-          evidenceCells.push({ id: animationId, frame: picked });
+          if (clipHasMeasurableSubject(geos)) {
+            const picked = pickValidationEvidenceFrameIndex(
+              { id: animationId, name: animation.name },
+              clipFrames,
+            );
+            evidenceFrames.push(clipFrames[picked].image);
+            evidenceCells.push({ id: animationId, frame: picked });
+          } else {
+            evidenceSkipped.push({ id: animationId, reason: "unmeasurable_subject" });
+            if (!Array.isArray(raw.warnings)) raw.warnings = [];
+            raw.warnings.push(
+              `${animationId}: unmeasurable transparent subject; omitted from evidence.cells`,
+            );
+          }
         } else if ((animation.frames || []).length > 0) {
           evidenceSkipped.push({ id: animationId, reason: "zero_decodable_frames" });
           if (!Array.isArray(raw.warnings)) raw.warnings = [];
@@ -2268,7 +2277,7 @@ function createXsxbMcpService(options = {}) {
           if (!Array.isArray(raw.warnings)) raw.warnings = [];
           raw.warnings.push(`${animationId}: empty manifest frames; omitted from evidence.cells`);
         }
-        if (!clipFrames.length) continue;
+        if (!clipFrames.length || !clipHasMeasurableSubject(geos)) continue;
         clips.push({
           id: animationId,
           kind: profile.kind || animation.type || "actor",

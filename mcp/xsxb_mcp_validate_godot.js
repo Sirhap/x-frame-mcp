@@ -110,6 +110,20 @@ function measuredEvidenceFeetY(frame) {
 }
 
 /**
+ * True when any keyed geometry has a visible subject (`bodyH` or `bboxH` > 0).
+ * Same missing-subject rule as `measuredEvidenceFeetY`: a fully transparent
+ * but decodable PNG is not a measurable clip.
+ * @param {Array<{bodyH?:number,bboxH?:number}|null|undefined>|undefined} geos
+ *   Per-frame geometry from `measureKeyedSubject`.
+ * @returns {boolean} True if at least one frame has a measurable body or bbox.
+ */
+function clipHasMeasurableSubject(geos) {
+  return (Array.isArray(geos) ? geos : []).some(
+    (geometry) => Number(geometry?.bodyH) > 0 || Number(geometry?.bboxH) > 0,
+  );
+}
+
+/**
  * Picks the airborne apex: unique highest sole, or highest head among near-highest soles.
  * `bestFeet` is the unique minimum finite `feetY`. Frames within
  * `JUMP_APEX_SOLE_BAND` (2px) of that min are the sole-noise band. A unique
@@ -561,7 +575,7 @@ function hasGameplayStubGap(importResult) {
  * @param {{ok:boolean,issues:string[]}} scaleContract Feet/height contract.
  * @param {{path:string,width:number,height:number,cells?:Array<{id:string,frame:number}>,skipped?:Array<{id:string,reason?:string}>}} evidence
  *   Written PNG plus sheet-order `{id,frame}` for every decodable clip that contributed a cell.
- *   Clips with empty manifest frames or with manifest frames but zero readable PNGs are listed in `skipped`.
+ *   Clips with empty manifest frames, zero readable PNGs, or no measurable subject are listed in `skipped`.
  * @param {{strict?:boolean,godot?:object,summaryPath?:string}} [options] Strict and snapshot extras.
  * @returns {object} Public `data` payload for `xsxb_validate_for_godot`.
  */
@@ -608,6 +622,7 @@ function assembleGodotValidation(importResult, scaleContract, evidence, options 
 module.exports = {
   assembleGodotValidation,
   classifyInspectQa,
+  clipHasMeasurableSubject,
   composeValidationEvidence,
   describeGodotHandoff,
   evaluateScaleContract,
