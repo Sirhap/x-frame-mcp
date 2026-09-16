@@ -476,11 +476,19 @@ function createXsxbMcpService(options = {}) {
       : Object.entries(raw || {}).map(([key, value]) => ({ key, ...(value || {}) }));
   }
 
-  function animationFor(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+  /**
+   * Resolves project/profile/animation without changing the in-memory selection.
+   * @param {object} [args] Tool arguments.
+   * @returns {{project:object,manifest:object,profile:object,animation:object}}
+   */
+  function lookupAnimation(args = {}) {
+    const project = lookupProject(args.project_id || args.project);
     const manifest = manifestFor(project);
-    const profileId = String(args.profile_id || args.profile || context.profileId || "").trim();
-    const previousAnimation = profileId === context.profileId ? context.animationId : "";
+    const sameProject = !context.projectId || project.id === context.projectId;
+    const scopedProfileId = sameProject ? context.profileId : "";
+    const scopedAnimationId = sameProject ? context.animationId : "";
+    const profileId = String(args.profile_id || args.profile || scopedProfileId || "").trim();
+    const previousAnimation = profileId === scopedProfileId ? scopedAnimationId : "";
     const animationId = String(args.animation_id || args.animation || previousAnimation || "").trim();
     const profiles = Array.isArray(manifest.profiles) ? manifest.profiles : [];
     const profile = profileId ? profiles.find((entry) => entry.id === profileId) : profiles[0];
@@ -490,10 +498,15 @@ function createXsxbMcpService(options = {}) {
       ? animations.find((entry) => String(entry.id || entry.name) === animationId)
       : animations[0];
     if (!animation) throw new Error(`Animation not found: ${profile.id}/${animationId || "(default)"}`);
-    selectProject(project.id);
-    context.profileId = profile.id;
-    context.animationId = String(animation.id || animation.name);
     return { project, manifest, profile, animation };
+  }
+
+  function animationFor(args = {}) {
+    const selection = lookupAnimation(args);
+    selectProject(selection.project.id);
+    context.profileId = selection.profile.id;
+    context.animationId = String(selection.animation.id || selection.animation.name);
+    return selection;
   }
 
   /**
@@ -1544,7 +1557,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function getAnimation(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const result = animationResult(selection);
     const includeRaw = Array.isArray(args.include)
       ? args.include
@@ -4144,7 +4157,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Content-addressed animation observation.
    */
   function animationObservation(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const filePaths = collectFramePaths(selection.project, selection.animation);
     const paths = projectStore.projectPaths(selection.project);
     const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);

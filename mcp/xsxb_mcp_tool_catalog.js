@@ -394,7 +394,7 @@ function toolDefinitions() {
     {
       name: "xsxb_get_animation",
       description:
-        "Return animation metadata and frames. Pass frames=summary for a compact sample without animation.frames. Pass include to also read back current boxes, timing, sfx, attachments, or trails. Receipts use group coordinates (foot 0,0, body negative y), the same space as the overlay ticks.",
+        "Return animation metadata and frames. Pass frames=summary for a compact sample without animation.frames. Pass include to also read back current boxes, timing, sfx, attachments, or trails. Receipts use group coordinates (foot 0,0, body negative y), the same space as the overlay ticks. Inspecting another clip does not change the session selection.",
       inputSchema: {
         type: "object",
         properties: {
