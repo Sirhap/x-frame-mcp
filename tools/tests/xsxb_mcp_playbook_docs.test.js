@@ -49,6 +49,28 @@ test("gameplay skill plants hurt and enables hit only on a gold crescent", () =>
   assert.doesNotMatch(gameplay, /Attacks need a hitbox\./);
 });
 
+test("README reorganize defaults match runtime commit-on-order", () => {
+  const readme = fs.readFileSync(path.join(repoRoot, "mcp/README.md"), "utf8");
+  const defaults = readme.split("### 默认提交规则")[1]?.split("## ")[0] || "";
+  assert.ok(defaults, "mcp README must keep the 默认提交规则 section");
+  assert.doesNotMatch(
+    defaults,
+    /xsxb_reorganize_frames` 和 `xsxb_compress_frames` 默认预览/,
+    "reorganize is not default-preview; do not lump it with compress",
+  );
+  assert.doesNotMatch(
+    defaults,
+    /xsxb_reorganize_frames`[^。]*提交必须传 `dry_run:false`/,
+    "reorganize commit is driven by non-empty order, not dry_run:false",
+  );
+  assert.match(
+    defaults,
+    /xsxb_reorganize_frames`[^。]*(非空 `?order`? 提交|omit order|省略 `order` 预览)/,
+    "README must say non-empty order commits or omit order previews",
+  );
+  assert.match(defaults, /xsxb_compress_frames` 默认预览/, "compress may still default to preview");
+});
+
 test("estimate_boxes tool description writes when dry_run is omitted", () => {
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_estimate_boxes");
   assert.ok(tool, "xsxb_estimate_boxes must stay in the catalog");

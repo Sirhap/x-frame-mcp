@@ -5,6 +5,7 @@ const { createCanvasTool } = require("./canvas");
 const { createQualityTool } = require("./quality");
 const { createAttachmentInterpolation } = require("./attachment_interpolation");
 const { shouldCommit } = require("../xsxb_mcp_commit");
+const { booleanFlag } = require("../xsxb_mcp_arguments");
 
 /** Connects domain modules to the existing project selection and synchronization seams. */
 function createAuthoringTools(context) {
@@ -95,7 +96,10 @@ function createAuthoringTools(context) {
       !shouldCommit(args)
     )
       return null;
-    if (name === "xsxb_reorganize_frames" && args.dry_run !== false) return null;
+    if (name === "xsxb_reorganize_frames") {
+      const hasOrder = Array.isArray(args.order) && args.order.length > 0;
+      if (booleanFlag(args.dry_run, !hasOrder)) return null;
+    }
     const p = context.registryProject(args.project_id, false);
     return { project: p, revisionId: revisions.save(p, `before ${name}`, true, true).revisionId };
   }

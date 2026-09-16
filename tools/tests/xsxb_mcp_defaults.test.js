@@ -95,8 +95,9 @@ function walkFrameCountOnDisk(manifestPath) {
 }
 
 test("reorganization with only order writes frames and changes on-disk frameCount", async () =>
-  fixture(async ({ service, paths }) => {
+  fixture(async ({ service, call, paths }) => {
     assert.equal(walkFrameCountOnDisk(paths.manifest), 3);
+    const revisionsBefore = (await call("xsxb_list_revisions")).revisions.length;
     const snapshot = (await service.callMcp("xsxb_get_animation")).observation.snapshotId;
     const committed = await service.callMcp("xsxb_reorganize_frames", {
       order: [1, 0],
@@ -106,6 +107,13 @@ test("reorganization with only order writes frames and changes on-disk frameCoun
     assert.equal(committed.data.applied, true);
     assert.equal(committed.data.outputFrameCount, 2);
     assert.equal(walkFrameCountOnDisk(paths.manifest), 2);
+    assert.ok(
+      (await call("xsxb_list_revisions")).revisions.length > revisionsBefore,
+      "committed reorder must create an undo checkpoint",
+    );
+    const undone = await call("xsxb_undo", { dry_run: false });
+    assert.equal(undone.restored, true);
+    assert.equal(walkFrameCountOnDisk(paths.manifest), 3);
   }));
 
 test("reorganization previews by default and commits locally only when requested", async () =>
