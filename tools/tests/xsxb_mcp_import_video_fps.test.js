@@ -138,6 +138,47 @@ function writePngSequence(directory, count) {
   return files;
 }
 
+test("import_animation omit profile_id uses context profile not mcp_imports default", async () => {
+  await withImportProject(async ({ call, root }) => {
+    const firstDir = path.join(root, "first-omit");
+    writePngSequence(firstDir, 2);
+    const firstOmit = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: firstDir,
+      animation_id: "fresh",
+    });
+    assert.equal(firstOmit.profileId, "mcp_imports", "first-import omit still defaults to mcp_imports");
+
+    const idleDir = path.join(root, "idle-seq");
+    writePngSequence(idleDir, 2);
+    const idle = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+      profile_id: "hero",
+    });
+    assert.equal(idle.profileId, "hero");
+
+    const walkDir = path.join(root, "walk-seq");
+    writePngSequence(walkDir, 2);
+    const walk = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: walkDir,
+      animation_id: "walk",
+    });
+    assert.equal(walk.profileId, "hero");
+
+    const stored = await call("xsxb_get_animation", { profile_id: "hero", animation_id: "walk" });
+    assert.equal(stored.profile.id, "hero");
+    assert.equal(stored.animation.id, "walk");
+
+    await assert.rejects(
+      () => call("xsxb_get_animation", { profile_id: "mcp_imports", animation_id: "walk" }),
+      /not found/i,
+    );
+  });
+});
+
 test("import_replace_preserves_manifest_fps_when_fps_omitted", async () => {
   await withImportProject(async ({ call, root, game }) => {
     const omitDir = path.join(root, "omit-first");

@@ -298,6 +298,17 @@ test("create_project and import_video window fields stay optional and lenient", 
   validateToolArguments("xsxb_import_video", video.inputSchema, { file_path: "/tmp/a.mp4" });
 });
 
+test("import profile_id schema has no injected default so omit uses last context profile", () => {
+  for (const name of ["xsxb_import_animation", "xsxb_import_video", "xsxb_slice_sheet"]) {
+    const tool = toolDefinitions().find((entry) => entry.name === name);
+    assert.equal(
+      tool.inputSchema.properties.profile_id.default,
+      undefined,
+      `${name} schema default mcp_imports is injected and skips the last-context-profile path`,
+    );
+  }
+});
+
 test("every declared tool schema is one this validator understands", () => {
   const supported = new Set([
     "type",
