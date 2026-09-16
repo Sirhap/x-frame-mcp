@@ -384,6 +384,52 @@ test("contact-sheet sidecar: explicit columns+rows still works", async () => {
   }
 });
 
+test("contact-sheet sidecar: partial columns+rows merges cell and pad from sidecar", async () => {
+  const current = fixture();
+  try {
+    const sheetPath = path.join(current.root, "padded-contact.png");
+    writePaddedTwoCellSheet(sheetPath, RED, GREEN, 30, 10);
+    writeSheetSidecar(sheetPath, { columns: 2, rows: 1, cell: 30, pad: 10 });
+
+    const omitted = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      dest: path.join(current.root, "omit-all"),
+    });
+
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 1,
+      dest: path.join(current.root, "partial"),
+    });
+    assert.equal(sliced.cell, 30);
+    assert.equal(sliced.pad, 10);
+    assert.equal(sliced.frameCount, 2);
+    assert.equal(omitted.cell, 30);
+    assert.equal(omitted.pad, 10);
+    assert.equal(omitted.frameCount, 2);
+    assert.deepEqual(pixelAt(sliced.paths[0], 0, 0), pixelAt(omitted.paths[0], 0, 0));
+    assert.deepEqual(pixelAt(sliced.paths[0], 29, 29), pixelAt(omitted.paths[0], 29, 29));
+    assert.deepEqual(pixelAt(sliced.paths[1], 0, 0), pixelAt(omitted.paths[1], 0, 0));
+    assert.deepEqual(pixelAt(sliced.paths[1], 29, 29), pixelAt(omitted.paths[1], 29, 29));
+    assert.deepEqual(pixelAt(sliced.paths[0], 0, 0), RED);
+    assert.deepEqual(pixelAt(sliced.paths[1], 0, 0), GREEN);
+
+    const byDivs = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      grid_divs: "2x1",
+      dest: path.join(current.root, "by-divs"),
+    });
+    assert.equal(byDivs.cell, 30);
+    assert.equal(byDivs.pad, 10);
+    assert.equal(byDivs.frameCount, 2);
+    assert.deepEqual(pixelAt(byDivs.paths[0], 0, 0), RED);
+    assert.deepEqual(pixelAt(byDivs.paths[1], 0, 0), GREEN);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("committed slice+import must create an undo checkpoint", async () => {
   const current = fixture();
   try {
