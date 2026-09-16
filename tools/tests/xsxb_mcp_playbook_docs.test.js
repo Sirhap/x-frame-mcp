@@ -51,6 +51,26 @@ test("godot skill names evidence as one cell per clip, not always frame 0", () =
   assert.match(tool.description, /evidence\.cells/, "catalog must name per-cell id + frame index");
 });
 
+test("godot skill has a copy-paste stub validateImport will accept", () => {
+  const godot = fs.readFileSync(path.join(repoRoot, "skills/x-frame-godot/SKILL.md"), "utf8");
+  assert.match(godot, /animation_duration\(/, "skill must include a copy-paste animation_duration() call");
+  assert.match(
+    godot,
+    /instantiate[\s\S]*xsxb_frame_actor|xsxb_frame_actor[\s\S]*instantiate/,
+    "skill must instantiate xsxb_frame_actor, not only name the packed scene",
+  );
+  assert.match(
+    godot,
+    /res:\/\/xsxb_frame_tuner\/runtime\/xsxb_frame_actor\.tscn/,
+    "copy-paste preload must use this MCP's GODOT_SYNC_ROOT, not a literal {sync_root}",
+  );
+  assert.doesNotMatch(
+    godot,
+    /preload\("res:\/\/\{sync_root\}\//,
+    "literal {sync_root} in preload will not pass validateImport",
+  );
+});
+
 test("gameplay skill plants hurt and enables hit only on a gold crescent", () => {
   const gameplay = fs.readFileSync(path.join(repoRoot, "skills/x-frame-gameplay/SKILL.md"), "utf8");
   assert.match(gameplay, /crescent|gold/);

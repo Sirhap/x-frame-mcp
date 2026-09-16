@@ -30,6 +30,20 @@ const PREFERRED_ROOT = path.join(__dirname, "fixtures", "generated_hero");
 const ASSET_ROOT = "/opt/cursor/artifacts/assets";
 const DEFAULT_KEEP = "/opt/cursor/artifacts/generated_session_evidence";
 const REQUIRED_CLIPS = Object.freeze(["idle", "walk", "jump", "attack", "hurt", "hit_vfx"]);
+
+/**
+ * Sheet-order evidence cells after cutout, estimate_boxes, and plant.
+ * Import order is REQUIRED_CLIPS. Idle/walk/hurt/hit_vfx stay on 0; jump is
+ * apex 02; attack is first gold/enabled slash (01), not windup 00.
+ * @returns {Array<{id:string,frame:number}>} One `{id,frame}` per imported clip.
+ */
+function expectedGeneratedEvidenceCells() {
+  return REQUIRED_CLIPS.map((id) => ({
+    id,
+    frame: id === "jump" ? 2 : id === "attack" ? 1 : 0,
+  }));
+}
+
 const ASSET_CANDIDATES = Object.freeze({
   idle: Object.freeze(["hero_idle_a.png", "hero_idle_b.png"]),
   walk: Object.freeze(["hero_walk.png", "hero_walk_b.png", "hero_walk_c.png", "hero_walk_d.png"]),
@@ -1543,6 +1557,11 @@ async function runGeneratedAcceptance(options = {}) {
       `evidence must be one cell per imported clip (${gate.data.evidence.width} vs ${evidenceCellW}×${evidenceClipCount})`,
     );
     assert.ok(gate.data.evidence.width >= evidenceCellW * 5);
+    assert.deepEqual(
+      gate.data.evidence.cells,
+      expectedGeneratedEvidenceCells(),
+      "evidence.cells must pin jump=2 (apex) and attack=1 (slash 01), not takeoff/windup",
+    );
     log.push(
       `validate_for_godot clean idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} attackFeetY=${report.feetY.attack} hurtFeetY=${report.feetY.hurt} dFeet=${scaleCanvases.idle.dFeet}/${scaleCanvases.walk.dFeet}/${scaleCanvases.attack.dFeet}/${scaleCanvases.hurt.dFeet}`,
     );
