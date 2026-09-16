@@ -559,8 +559,9 @@ function hasGameplayStubGap(importResult) {
  * `animation_duration` sets `next` to the stub sentence without changing the gate.
  * @param {{ok?:boolean,errors?:string[],warnings?:string[],summary?:object}} importResult validateImport payload.
  * @param {{ok:boolean,issues:string[]}} scaleContract Feet/height contract.
- * @param {{path:string,width:number,height:number,cells?:Array<{id:string,frame:number}>}} evidence
- *   Written PNG plus sheet-order `{id,frame}` for every clip that contributed a cell.
+ * @param {{path:string,width:number,height:number,cells?:Array<{id:string,frame:number}>,skipped?:Array<{id:string,reason?:string}>}} evidence
+ *   Written PNG plus sheet-order `{id,frame}` for every decodable clip that contributed a cell.
+ *   Clips with manifest frames but zero readable PNGs are listed in `skipped`.
  * @param {{strict?:boolean,godot?:object,summaryPath?:string}} [options] Strict and snapshot extras.
  * @returns {object} Public `data` payload for `xsxb_validate_for_godot`.
  */
@@ -598,6 +599,7 @@ function assembleGodotValidation(importResult, scaleContract, evidence, options 
       width: evidence.width,
       height: evidence.height,
       cells: Array.isArray(evidence.cells) ? evidence.cells : [],
+      skipped: Array.isArray(evidence.skipped) ? evidence.skipped : [],
     },
     run_summary: options.summaryPath ? { path: options.summaryPath } : null,
   };

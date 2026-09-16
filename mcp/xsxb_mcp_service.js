@@ -2203,7 +2203,8 @@ function createXsxbMcpService(options = {}) {
    * Validates Godot handoff including gameplay wiring and the idle scale contract.
    * When bound and standalone tuning/manifest diverge from game-local copies,
    * syncs through the same `synchronize` path as `xsxb_sync_godot` first.
-   * Evidence `cells` lists each blit `{id, frame}` in sheet order; empty clips omit a cell.
+   * Evidence `cells` lists each blit `{id, frame}` in sheet order for decodable clips.
+   * Clips with frames but zero decodable PNGs are listed in evidence `skipped`.
    * @param {object} args Tool arguments.
    * @returns {object} Gate payload; `ok` is the domain pass.
    */
@@ -2227,6 +2228,7 @@ function createXsxbMcpService(options = {}) {
     const overrides = projectStore.readJson(paths.tuning, EMPTY_TUNING).frame_box_overrides || {};
     const evidenceFrames = [];
     const evidenceCells = [];
+    const evidenceSkipped = [];
     const clips = [];
     for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
       for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
@@ -2257,6 +2259,10 @@ function createXsxbMcpService(options = {}) {
           );
           evidenceFrames.push(clipFrames[picked].image);
           evidenceCells.push({ id: animationId, frame: picked });
+        } else if ((animation.frames || []).length > 0) {
+          evidenceSkipped.push({ id: animationId, reason: "zero_decodable_frames" });
+          if (!Array.isArray(raw.warnings)) raw.warnings = [];
+          raw.warnings.push(`${animationId}: zero decodable frames; omitted from evidence.cells`);
         }
         clips.push({
           id: animationId,
@@ -2298,7 +2304,13 @@ function createXsxbMcpService(options = {}) {
     const assembled = assembleGodotValidation(
       raw,
       scaleContract,
-      { path: evidencePath, width: sheet.width, height: sheet.height, cells: evidenceCells },
+      {
+        path: evidencePath,
+        width: sheet.width,
+        height: sheet.height,
+        cells: evidenceCells,
+        skipped: evidenceSkipped,
+      },
       { strict, godot, summaryPath },
     );
     fs.writeFileSync(
