@@ -19,6 +19,7 @@ const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
 const { callTool } = require("./acceptance_playbooks");
 const { copyKeepFile } = require("./acceptance_keep");
 const { heroFrame, writePngSequence } = require("./acceptance_sprites");
+const { inspectGif } = require("./acceptance_video");
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const DEFAULT_KEEP = "/opt/cursor/artifacts/generated_session_evidence";
@@ -72,50 +73,6 @@ function ensureKeepDir(options = {}) {
     fs.mkdirSync(FALLBACK_KEEP, { recursive: true });
     return FALLBACK_KEEP;
   }
-}
-
-/**
- * Reads GIF magic, size, and ffprobe timing when ffprobe is on PATH.
- * @param {string} filePath Absolute GIF path.
- * @returns {{header:string,bytes:number,frameCount?:number,durationSec?:number}} File facts.
- */
-function inspectGif(filePath) {
-  const bytes = fs.statSync(filePath).size;
-  const header = fs.readFileSync(filePath).subarray(0, 6).toString("ascii");
-  const facts = { header, bytes };
-  const probed = spawnSync(
-    "ffprobe",
-    [
-      "-v",
-      "error",
-      "-select_streams",
-      "v:0",
-      "-count_packets",
-      "-show_entries",
-      "stream=nb_read_packets,nb_frames,duration",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "json",
-      filePath,
-    ],
-    { encoding: "utf8" },
-  );
-  if (probed.status !== 0) return facts;
-  try {
-    const parsed = JSON.parse(probed.stdout || "{}");
-    const stream = Array.isArray(parsed.streams) ? parsed.streams[0] || {} : {};
-    const format = parsed.format && typeof parsed.format === "object" ? parsed.format : {};
-    const packets = Number(stream.nb_read_packets);
-    const frames = Number(stream.nb_frames);
-    const duration = Number(stream.duration) || Number(format.duration);
-    if (Number.isFinite(frames) && frames > 0) facts.frameCount = frames;
-    else if (Number.isFinite(packets) && packets > 0) facts.frameCount = packets;
-    if (Number.isFinite(duration) && duration > 0) facts.durationSec = duration;
-  } catch {
-    // Receipt timing is the contract; ffprobe is extra proof when it parses.
-  }
-  return facts;
 }
 
 /**
@@ -301,11 +258,19 @@ async function runAnalyzeAcceptance(options = {}) {
         originalMs,
         "GIF duration must not match the original 6-frame window",
       );
+      assert.equal(
+        gifFacts.imageBlocks,
+        afterFrames.length,
+        `GIF image blocks=${gifFacts.imageBlocks} must equal reorganized frames=${afterFrames.length}`,
+      );
+      assert.equal(gifFacts.imageBlocks, 2, "hold-walk-hold GIF must have 2 image blocks, not a concat tail");
       if (gifFacts.frameCount !== undefined) {
-        assert.ok(
-          gifFacts.frameCount === afterFrames.length || gifFacts.frameCount === afterFrames.length + 1,
-          `probed GIF frames ${gifFacts.frameCount} must be the 2-frame clip (ffmpeg may repeat the tail)`,
+        assert.equal(
+          gifFacts.frameCount,
+          afterFrames.length,
+          `probed GIF frames ${gifFacts.frameCount} must equal the 2-frame clip`,
         );
+        assert.equal(gifFacts.frameCount, 2, "probed GIF must be the 2-frame clip, not n+1");
         assert.notEqual(gifFacts.frameCount, orderBefore.length, "probed GIF must not be 6 frames");
       }
       if (gifFacts.durationSec !== undefined) {

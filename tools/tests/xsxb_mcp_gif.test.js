@@ -9,7 +9,6 @@ const test = require("node:test");
 const { createProjectStore } = require("../project_store");
 const { createXsxbMcpService } = require("../xsxb_mcp_service");
 const { encodePngRgba } = require("../xsxb_mcp_cutout");
-const { toolDefinitions } = require("../../mcp/xsxb_mcp_tool_catalog");
 
 /**
  * Whether ffmpeg can be spawned.
@@ -109,7 +108,7 @@ function fixture() {
 }
 
 test(
-  "export_gif two-frame clip keeps receipt.frameCount 2 and either two GIF image blocks or concatRepeatsLast",
+  "export_gif two-frame clip keeps receipt.frameCount 2, two GIF image blocks, and a real last delay",
   { skip: FFMPEG_SKIP, timeout: 30_000 },
   async () => {
     const current = fixture();
@@ -125,24 +124,14 @@ test(
       assert.equal(exported.frameCount, 2, "frameCount is the authored clip, not ffprobe packets");
       assert.equal(exported.totalDurationMs, 250);
       assert.ok(fs.existsSync(exported.outputPath), exported.outputPath);
+      assert.equal(exported.concatRepeatsLast, undefined, "concat tail is gone; do not forgive n+1");
       const gif = readGifFrames(fs.readFileSync(exported.outputPath));
+      assert.equal(gif.imageBlocks, exported.frameCount, "GIF image blocks must equal authored frameCount");
+      assert.equal(gif.imageBlocks, 2, `GIF image blocks=${gif.imageBlocks} must be the 2-frame clip`);
       assert.ok(
-        gif.imageBlocks === 2 || exported.concatRepeatsLast === true,
-        `GIF image blocks=${gif.imageBlocks} must match frameCount, or receipt.concatRepeatsLast must be true`,
+        gif.delaysCs[1] >= 10,
+        `last delay ${gif.delaysCs[1]}cs must keep the 125ms frame, not a 1cs concat tail`,
       );
-      if (exported.concatRepeatsLast === true) {
-        const catalog = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
-        assert.match(
-          catalog.description,
-          /ffprobe|nb_frames|n\+1|concat/i,
-          "concatRepeatsLast requires a catalog note that ffprobe nb_frames may be n+1",
-        );
-      } else {
-        assert.ok(
-          gif.delaysCs[1] >= 10,
-          `last delay ${gif.delaysCs[1]}cs must keep the 125ms frame, not a 1cs concat tail`,
-        );
-      }
     } finally {
       current.cleanup();
     }

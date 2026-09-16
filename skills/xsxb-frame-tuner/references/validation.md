@@ -30,7 +30,7 @@ Automated presence checks are insufficient.
 - Inspect representative frames from every group after import.
 - Confirm saved hurtbox and collisionbox on every actor frame.
 - Confirm collisionbox bottom remains on the floor line.
-- Confirm attack groups have saved hitbox entries and plausible enabled active frames.
+- Confirm attack clips have a hitbox entry; enabled only on gold-crescent / active slash frames.
 - Confirm weapons, trails, tails, cloth, shadows, and alpha noise do not inflate body boxes.
 - Confirm visual movement never depends on box offsets.
 

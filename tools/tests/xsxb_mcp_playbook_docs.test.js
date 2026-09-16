@@ -76,6 +76,19 @@ test("tuner skill enables hit only on a gold crescent, not every attack-like fra
   );
 });
 
+test("validation playbook enables hit only on a gold crescent, not plausible frames", () => {
+  const validation = fs.readFileSync(
+    path.join(repoRoot, "skills/xsxb-frame-tuner/references/validation.md"),
+    "utf8",
+  );
+  assert.match(validation, /crescent|gold/, "Visual Box Gate must name the gold crescent");
+  assert.doesNotMatch(
+    validation,
+    /plausible enabled active frames/,
+    "do not treat plausible enabled frames as the whole hit rule",
+  );
+});
+
 test("cutout skill keeps gold crescents and re-keys from raw", () => {
   const cutout = fs.readFileSync(path.join(repoRoot, "skills/x-frame-cutout/SKILL.md"), "utf8");
   assert.match(cutout, /gold|yellow/);
