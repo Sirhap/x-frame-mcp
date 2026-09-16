@@ -771,6 +771,41 @@ test("add_attachment hand plus t writes hand minus localFromCenter", async () =>
   }
 });
 
+test("copyIntoWorkspace rewrites when hash dest exists but bytes drift", async () => {
+  const current = fixture();
+  try {
+    await importWalk(current);
+    const sourcePng = solidPng(8, [40, 180, 80, 255]);
+    const sourcePath = path.join(current.root, "spark.png");
+    fs.writeFileSync(sourcePath, sourcePng);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: sourcePath,
+      id: "spark",
+      frame: 0,
+      sync: false,
+    });
+    const destPath = path.resolve(current.root, added.binding.path);
+    assert.equal(fs.existsSync(destPath), true);
+    const intact = fs.readFileSync(sourcePath);
+    const corrupted = intact.subarray(0, Math.max(8, Math.floor(intact.length / 2)));
+    fs.writeFileSync(destPath, corrupted);
+    assert.equal(fs.readFileSync(destPath).equals(intact), false);
+    await current.service.call("xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: sourcePath,
+      id: "spark",
+      frame: 0,
+      sync: false,
+    });
+    const restored = fs.readFileSync(destPath);
+    assert.equal(restored.equals(intact), true, "dest must match the intact source PNG");
+    assert.equal(restored.equals(corrupted), false, "dest must not keep the truncated payload");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("add_attack_trail parses string group points on sticks", async () => {
   const current = fixture();
   try {
