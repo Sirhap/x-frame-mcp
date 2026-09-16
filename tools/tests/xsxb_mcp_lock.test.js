@@ -895,6 +895,62 @@ test("export_pack_slot clears stale numbered png sidecars when clip shrinks", as
   }
 });
 
+test("export_pack_slot forgets stale Godot imported ctex when dest is a Godot folder", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "run");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "03.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "04.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "run",
+    });
+    const godotPack = path.join(current.root, "godot-pack");
+    const dest = path.join(godotPack, "slots", "run");
+    fs.mkdirSync(godotPack, { recursive: true });
+    fs.writeFileSync(path.join(godotPack, "project.godot"), '[application]\nconfig/name="Pack"\n');
+    const first = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(first.copied, 4);
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    const imported = path.join(godotPack, ".godot", "imported");
+    fs.mkdirSync(imported, { recursive: true });
+    fs.writeFileSync(path.join(dest, "2.png.import"), 'path="res://.godot/imported/run_2.ctex"\n');
+    fs.writeFileSync(path.join(imported, "run_2.ctex"), "stale-ctex-2");
+    fs.writeFileSync(path.join(imported, "run_2.md5"), 'source_md5="deadbeef"\n');
+    fs.writeFileSync(path.join(dest, "0.png.import"), 'path="res://.godot/imported/run_0.ctex"\n');
+    fs.writeFileSync(path.join(imported, "run_0.ctex"), "stale-ctex-0");
+    await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "run",
+      order: [0, 1],
+    });
+    const exported = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(exported.copied, 2);
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "2.png.import")), false);
+    assert.equal(fs.existsSync(path.join(imported, "run_2.ctex")), false);
+    assert.equal(fs.existsSync(path.join(imported, "run_0.ctex")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("instructions lead with measure/register and demote smear for walk loops", () => {
   assert.match(INSTRUCTIONS, /xsxb_measure_frames/);
   assert.match(INSTRUCTIONS, /xsxb_register_clip/);
