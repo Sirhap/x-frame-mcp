@@ -288,7 +288,11 @@ test("find_duplicates slider matches the organizer 重复比例 range", () => {
     assert.equal(schema.properties[name].minimum, ORGANIZER_SIMILARITY_THRESHOLD.min, name);
     assert.equal(schema.properties[name].maximum, ORGANIZER_SIMILARITY_THRESHOLD.max, name);
   }
-  assert.equal(schema.properties.threshold.default, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+  assert.equal(
+    schema.properties.threshold.default,
+    undefined,
+    "schema default 88 is injected beside an explicit duplicate_ratio and the handler throws",
+  );
   assert.equal(
     schema.properties.duplicate_ratio.default,
     undefined,
@@ -305,10 +309,10 @@ test("find_duplicates slider matches the organizer 重复比例 range", () => {
 
 test("duplicate_ratio schema has no injected default so explicit threshold does not throw on analyze", async () => {
   const injectedDefaultMessage =
-    "schema default 88 is injected beside an explicit threshold and the handler throws";
+    "schema default 88 is injected beside an explicit alias and the handler throws";
   for (const name of ["xsxb_find_duplicates", "xsxb_analyze"]) {
     const tool = toolDefinitions().find((entry) => entry.name === name);
-    assert.equal(tool.inputSchema.properties.threshold.default, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+    assert.equal(tool.inputSchema.properties.threshold.default, undefined, injectedDefaultMessage);
     assert.equal(tool.inputSchema.properties.duplicate_ratio.default, undefined, injectedDefaultMessage);
   }
 
@@ -346,6 +350,69 @@ test("duplicate_ratio schema has no injected default so explicit threshold does 
         animation_id: "cycle",
         threshold: 95,
         duplicate_ratio: 88,
+      }),
+      /disagree/,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("find_duplicates duplicate_ratio-only survives host threshold schema injection", async () => {
+  const injectedDefaultMessage =
+    "schema default 88 is injected beside an explicit duplicate_ratio and the handler throws";
+  for (const name of ["xsxb_find_duplicates", "xsxb_analyze"]) {
+    const tool = toolDefinitions().find((entry) => entry.name === name);
+    assert.equal(tool.inputSchema.properties.threshold.default, undefined, injectedDefaultMessage);
+    assert.equal(tool.inputSchema.properties.duplicate_ratio.default, undefined, injectedDefaultMessage);
+  }
+
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "dup-ratio-only-seq");
+    writeCycle(directory);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "cycle",
+    });
+    const analyzed = await current.service.call("xsxb_analyze", {
+      animation_id: "cycle",
+      duplicate_ratio: 95,
+      sample_size: 8,
+    });
+    assert.equal(analyzed.animationId, "cycle");
+    assert.equal(analyzed.duplicates.threshold, 95);
+    const omittedAnalyze = await current.service.call("xsxb_analyze", {
+      animation_id: "cycle",
+      sample_size: 8,
+    });
+    assert.equal(omittedAnalyze.duplicates.threshold, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+    await assert.rejects(
+      current.service.call("xsxb_analyze", {
+        animation_id: "cycle",
+        threshold: 88,
+        duplicate_ratio: 95,
+      }),
+      /disagree/,
+    );
+    const found = await current.service.call("xsxb_find_duplicates", {
+      animation_id: "cycle",
+      duplicate_ratio: 95,
+      sample_size: 8,
+    });
+    assert.equal(found.animationId, "cycle");
+    assert.equal(found.threshold, 95);
+    const omittedFound = await current.service.call("xsxb_find_duplicates", {
+      animation_id: "cycle",
+      sample_size: 8,
+    });
+    assert.equal(omittedFound.threshold, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+    await assert.rejects(
+      current.service.call("xsxb_find_duplicates", {
+        animation_id: "cycle",
+        threshold: 88,
+        duplicate_ratio: 95,
       }),
       /disagree/,
     );
