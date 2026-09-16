@@ -150,6 +150,15 @@ test("export catalog describes previews and preserves sheet scale and grid optio
   assert.deepEqual(sheet.inputSchema.properties.grid_scope.enum, ["canvas", "subject"]);
 });
 
+test("export_sheet cell schema has no injected default so grid=false omit uses maxEdge", () => {
+  const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
+  assert.equal(
+    sheet.inputSchema.properties.cell.default,
+    undefined,
+    "schema default 220 is injected and skips the grid=false maxEdge path",
+  );
+});
+
 test("shift catalog retains translation constraints and frame coordinate inputs", () => {
   const shift = toolDefinitions().find((entry) => entry.name === "xsxb_shift_frames");
   assert.match(shift.description, /without resampling or scaling/i);

@@ -544,6 +544,41 @@ test("export_sheet normalize=none keeps a short canvas from filling the cell", a
   }
 });
 
+test("export_sheet grid=false omit cell uses maxEdge; injected 220 blows the sheet", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "tiny");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 64, 16, 24);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "tiny",
+    });
+    const omitted = await current.service.call("xsxb_export_sheet", {
+      animation_id: "tiny",
+      grid: false,
+    });
+    const injected = await current.service.call("xsxb_export_sheet", {
+      animation_id: "tiny",
+      grid: false,
+      cell: 220,
+    });
+    const gridOmit = await current.service.call("xsxb_export_sheet", {
+      animation_id: "tiny",
+      grid: true,
+    });
+    assert.equal(omitted.cell, 64);
+    assert.equal(omitted.width, 80);
+    assert.equal(omitted.height, 80);
+    assert.equal(injected.cell, 220);
+    assert.equal(injected.width, 236);
+    assert.equal(gridOmit.cell, 220);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("export_gif accepts an outside path, flattens onto magenta, and reports baked visual", async () => {
   const jobs = [];
   const current = fixture({
