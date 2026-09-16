@@ -1526,7 +1526,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_sheet",
       description:
-        "Export a contact sheet PNG without changing source frames. normalize=none|feet preserves scale; normalize=cell stretches into cells. Optional grid settings annotate group cells; use grid=false for clean 月牙/feetY QA.",
+        "Export a contact sheet PNG without changing source frames. normalize=none|feet preserves scale; normalize=cell stretches into cells. Optional grid settings annotate group cells; use grid=false for clean 月牙/feetY QA. Returns preview.path — agents must open it.",
       inputSchema: {
         type: "object",
         properties: {

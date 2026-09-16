@@ -3777,7 +3777,7 @@ function createXsxbMcpService(options = {}) {
   /**
    * Exports a contact sheet that scales every source canvas into a shared cell.
    * @param {object} args Tool arguments.
-   * @returns {object} Sheet receipt.
+   * @returns {object} Sheet receipt including `preview.path` for walk-lock visual QA.
    */
   async function exportSheet(args = {}) {
     const { project, profile, animation } = animationFor(args);
@@ -3908,6 +3908,7 @@ function createXsxbMcpService(options = {}) {
       pad,
       width: sheet.width,
       height: sheet.height,
+      preview: { path: outputPath, width: sheet.width, height: sheet.height },
       bytes: fs.statSync(outputPath).size,
       fps,
       bakedTrails: baked.bakedTrails === true,

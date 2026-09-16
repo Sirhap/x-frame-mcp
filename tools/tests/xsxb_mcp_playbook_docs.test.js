@@ -218,6 +218,12 @@ test("export_overlay catalog names preview.path for walk-lock visual QA", () => 
   assert.match(tool.description, /preview\.path/);
 });
 
+test("export_sheet catalog names preview.path for walk-lock visual QA", () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
+  assert.ok(tool, "xsxb_export_sheet must stay in the catalog");
+  assert.match(tool.description, /preview\.path/);
+});
+
 test("diff_frames catalog names occupancy XOR and qa=warn beyond identical pixels", () => {
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_diff_frames");
   assert.ok(tool, "xsxb_diff_frames must stay in the catalog");
