@@ -89,6 +89,20 @@ test("gameplay skill plants hurt and enables hit only on a gold crescent", () =>
   assert.doesNotMatch(gameplay, /Attacks need a hitbox\./);
 });
 
+test("gameplay skill qa=warn names occupancy XOR and interior navy/key mismatch", () => {
+  const gameplay = fs.readFileSync(path.join(repoRoot, "skills/x-frame-gameplay/SKILL.md"), "utf8");
+  assert.doesNotMatch(
+    gameplay,
+    /qa=warn` means stop \(identical frames or the wrong pair\)/,
+    "interior navy/key mismatch also warns; do not equate qa=warn with identical frames",
+  );
+  assert.match(
+    gameplay,
+    /occupancy[- ]xor|identical occupancy|interior navy|key mismatch/i,
+    "gameplay skill must name occupancy XOR / navy-key warn, not only identical frames",
+  );
+});
+
 test("plant_feet catalog omitted reference defaults grounded non-idle to idle", () => {
   const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
   assert.ok(plant, "xsxb_plant_feet must stay in the catalog");
