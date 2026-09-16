@@ -13,7 +13,12 @@ const {
   stickCenterTravel,
   validateAttackTrails,
 } = require("./lib/attack_trails");
-const { deleteAnimation } = require("./lib/animation_mutations");
+const {
+  deleteAnimation,
+  normalizeBindings,
+  safeResolve,
+  unlinkUnreferencedWorkspaceCopy,
+} = require("./lib/animation_mutations");
 const { estimateFrameBoxes, frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
 const {
   importAnimation,
@@ -3297,7 +3302,45 @@ function createXsxbMcpService(options = {}) {
       remainingCount = kept.length;
       write = () => projectStore.writeJson(file, kept);
     }
-    if (!dryRun) write();
+    if (!dryRun) {
+      write();
+      const workspaceDir = projectStore.projectWorkspaceDir(project);
+      const remainingAudio = readSfxBindings(paths);
+      const remainingAttachments = normalizeBindings(projectStore.readJson(paths.frameImageAttachments, []));
+      const remainingAssets = normalizeBindings(projectStore.readJson(paths.attachmentAssets, []));
+      const remainingTrails = normalizeAttackTrails(
+        projectStore.readJson(paths.attackTrails, EMPTY_ATTACK_TRAILS),
+      );
+      const retained = new Set(
+        [...remainingAudio, ...remainingAttachments, ...remainingAssets]
+          .map((entry) => safeResolve(root, entry?.path || ""))
+          .filter(Boolean),
+      );
+      for (const segment of Object.values(remainingTrails.bindings || {}).flat()) {
+        const texturePath = safeResolve(root, segment?.texture?.path || "");
+        if (texturePath) retained.add(texturePath);
+      }
+      let allowedRoot;
+      switch (kind) {
+        case "sfx":
+          allowedRoot = path.join(workspaceDir, "audio");
+          break;
+        case "attachment":
+          allowedRoot = path.join(workspaceDir, "attachments");
+          break;
+        case "trail":
+          allowedRoot = path.join(workspaceDir, "attack_trails");
+          break;
+        default: {
+          const unexpected = kind;
+          throw new Error(`unexpected binding kind: ${unexpected}`);
+        }
+      }
+      for (const entry of removed) {
+        const copyPath = kind === "trail" ? entry?.texture?.path : entry?.path;
+        unlinkUnreferencedWorkspaceCopy(copyPath, allowedRoot, retained, root, workspaceDir);
+      }
+    }
     return {
       projectId: project.id,
       profileId: profile.id,

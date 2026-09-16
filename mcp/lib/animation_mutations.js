@@ -368,6 +368,8 @@ module.exports = {
   bindingBelongsToAnimation,
   deleteAnimation,
   normalizeBindings,
+  safeResolve,
   stripAnimationOwnedData,
+  unlinkUnreferencedWorkspaceCopy,
   withoutAnimationKeys,
 };
