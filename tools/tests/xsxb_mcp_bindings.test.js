@@ -840,3 +840,79 @@ test("replace import unlinks leftover workspace binding copies", async () => {
     current.cleanup();
   }
 });
+
+test("reorganize drop-frame unlinks leftover workspace binding copies", async () => {
+  const current = await importedFixture();
+  try {
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 1,
+      id: "glow",
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash exists before reorganize");
+    assert.equal(fs.existsSync(attachmentAbs), true, "attachment hash exists before reorganize");
+
+    const observed = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    await callTool(current.service, "xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0],
+      basis_snapshot_id: observed.observation.snapshotId,
+      sync: false,
+    });
+
+    const walk = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["sfx", "attachments"],
+    });
+    assert.equal(
+      !walk.attachments?.length || !walk.attachments.some((attachment) => attachment.id === "glow"),
+      true,
+      "walk glow attachment dropped with frame 1",
+    );
+    assert.equal(walk.sfx.length, 0, "walk sfx empty after dropping frame 1");
+
+    const idle = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idle.sfx.length, 1, "idle sfx remains");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash stays while idle refs it");
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
