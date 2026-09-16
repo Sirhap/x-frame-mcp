@@ -9,6 +9,7 @@ const {
   stripAnimationOwnedData,
   unlinkUnreferencedWorkspaceCopy,
 } = require("./animation_mutations");
+const { findGodotProjectRoot, forgetGodotImportCache } = require("./godot_sync");
 
 const ANIMATION_TYPES = Object.freeze(["actor", "boss", "vfx", "prop", "scene_prop_attachment"]);
 
@@ -103,6 +104,8 @@ function ownedAnimationFramePaths(root, animation) {
 /**
  * Unlinks previously owned in-place frame files that the replacement clip no longer
  * references. Skips missing paths and workspace copies (those swap via backup/rename).
+ * Forgets Godot `.ctex` / `.md5` cache and unlinks sibling `.import` / `.uid` sidecars
+ * for each dropped numbered PNG.
  * @param {string[]} previousPaths Absolute paths owned by the old animation.
  * @param {Iterable<string>} keptPaths Absolute paths still referenced by the new frames.
  * @param {string} workspaceTargetDir Workspace asset directory that must not be deleted here.
@@ -121,6 +124,15 @@ function unlinkUnreferencedInPlaceFrames(previousPaths, keptPaths, workspaceTarg
     if (absolute === workspace || absolute.startsWith(`${workspace}${path.sep}`)) continue;
     try {
       if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
+      const godotRoot = findGodotProjectRoot(path.dirname(absolute));
+      if (godotRoot) forgetGodotImportCache(godotRoot, absolute);
+      for (const sidecar of [`${absolute}.import`, `${absolute}.uid`]) {
+        try {
+          if (fs.existsSync(sidecar) && fs.statSync(sidecar).isFile()) fs.unlinkSync(sidecar);
+        } catch {
+          // Missing or already gone — skip.
+        }
+      }
       fs.unlinkSync(absolute);
     } catch {
       // Missing or already gone — skip.
@@ -700,7 +712,13 @@ function importAnimation(options) {
       );
     }
     for (const asset of normalizeBindings(originals.attachmentAssets)) {
-      unlinkUnreferencedWorkspaceCopy(asset.path, workspaceDir, retainedWorkspaceCopyPaths, root, workspaceDir);
+      unlinkUnreferencedWorkspaceCopy(
+        asset.path,
+        workspaceDir,
+        retainedWorkspaceCopyPaths,
+        root,
+        workspaceDir,
+      );
     }
     for (const segment of Object.values(originals.attackTrails?.bindings || {}).flat()) {
       unlinkUnreferencedWorkspaceCopy(
