@@ -851,6 +851,71 @@ test("bind_godot retargets a project to an existing Godot root", async () => {
   }
 });
 
+test("bind_godot retarget prunes previous Godot project slices", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const oldDataDir = path.join(current.godotRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test");
+    const oldWorkspaceDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "workspace",
+      "projects",
+      "mcp-test",
+    );
+    assert.equal(fs.existsSync(oldDataDir), true);
+    const workspaceExisted = fs.existsSync(oldWorkspaceDir);
+
+    const leftoverRuntime = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "runtime",
+      "xsxb_frame_actor.tscn",
+    );
+    fs.mkdirSync(path.dirname(leftoverRuntime), { recursive: true });
+    fs.writeFileSync(leftoverRuntime, "[gd_scene leftover]\n");
+
+    const secondRoot = path.join(current.root, "godot-second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    fs.writeFileSync(path.join(secondRoot, "project.godot"), '[application]\nconfig/name="Second"\n');
+
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(bound.projectId, "mcp-test");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
+    assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
+    if (workspaceExisted) {
+      assert.equal(fs.existsSync(oldWorkspaceDir), false, "retarget must drop previous workspace/projects/<id>");
+    }
+    assert.equal(
+      fs.existsSync(path.join(secondRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test")),
+      false,
+      "bind_godot must not sync slices into the new Godot root",
+    );
+    await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(fs.existsSync(leftoverRuntime), true, "shared runtime under the old root must stay");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("xsxb_create_project adds a registry project without changing list/get/set_active shapes", async () => {
   const current = fixture();
   try {
