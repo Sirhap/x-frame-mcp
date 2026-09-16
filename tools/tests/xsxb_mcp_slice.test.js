@@ -99,6 +99,15 @@ test("catalog contains xsxb_slice_sheet immediately after import_video", () => {
   );
 });
 
+test("slice_sheet fps schema has no injected default so replace omit keeps manifest fps", () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(
+    tool.inputSchema.properties.fps.default,
+    undefined,
+    "schema default 12 is injected as an explicit fps and resets replace omit to 12",
+  );
+});
+
 test("slice_sheet pad schema has no injected default so padding alias works", async () => {
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
   assert.equal(

@@ -120,6 +120,70 @@ test("xsxb_import_video catalog names source and game fps on the receipt", () =>
   assert.match(video.description, /Pass fps=suggestedGameFps/);
 });
 
+/**
+ * Writes a numbered 1×1 PNG sequence.
+ * @param {string} directory Sequence directory.
+ * @param {number} count Frame count.
+ * @returns {string[]} Absolute PNG paths.
+ */
+function writePngSequence(directory, count) {
+  fs.mkdirSync(directory, { recursive: true });
+  const files = [];
+  for (let index = 1; index <= count; index += 1) {
+    const filePath = path.join(directory, `${String(index).padStart(2, "0")}.png`);
+    const rgba = new Uint8ClampedArray([10 + index, 20, 30, 255]);
+    fs.writeFileSync(filePath, encodePngRgba(rgba, 1, 1));
+    files.push(filePath);
+  }
+  return files;
+}
+
+test("import_replace_preserves_manifest_fps_when_fps_omitted", async () => {
+  await withImportProject(async ({ call, root, game }) => {
+    const omitDir = path.join(root, "omit-first");
+    writePngSequence(omitDir, 2);
+    const firstOmit = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: omitDir,
+      animation_id: "fresh",
+    });
+    assert.equal(firstOmit.fps, 12, "first-import omit still defaults to 12");
+
+    const firstDir = path.join(root, "first");
+    writePngSequence(firstDir, 2);
+    const imported = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: firstDir,
+      animation_id: "walk",
+      fps: 24,
+    });
+    assert.equal(imported.fps, 24);
+    assert.equal(imported.importedFrameCount, 2);
+
+    const secondDir = path.join(root, "second");
+    writePngSequence(secondDir, 3);
+    const replaced = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: secondDir,
+      animation_id: "walk",
+      replace: true,
+    });
+    assert.equal(replaced.replaced, true);
+    assert.equal(replaced.importedFrameCount, 3);
+    assert.equal(replaced.fps, 24);
+
+    const stored = await call("xsxb_get_animation", { animation_id: "walk" });
+    assert.equal(Number(stored.animation.fps), 24);
+
+    const manifestPath = path.join(game, ".x-frame", "data", "projects", "fps", "animation_manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const walk = (manifest.profiles || [])
+      .flatMap((profile) => profile.animations || [])
+      .find((entry) => String(entry.id || entry.name) === "walk");
+    assert.equal(Number(walk.fps), 24);
+  });
+});
+
 test("import_video fps schema has no injected default so omit stores the probed source rate", () => {
   const video = toolDefinitions().find((entry) => entry.name === "xsxb_import_video");
   const fps = video.inputSchema.properties.fps;
