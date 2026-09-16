@@ -1880,6 +1880,71 @@ test("sync_godot_forgets_stale_imported_ctex_after_kept_attachment_overwrite", a
   }
 });
 
+test("sync_godot_forgets_stale_imported_sample_after_kept_sfx_resync", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const hit = path.join(current.root, "hit.wav");
+    fs.writeFileSync(hit, createTestWav());
+    const added = await current.service.call("xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hit,
+      id: "hit",
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+
+    const audioDir = path.join(current.godotRoot, "xsxb_frame_tuner", "audio", "projects", "mcp-test");
+    const wavs = [];
+    const walkWavs = (directory) => {
+      if (!fs.existsSync(directory)) return;
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) walkWavs(fullPath);
+        else if (/\.wav$/i.test(entry.name)) wavs.push(fullPath);
+      }
+    };
+    walkWavs(audioDir);
+    assert.ok(wavs.length >= 1, "add_sfx+sync must copy a WAV into Godot audio/projects");
+    const wav = wavs[0];
+    const stem = path.basename(wav, path.extname(wav));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${wav}.import`, `path="res://.godot/imported/${stem}.sample"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.sample`), "stale-sample");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-sample");
+
+    const synced = await current.service.call("xsxb_sync_godot");
+    assert.equal(synced.ok, true);
+    assert.equal(fs.existsSync(wav), true, "kept hash WAV must still exist");
+    assert.equal(fs.existsSync(`${wav}.import`), true, "kept .import sidecar must stay");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.sample`)),
+      false,
+      `kept ${stem}.sample must be forgotten after resync`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `kept ${stem}.md5 must be forgotten after resync`,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("import can slice frames, replace the same id, and cutout updates the files", async () => {
   const current = fixture();
   try {
