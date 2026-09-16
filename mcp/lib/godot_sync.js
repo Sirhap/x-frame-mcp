@@ -115,11 +115,12 @@ function invalidateGodotImport(projectRoot, pngPath) {
 }
 
 /**
- * Deletes Godot imported .ctex and .md5 referenced by a PNG's .import sidecar.
+ * Deletes Godot imported texture (.ctex) or audio (.sample) cache and sibling .md5
+ * referenced by a source file's .import sidecar (PNG or wav/ogg/mp3/flac/aac).
  * Always forgets the cache (not only when source_md5 is stale) so overwritten
  * numbered frames cannot keep showing old pixels after export_pack_slot.
  * @param {string} projectRoot Godot root with project.godot.
- * @param {string} pngPath Absolute PNG path inside the Godot project.
+ * @param {string} pngPath Absolute source path inside the Godot project.
  * @returns {number} Deleted cache files.
  */
 function forgetGodotImportCache(projectRoot, pngPath) {
@@ -129,15 +130,16 @@ function forgetGodotImportCache(projectRoot, pngPath) {
   const text = fs.readFileSync(importPath, "utf8");
   const dests = new Set();
   for (const match of text.matchAll(/res:\/\/(\.godot\/imported\/[^\s"\]]+)/g)) {
-    dests.add(match[1].replace(/\.md5$/i, ".ctex"));
+    const rel = match[1];
+    if (/\.(?:ctex|sample)$/i.test(rel)) dests.add(rel);
   }
   if (!dests.size) return 0;
   let deleted = 0;
   for (const rel of dests) {
-    const ctex = path.join(projectRoot, rel);
-    if (!isInside(ctex, importRoot)) continue;
-    const md5Path = ctex.replace(/\.ctex$/i, ".md5");
-    for (const filePath of [ctex, md5Path]) {
+    const cachePath = path.join(projectRoot, rel);
+    if (!isInside(cachePath, importRoot)) continue;
+    const md5Path = cachePath.replace(/\.(?:ctex|sample)$/i, ".md5");
+    for (const filePath of [cachePath, md5Path]) {
       if (!fs.existsSync(filePath)) continue;
       fs.rmSync(filePath, { force: true });
       deleted += 1;
@@ -148,7 +150,8 @@ function forgetGodotImportCache(projectRoot, pngPath) {
 
 /**
  * Removes unreferenced files from one generated asset directory and prunes empty folders.
- * Forgets Godot .ctex/.md5 for unretained PNGs before deleting, while .import sidecars still exist.
+ * Forgets Godot .ctex/.sample/.md5 for unretained PNGs and audio before deleting,
+ * while .import sidecars still exist. Retained audio keeps its .import like retained PNGs.
  * @param {string} directory Generated directory to prune.
  * @param {Set<string>} retainedPaths Absolute file paths that must remain available.
  * @returns {void}
@@ -162,16 +165,18 @@ function pruneGeneratedDirectory(directory, retainedPaths) {
     else {
       const resolved = path.resolve(fullPath);
       if (retainedPaths.has(resolved)) continue;
-      const pngForSidecar = /\.png\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : "";
-      if (pngForSidecar && retainedPaths.has(path.resolve(pngForSidecar))) continue;
+      const assetForSidecar = /\.(?:png|wav|ogg|mp3|flac|aac)\.import$/i.test(fullPath)
+        ? fullPath.replace(/\.import$/i, "")
+        : "";
+      if (assetForSidecar && retainedPaths.has(path.resolve(assetForSidecar))) continue;
       unretained.push(fullPath);
     }
   }
   for (const fullPath of unretained) {
-    if (!/\.png(?:\.import)?$/i.test(fullPath)) continue;
-    const pngPath = /\.png\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
-    const godotRoot = findGodotProjectRoot(path.dirname(pngPath));
-    if (godotRoot) forgetGodotImportCache(godotRoot, pngPath);
+    if (!/\.(?:png|wav|ogg|mp3|flac|aac)(?:\.import)?$/i.test(fullPath)) continue;
+    const assetPath = /\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
+    const godotRoot = findGodotProjectRoot(path.dirname(assetPath));
+    if (godotRoot) forgetGodotImportCache(godotRoot, assetPath);
   }
   for (const fullPath of unretained) fs.rmSync(fullPath, { force: true });
   if (!fs.readdirSync(directory).length) fs.rmSync(directory, { recursive: true, force: true });

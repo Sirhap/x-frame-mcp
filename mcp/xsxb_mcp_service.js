@@ -163,7 +163,8 @@ const {
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
 
 /**
- * Forgets .godot/imported .ctex/.md5 for PNGs under a project-id slice while .import sidecars still exist.
+ * Forgets .godot/imported .ctex/.sample/.md5 for PNGs and audio under a project-id slice
+ * while .import sidecars still exist.
  * @param {string} directory Slice directory under xsxb_frame_tuner/.../projects/<id>.
  * @param {string} godotRoot Previous Godot root with project.godot.
  * @returns {void}
@@ -176,9 +177,9 @@ function forgetImportedPngCacheInDirectory(directory, godotRoot) {
       forgetImportedPngCacheInDirectory(fullPath, godotRoot);
       continue;
     }
-    if (!/\.png(?:\.import)?$/i.test(entry.name)) continue;
-    const pngPath = /\.png\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
-    forgetGodotImportCache(godotRoot, pngPath);
+    if (!/\.(?:png|wav|ogg|mp3|flac|aac)(?:\.import)?$/i.test(entry.name)) continue;
+    const assetPath = /\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
+    forgetGodotImportCache(godotRoot, assetPath);
   }
 }
 
