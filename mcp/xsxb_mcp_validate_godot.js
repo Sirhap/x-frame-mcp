@@ -305,9 +305,27 @@ function describeGodotHandoff(projectRoot, projectId) {
   };
 }
 
+const GAMEPLAY_ACTOR_GAP = "No non-runtime gameplay scene or script uses xsxb_frame_actor.";
+const ANIMATION_DURATION_GAP = /does not appear to consume animation_duration/;
+const GAMEPLAY_STUB_NEXT =
+  "Add a non-runtime gameplay .gd/.tscn that instances xsxb_frame_actor and calls animation_duration.";
+
+/**
+ * True when import validation is missing a gameplay actor stub or animation_duration consume.
+ * @param {{errors?:string[],warnings?:string[]}} importResult validateImport payload.
+ * @returns {boolean} True when `next` should name the gameplay stub.
+ */
+function hasGameplayStubGap(importResult) {
+  const messages = [...(importResult?.errors || []), ...(importResult?.warnings || [])];
+  return messages.some(
+    (message) => message === GAMEPLAY_ACTOR_GAP || ANIMATION_DURATION_GAP.test(String(message)),
+  );
+}
+
 /**
  * Merges import validation, the scale contract, written evidence, and a Godot snapshot.
- * Scale drift is a warning unless `strict` is set.
+ * Scale drift is a warning unless `strict` is set. A missing gameplay actor or unused
+ * `animation_duration` sets `next` to the stub sentence without changing the gate.
  * @param {{ok?:boolean,errors?:string[],warnings?:string[],summary?:object}} importResult validateImport payload.
  * @param {{ok:boolean,issues:string[]}} scaleContract Feet/height contract.
  * @param {{path:string,width:number,height:number}} evidence Written PNG.
@@ -331,8 +349,9 @@ function assembleGodotValidation(importResult, scaleContract, evidence, options 
   return {
     ok,
     qa,
-    next:
-      qa === "warn"
+    next: hasGameplayStubGap(importResult)
+      ? GAMEPLAY_STUB_NEXT
+      : qa === "warn"
         ? "stop; open evidence.path and fix errors before sync or playbook continue"
         : qa === "review"
           ? "open evidence.path; scale or gameplay warnings are not a visual pass"

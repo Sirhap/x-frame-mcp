@@ -9,6 +9,7 @@ const { createProjectStore } = require("../project_store");
 const { createXsxbMcpService } = require("../xsxb_mcp_service");
 const { encodePngRgba } = require("../xsxb_mcp_cutout");
 const {
+  assembleGodotValidation,
   classifyInspectQa,
   composeValidationEvidence,
   evaluateScaleContract,
@@ -248,6 +249,69 @@ test("validate_for_godot syncs stale game-local tuning after estimate_boxes with
   } finally {
     current.cleanup();
   }
+});
+
+test("validate_for_godot next lists missing gameplay stub after bind and sync", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-validate-gameplay-next-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="GameplayNext"\n');
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  try {
+    await service.call("xsxb_create_project", { project_id: "hero", label: "Hero" });
+    await service.call("xsxb_bind_godot", { project_id: "hero", project_root: godotRoot });
+    const idleDir = path.join(root, "idle-seq");
+    fs.mkdirSync(idleDir);
+    const idle = bodyOnCanvas(32, 32, 28);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+      sync: false,
+    });
+    await service.call("xsxb_sync_godot", { project_id: "hero" });
+    const data = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: true,
+    });
+    assert.match(data.next, /xsxb_frame_actor|animation_duration|gameplay/i);
+    assert.match(data.next, /xsxb_frame_actor/i);
+    assert.match(data.next, /animation_duration/i);
+    assert.ok(data.errors.includes("No non-runtime gameplay scene or script uses xsxb_frame_actor."));
+  } finally {
+    service.close?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("assembleGodotValidation next names gameplay stub when animation_duration is unused", () => {
+  const data = assembleGodotValidation(
+    {
+      ok: true,
+      errors: [],
+      warnings: [
+        "Gameplay uses XSXB runtime but does not appear to consume animation_duration for action timing.",
+      ],
+      summary: {},
+    },
+    { ok: true, issues: [] },
+    { path: "/tmp/evidence.png", width: 32, height: 32 },
+  );
+  assert.match(data.next, /xsxb_frame_actor|animation_duration|gameplay/i);
+  assert.match(data.next, /xsxb_frame_actor/i);
+  assert.match(data.next, /animation_duration/i);
+  assert.equal(data.ok, true);
+  assert.ok(
+    data.warnings.includes(
+      "Gameplay uses XSXB runtime but does not appear to consume animation_duration for action timing.",
+    ),
+  );
 });
 
 test("validate_for_godot does not sync when Godot is unbound", async () => {

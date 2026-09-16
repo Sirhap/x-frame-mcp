@@ -4,7 +4,8 @@
 /**
  * Public tools/call session for the video-to-loop path: import a PNG
  * sequence, get_animation, optional plate cutout, xsxb_analyze, then
- * xsxb_reorganize_frames with applyOrder (holds dropped, then loop or motion).
+ * xsxb_reorganize_frames with applyOrder (holds dropped, then loop or motion),
+ * then xsxb_export_gif so the trimmed clip's timing is proven.
  */
 
 const assert = require("node:assert/strict");
@@ -19,6 +20,9 @@ const { callTool } = require("./acceptance_playbooks");
 const { heroFrame, writePngSequence } = require("./acceptance_sprites");
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const DEFAULT_KEEP = "/opt/cursor/artifacts/generated_session_evidence";
+const FALLBACK_KEEP = "/opt/cursor/artifacts/analyze_evidence";
+const KEEP_GIF_NAME = "analyze_walk.gif";
 
 /**
  * SHA-256 of decoded RGBA so PNG re-encode does not hide identity.
@@ -39,10 +43,86 @@ function ffmpegPresent() {
 }
 
 /**
- * Runs one agent-shaped analyze → reorganize session against public tools/call.
- * @returns {Promise<object>} Order, preview, and which window was applied.
+ * Keep directory for the exported GIF. Prefers an explicit override, then
+ * XSXB_ACCEPTANCE_KEEP, then generated_session_evidence, then analyze_evidence.
+ * @param {{keepDir?:string}} [options] Caller override.
+ * @returns {string} Destination directory.
  */
-async function runAnalyzeAcceptance() {
+function resolveKeepDir(options = {}) {
+  if (options.keepDir) return options.keepDir;
+  if (process.env.XSXB_ACCEPTANCE_KEEP) return process.env.XSXB_ACCEPTANCE_KEEP;
+  return DEFAULT_KEEP;
+}
+
+/**
+ * Creates the keep directory, falling back to the sibling analyze_evidence path.
+ * @param {{keepDir?:string}} [options] Caller override.
+ * @returns {string} Writable destination directory.
+ */
+function ensureKeepDir(options = {}) {
+  const preferred = resolveKeepDir(options);
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch (error) {
+    if (preferred === FALLBACK_KEEP) {
+      throw new Error(`cannot create keep dir ${preferred}: ${error.message}`);
+    }
+    fs.mkdirSync(FALLBACK_KEEP, { recursive: true });
+    return FALLBACK_KEEP;
+  }
+}
+
+/**
+ * Reads GIF magic, size, and ffprobe timing when ffprobe is on PATH.
+ * @param {string} filePath Absolute GIF path.
+ * @returns {{header:string,bytes:number,frameCount?:number,durationSec?:number}} File facts.
+ */
+function inspectGif(filePath) {
+  const bytes = fs.statSync(filePath).size;
+  const header = fs.readFileSync(filePath).subarray(0, 6).toString("ascii");
+  const facts = { header, bytes };
+  const probed = spawnSync(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-count_packets",
+      "-show_entries",
+      "stream=nb_read_packets,nb_frames,duration",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "json",
+      filePath,
+    ],
+    { encoding: "utf8" },
+  );
+  if (probed.status !== 0) return facts;
+  try {
+    const parsed = JSON.parse(probed.stdout || "{}");
+    const stream = Array.isArray(parsed.streams) ? parsed.streams[0] || {} : {};
+    const format = parsed.format && typeof parsed.format === "object" ? parsed.format : {};
+    const packets = Number(stream.nb_read_packets);
+    const frames = Number(stream.nb_frames);
+    const duration = Number(stream.duration) || Number(format.duration);
+    if (Number.isFinite(frames) && frames > 0) facts.frameCount = frames;
+    else if (Number.isFinite(packets) && packets > 0) facts.frameCount = packets;
+    if (Number.isFinite(duration) && duration > 0) facts.durationSec = duration;
+  } catch {
+    // Receipt timing is the contract; ffprobe is extra proof when it parses.
+  }
+  return facts;
+}
+
+/**
+ * Runs one agent-shaped analyze → reorganize → export_gif session against public tools/call.
+ * @param {{keepDir?:string}} [options] Artifact directory for analyze_walk.gif.
+ * @returns {Promise<object>} Order, preview, gif path, and which window was applied.
+ */
+async function runAnalyzeAcceptance(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-analyze-"));
   const service = createXsxbMcpService({ root, florenceDetectImpl: null });
   const commands = [];
@@ -174,15 +254,94 @@ async function runAnalyzeAcceptance() {
     assert.equal(new Set(afterDigests).size, afterDigests.length, "kept motion frames must stay distinct");
     commands.push("xsxb_get_animation");
 
+    const ffmpeg = ffmpegPresent();
+    let gifPath = null;
+    let gifBytes = null;
+    let gifFrameCount = null;
+    let gifDurationMs = null;
+    let gifFps = null;
+    let gifSkipped = null;
+    let gifProbe = null;
+    if (!ffmpeg) {
+      gifSkipped = "ffmpeg not on PATH; skipped GIF export asserts";
+    } else {
+      const exported = await callTool(service, "xsxb_export_gif", {
+        project_id: "hero",
+        animation_id: "walk",
+      });
+      assert.equal(exported.ok, true, JSON.stringify(exported.error || exported));
+      const outputPath = exported.data?.outputPath;
+      assert.ok(outputPath, "export_gif must write outputPath");
+      assert.ok(fs.existsSync(outputPath), `export_gif output missing: ${outputPath}`);
+      const gifFacts = inspectGif(outputPath);
+      assert.match(gifFacts.header, /^GIF8[79]a/, "export_gif output must be a GIF");
+      assert.equal(
+        exported.data.frameCount,
+        afterFrames.length,
+        "GIF frame count must match the reorganized clip",
+      );
+      assert.equal(exported.data.frameCount, 2, "hold-walk-hold fixture must export 2 motion frames");
+      assert.notEqual(
+        exported.data.frameCount,
+        orderBefore.length,
+        "GIF must not use the original 6-frame hold clip",
+      );
+      const fps = Number(exported.data.fps);
+      assert.ok(Number.isFinite(fps) && fps > 0, "export_gif must report fps");
+      const expectedMs = Math.round((afterFrames.length / fps) * 1000);
+      const originalMs = Math.round((orderBefore.length / fps) * 1000);
+      assert.equal(
+        exported.data.totalDurationMs,
+        expectedMs,
+        `GIF duration must match the reorganized clip (${expectedMs}ms)`,
+      );
+      assert.notEqual(
+        exported.data.totalDurationMs,
+        originalMs,
+        "GIF duration must not match the original 6-frame window",
+      );
+      if (gifFacts.frameCount !== undefined) {
+        assert.ok(
+          gifFacts.frameCount === afterFrames.length || gifFacts.frameCount === afterFrames.length + 1,
+          `probed GIF frames ${gifFacts.frameCount} must be the 2-frame clip (ffmpeg may repeat the tail)`,
+        );
+        assert.notEqual(gifFacts.frameCount, orderBefore.length, "probed GIF must not be 6 frames");
+      }
+      if (gifFacts.durationSec !== undefined) {
+        const originalSec = originalMs / 1000;
+        assert.ok(
+          gifFacts.durationSec < originalSec * 0.8,
+          `probed GIF duration ${gifFacts.durationSec}s must be the trimmed window, not ${originalSec}s`,
+        );
+      }
+      commands.push("xsxb_export_gif");
+      gifBytes = Number(exported.data.bytes) || gifFacts.bytes;
+      gifFrameCount = exported.data.frameCount;
+      gifDurationMs = exported.data.totalDurationMs;
+      gifFps = fps;
+      gifProbe = gifFacts;
+      const keepDir = ensureKeepDir(options);
+      const keptGif = path.join(keepDir, KEEP_GIF_NAME);
+      fs.copyFileSync(outputPath, keptGif);
+      gifPath = keptGif;
+    }
+
     return {
       orderBefore,
       orderAfter,
       recommendedOrder,
       previewPath,
+      gifPath,
+      gifBytes,
+      gifFrameCount,
+      gifDurationMs,
+      gifFps,
+      gifSkipped,
+      gifProbe,
       used,
       keptMotion: true,
       commands,
-      ffmpeg: ffmpegPresent(),
+      ffmpeg,
       snapshotId: analyzed.observation.snapshotId,
       preview: { width: preview.width, height: preview.height, kind: analyzed.data.preview?.kind },
     };
@@ -198,7 +357,7 @@ if (require.main === module) {
   runAnalyzeAcceptance()
     .then((report) => {
       process.stdout.write(
-        `Analyze acceptance passed. used=${report.used} before=${report.orderBefore.join(",")} after=${report.orderAfter.join(",")} preview=${report.previewPath}\n`,
+        `Analyze acceptance passed. used=${report.used} before=${report.orderBefore.join(",")} after=${report.orderAfter.join(",")} preview=${report.previewPath} gif=${report.gifPath} frames=${report.gifFrameCount} durationMs=${report.gifDurationMs}\n`,
       );
     })
     .catch((error) => {

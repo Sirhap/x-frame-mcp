@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const test = require("node:test");
 const { runAnalyzeAcceptance } = require("../acceptance_analyze");
 
@@ -21,5 +22,7 @@ test(
     assert.ok(report.preview?.width > 0 && report.preview?.height > 0);
     assert.ok(report.used === "loop" || report.used === "motion");
     assert.ok(report.keptMotion, "kept frames must be the motion pair, not six identical holds");
+    assert.ok(report.gifPath, "analyze session must export a gif after reorganize");
+    assert.ok(fs.existsSync(report.gifPath), `gif missing: ${report.gifPath}`);
   },
 );
