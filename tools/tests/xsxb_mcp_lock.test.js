@@ -644,6 +644,35 @@ test("export_gif accepts an outside path, flattens onto magenta, and reports bak
   }
 });
 
+test("export_gif returns preview.path for visual QA", async () => {
+  const current = fixture({
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a"));
+    },
+  });
+  try {
+    const directory = path.join(current.root, "walk");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "walk",
+    });
+    const exported = await current.service.call("xsxb_export_gif", {
+      animation_id: "walk",
+    });
+    assert.equal(typeof exported.preview, "object");
+    assert.ok(exported.preview);
+    assert.equal(exported.preview.path, exported.outputPath);
+    assert.ok(fs.existsSync(exported.preview.path));
+    assert.match(exported.preview.path, /\.gif$/i);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("import_animation can duplicate the first frame as the loop tail and returns bbox summary", async () => {
   const current = fixture();
   try {
