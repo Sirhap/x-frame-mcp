@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const { toolDefinitions } = require("../../mcp/xsxb_mcp_tool_catalog");
 
 const repoRoot = path.join(__dirname, "../..");
 
@@ -46,6 +47,33 @@ test("gameplay skill plants hurt and enables hit only on a gold crescent", () =>
   assert.match(gameplay, /hitbox\.enabled/);
   assert.match(gameplay, /walk\/attack\/hurt/);
   assert.doesNotMatch(gameplay, /Attacks need a hitbox\./);
+});
+
+test("estimate_boxes tool description writes when dry_run is omitted", () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_estimate_boxes");
+  assert.ok(tool, "xsxb_estimate_boxes must stay in the catalog");
+  assert.match(tool.description, /omitting dry_run writes|omit writes/i);
+  assert.doesNotMatch(
+    tool.description,
+    /Use dry_run to preview/,
+    "agents read the tool blurb first; do not teach preview-by-default",
+  );
+});
+
+test("tuner skill enables hit only on a gold crescent, not every attack-like frame", () => {
+  const tunerSkill = fs.readFileSync(path.join(repoRoot, "skills/xsxb-frame-tuner/SKILL.md"), "utf8");
+  const completion = tunerSkill.split("## Completion Contract")[1]?.split("## Locate the Tool")[0] || "";
+  const validation = tunerSkill.split("## Validation Summary")[1]?.split("## Final Response")[0] || "";
+  assert.match(
+    `${completion}\n${validation}`,
+    /crescent|gold/,
+    "completion or validation must name the gold crescent gate",
+  );
+  assert.doesNotMatch(
+    tunerSkill,
+    /save `hitbox` for every attack-like frame/,
+    "do not tell agents to enable junk hits on windup",
+  );
 });
 
 test("cutout skill keeps gold crescents and re-keys from raw", () => {

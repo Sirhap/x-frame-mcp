@@ -46,7 +46,7 @@ Treat a request such as “add these animation folders to this character” as a
 
 1. Import every requested animation into one correctly bound XSXB project and profile.
 2. Copy every frame into stable tuner-local and Godot-local asset paths.
-3. Save `hurtbox` and `collisionbox` for every actor frame; save `hitbox` for every attack-like frame entry with plausible active-frame enablement.
+3. Save `hurtbox` and `collisionbox` for every actor frame. Attack clips have a `hitbox` entry, but `enabled` only on gold-crescent / active slash frames (windup/sword-only disabled).
 4. Visually inspect representative frames from every animation group and correct heuristic boxes that include weapons, VFX, tails, cloth, empty canvas, or alpha noise as body mass.
 5. Generate or refresh the complete Godot runtime, including playback, boxes, SFX, image attachments, duration, facing, and scene-scale interfaces.
 6. Connect at least one actual gameplay scene or gameplay actor to the generated runtime. The generated runtime test scene alone does not count.
@@ -284,7 +284,7 @@ Before reporting success, verify at minimum:
 - requested animation count and total frame count match the sources
 - standalone and game-local manifests match by profile, animation, and frame count
 - every actor frame has valid saved hurtbox and collisionbox data
-- every attack-like frame entry has saved hitbox data and visually plausible active frames
+- attack clips have a hitbox entry, but `enabled` only on gold-crescent / active slash frames (windup/sword-only disabled)
 - tuner and runtime scale boxes proportionally at Character, Group, Frame, and scene levels
 - game-local audio and attachment bindings use stable `<profile>/<animation>:<frame>` keys and `res://` assets
 - runtime plays SFX once per frame entry and can replay it on later loop visits

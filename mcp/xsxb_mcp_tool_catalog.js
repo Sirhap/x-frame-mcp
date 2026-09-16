@@ -653,7 +653,7 @@ function toolDefinitions() {
     {
       name: "xsxb_estimate_boxes",
       description:
-        "Auto-estimate hurtbox, collisionbox, and hitbox overrides for every animation frame from opaque pixel bounds. Keeps existing overrides unless replace=true. Use dry_run to preview.",
+        "Auto-estimate hurtbox, collisionbox, and hitbox overrides for every animation frame from opaque pixel bounds. Keeps existing overrides unless replace=true. Omitting dry_run writes; dry_run:true previews. Enabled hitboxes need a gold crescent; sword-only or windup stay disabled.",
       inputSchema: {
         type: "object",
         properties: {

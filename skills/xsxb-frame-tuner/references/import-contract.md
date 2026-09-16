@@ -52,7 +52,7 @@ For every animation group:
 - Save `hurtbox` and `collisionbox` for every actor frame.
 - Fit `hurtbox` to vulnerable body mass, not the complete opaque silhouette.
 - Fit `collisionbox` conservatively to the grounded body footprint. Store `offset.y = -height / 2`, keep rotation at zero, and preserve the floor line.
-- Save `hitbox` entries for attack, parry/counter, projectile, and skill animations. Enable only plausible active frames.
+- Save `hitbox` entries for attack, parry/counter, projectile, and skill animations. Enable hit only when a gold crescent is present.
 - Recognize semantic attacks even when folders use Chinese or nonstandard names. Rename/mapping to stable IDs when needed.
 - Do not add enabled hitboxes to idle, walk, run, ordinary jump, landing, hurt, death, or talk animations unless requested.
 - Store box values in source-local coordinates. Do not bake Character, Group, Frame, or scene scale into saved box size or offset.
