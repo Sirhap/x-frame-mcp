@@ -58,7 +58,7 @@ function createAuthoringTools(context) {
         revisions: revisions.list(selected),
       };
     },
-    xsxb_compare_revisions: (args) => revisions.compare(project(args), args),
+    xsxb_compare_revisions: (args) => revisions.compare(context.lookupProject(args.project_id), args),
     xsxb_restore_revision: restore,
     xsxb_undo: (args) => {
       const id = args.revision_id || revisions.list(project(args))[0]?.revisionId;

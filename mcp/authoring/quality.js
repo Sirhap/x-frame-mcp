@@ -90,7 +90,7 @@ function median(values) {
 /** Flags explainable cross-frame anomalies and produces a numbered evidence sheet. */
 function createQualityTool(context) {
   return function inspect(args) {
-    const { project, profile, animation } = context.animationFor(args),
+    const { project, profile, animation } = context.lookupAnimation(args),
       indexes = frameIndexes(args, animation.frames.length);
     const measured = indexes.map((index) => {
       const image = decodePngRgba(

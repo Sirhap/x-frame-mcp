@@ -2097,7 +2097,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Overlay receipt including `preview.path` for walk-lock visual QA.
    */
   function exportOverlay(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const frames = animation.frames || [];
     if (frames.length < 1) throw new Error("Cannot overlay an animation without frames.");
@@ -2155,7 +2155,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Copy receipt.
    */
   function exportPackSlot(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const dest = path.resolve(String(args.dest || ""));
     if (!dest) throw new Error("dest is required.");
@@ -3727,7 +3727,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function exportGif(args = {}) {
-    const { project, profile, animation } = animationFor(args);
+    const { project, profile, animation } = lookupAnimation(args);
     const frames = animation.frames || [];
     if (!frames.length) throw new Error("Cannot export an animation without frames.");
     const lastIndex = frames.length - 1;
@@ -3882,7 +3882,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Sheet receipt including `preview.path` for walk-lock visual QA.
    */
   async function exportSheet(args = {}) {
-    const { project, profile, animation } = animationFor(args);
+    const { project, profile, animation } = lookupAnimation(args);
     const frames = animation.frames || [];
     if (!frames.length) throw new Error("Cannot export a sheet without frames.");
     const lastIndex = frames.length - 1;
@@ -4204,7 +4204,7 @@ function createXsxbMcpService(options = {}) {
   function overlayGrid(args = {}) {
     let artifactDir = currentArtifactDir();
     if (args.project_id) {
-      artifactDir = currentArtifactDir(registryProject(args.project_id, false));
+      artifactDir = currentArtifactDir(lookupProject(args.project_id));
     }
     return overlayGridImage(args, { root, artifactDir });
   }
@@ -4231,6 +4231,7 @@ function createXsxbMcpService(options = {}) {
     root,
     projectStore,
     animationFor,
+    lookupAnimation,
     lookupProject,
     registryProject,
     currentArtifactDir,
