@@ -1319,7 +1319,7 @@ function toolDefinitions() {
     {
       name: "xsxb_validate_project",
       description:
-        "Validate standalone XSXB data, generated frames, Godot-synchronized data, assets, and runtime files.",
+        "Validate standalone XSXB data, generated frames, Godot-synchronized data, assets, and runtime files. ok is the gate — domain fail sets envelope ok false; do not treat a tools/call as passed from the text summary alone.",
       inputSchema: {
         type: "object",
         properties: {

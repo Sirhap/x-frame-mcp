@@ -4387,7 +4387,9 @@ function createXsxbMcpService(options = {}) {
       verification,
       escalation: metadata.escalation || null,
     };
-    if (name === "xsxb_validate_for_godot") return gateReceipt(name, raw, receiptOptions);
+    if (name === "xsxb_validate_for_godot" || name === "xsxb_validate_project") {
+      return gateReceipt(name, raw, receiptOptions);
+    }
     return successReceipt(name, raw, receiptOptions);
   }
 

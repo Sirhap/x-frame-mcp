@@ -807,3 +807,29 @@ test("animation xsxb_cutout via callMcp requires a snapshot then returns a new o
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("xsxb_validate_project domain fail sets envelope ok false", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-validate-project-envelope-"));
+  const service = createXsxbMcpService({ root, florenceDetectImpl: null });
+  try {
+    await service.call("xsxb_create_project", { project_id: "hero", label: "Hero" });
+    const handled = await handleMessage(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "xsxb_validate_project", arguments: { project_id: "hero" } },
+      },
+      service,
+    );
+    const receipt = handled.result.structuredContent;
+    assert.equal(receipt.data.ok, false, JSON.stringify(receipt.data?.errors || receipt));
+    assert.equal(receipt.ok, false, "successReceipt wrapping must not hide a domain fail");
+    assert.equal(handled.result.isError, true);
+    assert.equal(receipt.error?.code, "XSXB_VALIDATE_FAILED");
+    assert.match(handled.result.content[0].text, /XSXB_VALIDATE_FAILED/);
+  } finally {
+    service.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -977,11 +977,23 @@ animations = [{
 
   async xsxb_validate_project(fixture) {
     await importSequence(fixture, "walk");
+    try {
+      await fixture.request("xsxb_validate_project");
+      return verdict("xsxb_validate_project", "fail", "unsynced bind/gameplay must fail envelope.ok");
+    } catch (error) {
+      if (error.code !== "XSXB_VALIDATE_FAILED") {
+        return verdict("xsxb_validate_project", "fail", error.message);
+      }
+    }
     const standalone = await fixture.call("xsxb_validate_project", { layer: "standalone" });
-    if (!standalone.layers || !standalone.layers.standalone) {
+    if (!standalone.layers || !standalone.layers.standalone || standalone.ok !== true) {
       return verdict("xsxb_validate_project", "fail", JSON.stringify(standalone));
     }
-    return verdict("xsxb_validate_project", "ready", `layer=${standalone.layer} ok=${standalone.ok}`);
+    return verdict(
+      "xsxb_validate_project",
+      "ready",
+      `domain fail sets envelope.ok false; standalone ok=${standalone.ok}`,
+    );
   },
 
   async xsxb_diff_frames(fixture) {
