@@ -385,4 +385,4 @@ function sliceSheet(args = {}) {
   };
 }
 
-module.exports = { parseSliceGridDivs, resolveSliceGrid, sliceSheet };
+module.exports = { clearNumberedPngs, parseSliceGridDivs, resolveSliceGrid, sliceSheet };

@@ -110,7 +110,7 @@ const {
   trailUsesHermiteMesh,
 } = require("./xsxb_mcp_plant");
 const { DEFAULT_PROFILE_ID, MCP_TOOL_NAMES, toolDefinitions } = require("./xsxb_mcp_tool_catalog");
-const { sliceSheet } = require("./xsxb_mcp_slice");
+const { clearNumberedPngs, sliceSheet } = require("./xsxb_mcp_slice");
 const {
   PNG_NAME,
   audioMimeType,
@@ -2087,6 +2087,7 @@ function createXsxbMcpService(options = {}) {
     const dest = path.resolve(String(args.dest || ""));
     if (!dest) throw new Error("dest is required.");
     fs.mkdirSync(dest, { recursive: true });
+    clearNumberedPngs(dest);
     const frames = animation.frames || [];
     const last = Math.max(0, frames.length - 1);
     const start = args.start_frame === undefined ? 0 : requireFrameIndex(args.start_frame, last);
