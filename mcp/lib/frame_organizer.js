@@ -66,6 +66,52 @@ function storedImportPath(root, absolutePath) {
 }
 
 /**
+ * Resolves absolute PNG paths previously owned by one animation.
+ * Empty stored paths are skipped.
+ * @param {string} root XSXB root.
+ * @param {object|null|undefined} animation Manifest animation.
+ * @returns {string[]} Absolute owned frame paths.
+ */
+function ownedAnimationFramePaths(root, animation) {
+  const frames = Array.isArray(animation?.frames) ? animation.frames : [];
+  const result = [];
+  for (const frame of frames) {
+    const raw = String(frame?.path || "").trim();
+    if (!raw) continue;
+    result.push(path.resolve(root, raw));
+  }
+  return result;
+}
+
+/**
+ * Unlinks previously owned in-place frame files that the replacement clip no longer
+ * references. Skips missing paths and workspace copies (those swap via backup/rename).
+ * @param {string[]} previousPaths Absolute paths owned by the old animation.
+ * @param {Iterable<string>} keptPaths Absolute paths still referenced by the new frames.
+ * @param {string} workspaceTargetDir Workspace asset directory that must not be deleted here.
+ * @returns {void}
+ */
+function unlinkUnreferencedInPlaceFrames(previousPaths, keptPaths, workspaceTargetDir) {
+  const kept = new Set(
+    Array.from(keptPaths || [])
+      .filter(Boolean)
+      .map((filePath) => path.resolve(filePath)),
+  );
+  const workspace = path.resolve(workspaceTargetDir);
+  for (const raw of previousPaths || []) {
+    const absolute = path.resolve(raw);
+    if (kept.has(absolute)) continue;
+    if (absolute === workspace || absolute.startsWith(`${workspace}${path.sep}`)) continue;
+    try {
+      if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
+      fs.unlinkSync(absolute);
+    } catch {
+      // Missing or already gone — skip.
+    }
+  }
+}
+
+/**
  * Reads dimensions from a PNG header.
  * @param {Buffer} buffer PNG data.
  * @returns {{width:number,height:number}}
@@ -434,6 +480,8 @@ function importAnimation(options) {
     (entry) => String(entry.id || entry.name) === animationId,
   );
   const replacing = Boolean(options.replace) && existingIndex >= 0;
+  const previousOwnedFramePaths =
+    replacing && inPlace ? ownedAnimationFramePaths(root, profile.animations[existingIndex]) : [];
   if (existingIndex >= 0 && !replacing) {
     throw Object.assign(new Error(`Animation already exists: ${profileId}/${animationId}`), {
       status: 409,
@@ -604,6 +652,9 @@ function importAnimation(options) {
     } catch (error) {
       console.warn(`Could not remove import backup ${backupDir}: ${error.message}`);
     }
+  }
+  if (replacing && inPlace) {
+    unlinkUnreferencedInPlaceFrames(previousOwnedFramePaths, sourcePaths, targetDir);
   }
 
   return {
