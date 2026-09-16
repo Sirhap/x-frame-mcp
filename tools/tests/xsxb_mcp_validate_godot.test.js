@@ -496,6 +496,82 @@ test("validate_for_godot omits zero-decodable clips from evidence.cells and repo
   }
 });
 
+test("validate_for_godot lists empty manifest clips in evidence.skipped and excludes them from scale contract", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-empty-frames-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(godotRoot, "project.godot"),
+    '[application]\nconfig/name="EvidenceEmptyFrames"\n',
+  );
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  const clips = [{ id: "idle" }, { id: "attack" }];
+  try {
+    const body = bodyOnCanvas(256, 264, 256);
+    for (const clip of clips) {
+      const directory = path.join(root, `${clip.id}-seq`);
+      fs.mkdirSync(directory);
+      const png = encodePngRgba(body.data, body.width, body.height);
+      fs.writeFileSync(path.join(directory, "01.png"), png);
+      fs.writeFileSync(path.join(directory, "02.png"), png);
+      await service.call("xsxb_import_animation", {
+        source: "png_sequence",
+        directory,
+        animation_id: clip.id,
+      });
+    }
+    const store = createProjectStore(root);
+    const project = store.activeProject("hero");
+    const paths = store.projectPaths(project);
+    const manifest = store.readJson(paths.manifest, { schemaVersion: 1, profiles: [] });
+    for (const profile of manifest.profiles || []) {
+      for (const animation of profile.animations || []) {
+        if (String(animation.id || animation.name) === "attack") animation.frames = [];
+      }
+    }
+    store.writeJson(paths.manifest, manifest);
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.deepEqual(
+      (gate.evidence.cells || []).map((cell) => cell.id),
+      ["idle"],
+      "evidence.cells ids must be only idle",
+    );
+    assert.ok(
+      (gate.evidence.skipped || []).some(
+        (entry) => entry && entry.id === "attack" && entry.reason === "empty_manifest_frames",
+      ),
+      `evidence.skipped must contain { id: "attack", reason: "empty_manifest_frames" }: ${JSON.stringify(gate.evidence.skipped)}`,
+    );
+    assert.ok(
+      (gate.warnings || []).some((warning) => /attack/i.test(warning) && /empty/i.test(warning)),
+      `warnings must mention attack + empty: ${(gate.warnings || []).join("; ")}`,
+    );
+    const scaleIssues = gate.scale_contract?.issues || [];
+    assert.ok(
+      !scaleIssues.some((issue) => /attack/i.test(issue)),
+      `scale_contract.issues must not mention attack: ${JSON.stringify(scaleIssues)}`,
+    );
+    const scaleClips = gate.scale_contract?.clips;
+    if (Array.isArray(scaleClips)) {
+      assert.ok(
+        !scaleClips.some((clip) => clip && clip.id === "attack"),
+        `scale_contract.clips must not include attack: ${JSON.stringify(scaleClips)}`,
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 const STEEL = Object.freeze([200, 204, 214, 255]);
 const CRESCENT_GOLD = Object.freeze([255, 214, 56, 255]);
 const NAVY = Object.freeze([36, 58, 118, 255]);
