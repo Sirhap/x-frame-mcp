@@ -426,6 +426,7 @@ function syncFrameAudio(projectStore, project, bindingsInput = null) {
       const target = path.join(projectRoot, audioRel);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, data.buffer);
+      forgetGodotImportCache(projectRoot, target);
       copiedAudio += 1;
       next.path = `res://${audioRel}`;
       next.type = next.type || data.mime;
