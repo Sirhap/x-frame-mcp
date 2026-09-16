@@ -920,6 +920,93 @@ test("bind_godot retarget prunes previous Godot project slices", async () => {
   }
 });
 
+test("bind_godot retarget forgets stale Godot imported ctex from pruned slices", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const hashPath = path.join(attachmentDir, pngs[0]);
+    const stem = path.basename(hashPath, path.extname(hashPath));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${hashPath}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+
+    const leftoverRuntime = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "runtime",
+      "xsxb_frame_actor.tscn",
+    );
+    fs.mkdirSync(path.dirname(leftoverRuntime), { recursive: true });
+    fs.writeFileSync(leftoverRuntime, "[gd_scene leftover]\n");
+
+    const oldDataDir = path.join(current.godotRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test");
+    assert.equal(fs.existsSync(oldDataDir), true);
+
+    const secondRoot = path.join(current.root, "godot-second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    fs.writeFileSync(path.join(secondRoot, "project.godot"), '[application]\nconfig/name="Second"\n');
+
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(bound.projectId, "mcp-test");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
+    assert.equal(fs.existsSync(hashPath), false, "retarget must drop previous attachment hash PNG");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+      false,
+      `pruned ${stem}.ctex must be forgotten from .godot/imported`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `pruned ${stem}.md5 must be forgotten from .godot/imported`,
+    );
+    assert.equal(fs.existsSync(leftoverRuntime), true, "shared runtime under the old root must stay");
+    assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("xsxb_create_project adds a registry project without changing list/get/set_active shapes", async () => {
   const current = fixture();
   try {
