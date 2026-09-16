@@ -230,6 +230,8 @@ function pruneStaleSyncedFrames(previousPaths, retained, syncRoot) {
     const fullPath = path.resolve(previous);
     if (retained.has(fullPath)) continue;
     if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) continue;
+    const godotRoot = findGodotProjectRoot(path.dirname(fullPath));
+    if (godotRoot) forgetGodotImportCache(godotRoot, fullPath);
     fs.rmSync(fullPath, { force: true });
   }
   const parents = new Set();
