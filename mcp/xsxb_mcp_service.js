@@ -1610,7 +1610,7 @@ function createXsxbMcpService(options = {}) {
     let filePaths = external?.filePaths || [];
     const payload = { source, applied: false };
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       const result = animationResult(selection);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
@@ -1655,7 +1655,7 @@ function createXsxbMcpService(options = {}) {
     let filePaths = external?.filePaths || [];
     const payload = { source, applied: false };
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
       payload.animationId = String(selection.animation.id || selection.animation.name);
@@ -1744,7 +1744,7 @@ function createXsxbMcpService(options = {}) {
     let filePaths = external?.filePaths || [];
     const payload = { source, applied: false };
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
       payload.animationId = String(selection.animation.id || selection.animation.name);
@@ -1955,7 +1955,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Per-frame ruler.
    */
   function measureFrames(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const frames = collectFramePaths(project, animation).map((filePath, index) => {
       const image = decodePngRgba(filePath);
