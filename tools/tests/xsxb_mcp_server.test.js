@@ -899,7 +899,11 @@ test("bind_godot retarget prunes previous Godot project slices", async () => {
     assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
     assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
     if (workspaceExisted) {
-      assert.equal(fs.existsSync(oldWorkspaceDir), false, "retarget must drop previous workspace/projects/<id>");
+      assert.equal(
+        fs.existsSync(oldWorkspaceDir),
+        false,
+        "retarget must drop previous workspace/projects/<id>",
+      );
     }
     assert.equal(
       fs.existsSync(path.join(secondRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test")),
