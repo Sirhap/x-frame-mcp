@@ -1477,7 +1477,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_gif",
       description:
-        "Export one animation as an animated GIF preview via FFmpeg, honoring per-frame durations, group/frame visual_size, authored attack-trail meshes, and frame image attachments. Skips disabled frames. Returns the absolute output path. output_path may be an absolute path outside the XSXB root (/tmp, a game repo). background defaults to magenta so alpha feet do not bounce on opaque black; pass checker, #00FF00, or transparent. After a 像素层 月牙 trail, also xsxb_export_sheet — GIF forward-play can hide a 7字.",
+        "Export one animation as an animated GIF preview via FFmpeg, honoring per-frame durations, group/frame visual_size, authored attack-trail meshes, and frame image attachments. Skips disabled frames. Returns the absolute output path. output_path may be an absolute path outside the XSXB root (/tmp, a game repo). background defaults to magenta so alpha feet do not bounce on opaque black; pass checker, #00FF00, or transparent. After a 像素层 月牙 trail, also xsxb_export_sheet — GIF forward-play can hide a 7字. When the animation was imported from video at camera rate, pass fps=suggestedGameFps from the import receipt so the GIF is a game loop, not 24fps flicker.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1495,7 +1495,13 @@ function toolDefinitions() {
             type: "string",
             description: "magenta (default), checker, #00FF00, black, or transparent.",
           },
-          fps: { type: "number", minimum: 1, maximum: 120, description: "Defaults to the animation FPS." },
+          fps: {
+            type: "number",
+            minimum: 1,
+            maximum: 120,
+            description:
+              "Defaults to the animation FPS. When the animation was imported from video at camera rate, pass fps=suggestedGameFps from the import receipt so the GIF is a game loop, not 24fps flicker.",
+          },
           start_frame: { type: "integer", minimum: 0, description: "Inclusive 0-based frame index." },
           end_frame: { type: "integer", minimum: 0, description: "Inclusive 0-based frame index." },
           include_disabled: {

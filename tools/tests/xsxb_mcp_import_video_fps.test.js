@@ -120,6 +120,13 @@ test("xsxb_import_video catalog names source and game fps on the receipt", () =>
   assert.match(video.description, /Pass fps=suggestedGameFps/);
 });
 
+test("xsxb_export_gif catalog tells video imports to pass suggestedGameFps", () => {
+  const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
+  assert.match(gif.description, /imported from video at camera rate/);
+  assert.match(gif.description, /fps=suggestedGameFps/);
+  assert.match(gif.inputSchema.properties.fps.description, /suggestedGameFps/);
+});
+
 test("import_video without fps stays 12 when source timing cannot be probed", async () => {
   await withImportProject(
     async ({ call, video }) => {
@@ -128,6 +135,7 @@ test("import_video without fps stays 12 when source timing cannot be probed", as
       assert.equal(imported.fps, 12);
       assert.equal(imported.suggestedFps, undefined);
       assert.equal(imported.suggestedGameFps, undefined);
+      assert.equal(imported.next, undefined);
       assert.equal(imported.sourceDurationSec, undefined);
       const stored = await call("xsxb_get_animation", { animation_id: "walk" });
       assert.equal(Number(stored.animation.fps), 12);
@@ -158,6 +166,7 @@ test("import_video receipt includes suggestedFps and suggestedGameFps", async ()
       assert.equal(imported.sourceFrameCount, 3);
       assert.equal(imported.suggestedFps, 24);
       assert.equal(imported.suggestedGameFps, 8);
+      assert.match(String(imported.next), /suggestedGameFps/);
       assert.equal(imported.fps, imported.suggestedFps);
       const stored = await call("xsxb_get_animation", { animation_id: "walk" });
       assert.equal(Number(stored.animation.fps), 24);

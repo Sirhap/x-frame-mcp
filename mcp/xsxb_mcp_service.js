@@ -704,6 +704,7 @@ function createXsxbMcpService(options = {}) {
       const validation = booleanFlag(args.validate)
         ? validateImport({ project: project.id }, { root, projectStore })
         : { requested: false, ok: null, errors: [], warnings: [], summary: {} };
+      const suggestedGameFps = suggestedFps === undefined ? undefined : suggestGameFps(suggestedFps);
       return {
         projectId: project.id,
         profileId,
@@ -714,7 +715,11 @@ function createXsxbMcpService(options = {}) {
         sourceFrameCount,
         sourceDurationSec,
         suggestedFps,
-        suggestedGameFps: suggestedFps === undefined ? undefined : suggestGameFps(suggestedFps),
+        suggestedGameFps,
+        next:
+          suggestedGameFps === undefined
+            ? undefined
+            : `pass fps=${suggestedGameFps} (suggestedGameFps) to xsxb_export_gif for a game loop`,
         extractedFrameCount: extracted.extractedCount,
         importedFrameCount: imported.frameCount,
         startFrame: extracted.startFrame,
@@ -3734,6 +3739,7 @@ function createXsxbMcpService(options = {}) {
     }
     if (!fs.existsSync(outputPath)) throw new Error("GIF export produced no output file.");
     const copyTo = copyIfRequested(outputPath, args.copy_to);
+    const suggestedGameFps = fps > 12 && fps <= 120 ? suggestGameFps(fps) : undefined;
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3746,6 +3752,11 @@ function createXsxbMcpService(options = {}) {
       startFrame,
       endFrame,
       fps,
+      suggestedGameFps,
+      next:
+        suggestedGameFps === undefined || suggestedGameFps === fps
+          ? undefined
+          : `pass fps=${suggestedGameFps} (suggestedGameFps) so the GIF is a game loop, not camera-rate flicker`,
       appliedVisual,
       bakedTrails,
       bakedAttachments,

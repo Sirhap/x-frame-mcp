@@ -180,6 +180,20 @@ function inspectGif(filePath) {
 }
 
 /**
+ * GIF loop length from the export receipt, then ffprobe when the receipt omits ms.
+ * @param {{totalDurationMs?:unknown}} receipt xsxb_export_gif data.
+ * @param {{durationSec?:number}} gifFacts inspectGif facts.
+ * @returns {number|undefined} Seconds, when known.
+ */
+function resolveGifDurationSec(receipt, gifFacts) {
+  const fromReceipt = Number(receipt?.totalDurationMs);
+  if (Number.isFinite(fromReceipt) && fromReceipt > 0) return fromReceipt / 1000;
+  const probed = Number(gifFacts?.durationSec);
+  if (Number.isFinite(probed) && probed > 0) return probed;
+  return undefined;
+}
+
+/**
  * Lists the four authored walk plates and copies them into dest.
  * @param {string} destDir Output folder that will hold 00.png..03.png.
  * @returns {string[]} Absolute copied paths in playback order.
@@ -316,7 +330,7 @@ async function cutoutWalk(service, snapshotId, firstFramePath) {
 /**
  * Runs one agent-shaped video → analyze → reorganize → export_gif session.
  * @param {{keepDir?:string}} [options] Artifact directory for video_walk.gif.
- * @returns {Promise<object>} Encoded rate, import receipt fields, gif path, and apply order.
+ * @returns {Promise<object>} Encoded rate, import receipt fields, gif path, gifFps, gifDurationSec, and apply order.
  */
 async function runVideoAcceptance(options = {}) {
   assert.ok(ffmpegPresent(), "ffmpeg/ffprobe not on PATH; skipped video acceptance");
@@ -419,9 +433,11 @@ async function runVideoAcceptance(options = {}) {
     );
     commands.push("xsxb_get_animation");
 
+    const suggestedGameFps = Number(imported.data.suggestedGameFps);
     const exported = await callTool(service, "xsxb_export_gif", {
       project_id: "hero",
       animation_id: "walk",
+      fps: suggestedGameFps,
     });
     assert.equal(exported.ok, true, JSON.stringify(exported.error || exported));
     const outputPath = exported.data?.outputPath;
@@ -450,6 +466,8 @@ async function runVideoAcceptance(options = {}) {
     const gifPath = path.join(keepDir, KEEP_GIF_NAME);
     const keptCutout = path.join(keepDir, KEEP_CUTOUT_PREVIEW);
     const keptAnalyze = path.join(keepDir, KEEP_ANALYZE_PREVIEW);
+    const gifFps = Number(exported.data.fps);
+    const gifDurationSec = resolveGifDurationSec(exported.data, gifFacts);
 
     return {
       encodedFps: encoded.fps,
@@ -471,8 +489,8 @@ async function runVideoAcceptance(options = {}) {
       gifFrameCount: exported.data.frameCount,
       gifImageBlocks: gifFacts.imageBlocks,
       gifDurationMs: exported.data.totalDurationMs,
-      gifFps: Number(exported.data.fps),
-      gifProbe: gifFacts,
+      gifDurationSec,
+      gifFps,
       used: analyzed.data.recommended?.kind || analyzed.data.preview?.kind,
       commands,
       ffmpeg: true,
@@ -491,6 +509,7 @@ module.exports = {
   inspectGif,
   inspectMagentaPreview,
   readGifFrames,
+  resolveGifDurationSec,
   runVideoAcceptance,
 };
 
@@ -502,7 +521,7 @@ if (require.main === module) {
   runVideoAcceptance()
     .then((report) => {
       process.stdout.write(
-        `Video acceptance passed. fps=${report.encodedFps} suggestedFps=${report.suggestedFps} suggestedGameFps=${report.suggestedGameFps} imported=${report.importedFrameCount} after=${report.reorganizedFrameCount} gif=${report.gifPath} blocks=${report.gifImageBlocks}\n`,
+        `Video acceptance passed. fps=${report.encodedFps} suggestedFps=${report.suggestedFps} suggestedGameFps=${report.suggestedGameFps} imported=${report.importedFrameCount} after=${report.reorganizedFrameCount} gif=${report.gifPath} gifFps=${report.gifFps} gifDurationSec=${report.gifDurationSec} blocks=${report.gifImageBlocks}\n`,
       );
     })
     .catch((error) => {

@@ -134,6 +134,8 @@ test("export catalog describes previews and preserves sheet scale and grid optio
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.match(gif.description, /trail/i);
+  assert.match(gif.description, /fps=suggestedGameFps/);
+  assert.match(gif.inputSchema.properties.fps.description, /suggestedGameFps/);
   assert.match(sheet.description, /contact sheet PNG/i);
   assert.match(sheet.description, /without changing source frames/i);
   assert.match(sheet.description, /normalize=none\|feet preserves scale/);

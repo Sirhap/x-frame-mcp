@@ -102,5 +102,15 @@ test(
       report.reorganizedFrameCount,
       `GIF image blocks=${imageBlocks} must equal reorganized frames=${report.reorganizedFrameCount}`,
     );
+    assert.equal(
+      report.gifFps,
+      report.suggestedGameFps,
+      `gifFps=${report.gifFps} must equal suggestedGameFps=${report.suggestedGameFps} (not stored camera fps=${report.storedFps})`,
+    );
+    assert.equal(report.gifFps, 8, `gifFps=${report.gifFps}`);
+    assert.ok(
+      report.gifDurationSec >= 0.35 && report.gifDurationSec <= 0.65,
+      `gifDurationSec=${report.gifDurationSec} expected ~0.5 (4 frames at 8fps); gifDurationMs=${report.gifDurationMs}`,
+    );
   },
 );
