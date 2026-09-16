@@ -287,8 +287,13 @@ test("find_duplicates slider matches the organizer 重复比例 range", () => {
   for (const name of ["threshold", "duplicate_ratio"]) {
     assert.equal(schema.properties[name].minimum, ORGANIZER_SIMILARITY_THRESHOLD.min, name);
     assert.equal(schema.properties[name].maximum, ORGANIZER_SIMILARITY_THRESHOLD.max, name);
-    assert.equal(schema.properties[name].default, ORGANIZER_SIMILARITY_THRESHOLD.fallback, name);
   }
+  assert.equal(schema.properties.threshold.default, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+  assert.equal(
+    schema.properties.duplicate_ratio.default,
+    undefined,
+    "schema default 88 is injected beside an explicit threshold and the handler throws",
+  );
   assert.throws(
     () =>
       validateToolArguments("xsxb_find_duplicates", schema, {
@@ -296,6 +301,57 @@ test("find_duplicates slider matches the organizer 重复比例 range", () => {
       }),
     /threshold/,
   );
+});
+
+test("duplicate_ratio schema has no injected default so explicit threshold does not throw on analyze", async () => {
+  const injectedDefaultMessage =
+    "schema default 88 is injected beside an explicit threshold and the handler throws";
+  for (const name of ["xsxb_find_duplicates", "xsxb_analyze"]) {
+    const tool = toolDefinitions().find((entry) => entry.name === name);
+    assert.equal(tool.inputSchema.properties.threshold.default, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+    assert.equal(tool.inputSchema.properties.duplicate_ratio.default, undefined, injectedDefaultMessage);
+  }
+
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "dup-ratio-seq");
+    writeCycle(directory);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "cycle",
+    });
+    const analyzed = await current.service.call("xsxb_analyze", {
+      animation_id: "cycle",
+      threshold: 95,
+      sample_size: 8,
+    });
+    assert.equal(analyzed.animationId, "cycle");
+    await assert.rejects(
+      current.service.call("xsxb_analyze", {
+        animation_id: "cycle",
+        threshold: 95,
+        duplicate_ratio: 88,
+      }),
+      /disagree/,
+    );
+    const found = await current.service.call("xsxb_find_duplicates", {
+      animation_id: "cycle",
+      threshold: 95,
+      sample_size: 8,
+    });
+    assert.equal(found.animationId, "cycle");
+    await assert.rejects(
+      current.service.call("xsxb_find_duplicates", {
+        animation_id: "cycle",
+        threshold: 95,
+        duplicate_ratio: 88,
+      }),
+      /disagree/,
+    );
+  } finally {
+    current.cleanup();
+  }
 });
 
 test("findDuplicatesInPngFiles keeps the first of each hold and drops the rest", () => {
