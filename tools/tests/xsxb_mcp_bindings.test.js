@@ -371,6 +371,95 @@ test("add_attack_trail keeps stick layer and reverseDirection and spans the swin
   }
 });
 
+test("remove_binding unlinks unreferenced workspace sfx and attachment copies", async () => {
+  const current = await importedFixture();
+  try {
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 0,
+      id: "glow",
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "workspace sfx copy exists before remove");
+    assert.equal(fs.existsSync(attachmentAbs), true, "workspace attachment copy exists before remove");
+
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "walk",
+      kind: "sfx",
+      id: "hit-sound",
+      dry_run: false,
+    });
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "walk",
+      kind: "attachment",
+      id: "glow",
+      dry_run: false,
+    });
+
+    const walk = await current.service.call("xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["sfx", "attachments"],
+    });
+    assert.equal(walk.sfx.length, 0, "walk sfx binding is gone");
+    assert.equal(walk.attachments.length, 0, "walk attachment binding is gone");
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash file stays while idle still references it");
+
+    const idle = await current.service.call("xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idle.sfx.length, 1, "idle sfx binding remains");
+
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "sfx",
+      id: "hit-sound",
+      dry_run: false,
+    });
+    const idleAfter = await current.service.call("xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idleAfter.sfx.length, 0, "idle sfx binding is gone");
+    assert.equal(fs.existsSync(sfxAbs), false, "sfx workspace copy unlinks after last binding");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("delete_animation unlinks unreferenced workspace sfx and attachment copies", async () => {
   const current = await importedFixture();
   try {
