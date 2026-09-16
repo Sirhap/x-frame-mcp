@@ -13,6 +13,7 @@ const path = require("node:path");
 const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
 const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
 const { callTool, writeGameplayScene } = require("./acceptance_playbooks");
+const { keepFiles } = require("./acceptance_keep");
 const {
   HERO,
   HERO_COLORS,
@@ -59,20 +60,6 @@ function assertMagentaPreview(previewPath, label) {
   assert.ok(hair >= 8, `${label} keyed the hair away (${hair})`);
   assert.ok(boot >= 8, `${label} keyed the boots away (${boot})`);
   return { magenta, hair, boot, width: image.width, height: image.height };
-}
-
-/**
- * Copies files into a keep directory.
- * @param {string} dest Destination.
- * @param {Record<string,string>} files Basename to path.
- * @returns {void}
- */
-function keepFiles(dest, files) {
-  if (!dest) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const [name, from] of Object.entries(files)) {
-    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dest, name));
-  }
 }
 
 /**

@@ -9,6 +9,7 @@ const { handleMessage } = require("../mcp/xsxb_mcp_server");
 const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
 const { GODOT_SYNC_ROOT } = require("../mcp/lib/godot_sync");
 const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
+const { keepFiles } = require("./acceptance_keep");
 const {
   HERO,
   HERO_COLORS,
@@ -138,20 +139,6 @@ function assertHeroPresent(image, label) {
   assert.ok(hair >= 16, `${label} missing hair (${hair})`);
   assert.ok(boot >= 16, `${label} missing boots (${boot})`);
   assert.ok(pant >= 16, `${label} missing pants (${pant})`);
-}
-
-/**
- * Copies existing files into a keep directory.
- * @param {string} dest Destination.
- * @param {Record<string,string>} files Basename to source path.
- * @returns {void}
- */
-function keepFiles(dest, files) {
-  if (!dest) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const [name, from] of Object.entries(files)) {
-    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dest, name));
-  }
 }
 
 /**

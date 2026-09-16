@@ -19,6 +19,7 @@ const {
 } = require("../mcp/xsxb_mcp_lock");
 const { groupToCanvas } = require("../mcp/xsxb_mcp_visual_qa");
 const { callTool, writeGameplayScene } = require("./acceptance_playbooks");
+const { keepFiles } = require("./acceptance_keep");
 const { countPixels, isTrueMagenta } = require("./acceptance_sprites");
 
 const HURT_LIME = Object.freeze([0, 255, 80, 255]);
@@ -973,20 +974,6 @@ function drawBoxesOnMagenta(frame, boxes, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.writeFileSync(dest, encodePngRgba(flat.data, flat.width, flat.height));
   return dest;
-}
-
-/**
- * Copies files into a keep directory.
- * @param {string} dest Destination.
- * @param {Record<string,string>} files Basename to path.
- * @returns {void}
- */
-function keepFiles(dest, files) {
-  if (!dest) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const [name, from] of Object.entries(files)) {
-    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dest, name));
-  }
 }
 
 /**

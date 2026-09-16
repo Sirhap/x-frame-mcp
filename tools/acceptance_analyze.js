@@ -17,6 +17,7 @@ const { spawnSync } = require("node:child_process");
 const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
 const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
 const { callTool } = require("./acceptance_playbooks");
+const { copyKeepFile } = require("./acceptance_keep");
 const { heroFrame, writePngSequence } = require("./acceptance_sprites");
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -322,7 +323,7 @@ async function runAnalyzeAcceptance(options = {}) {
       gifProbe = gifFacts;
       const keepDir = ensureKeepDir(options);
       const keptGif = path.join(keepDir, KEEP_GIF_NAME);
-      fs.copyFileSync(outputPath, keptGif);
+      copyKeepFile(outputPath, keptGif);
       gifPath = keptGif;
     }
 

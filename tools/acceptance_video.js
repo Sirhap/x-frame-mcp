@@ -17,6 +17,7 @@ const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
 const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
 const { suggestImportFps } = require("../mcp/xsxb_mcp_processes");
 const { callTool } = require("./acceptance_playbooks");
+const { keepFiles } = require("./acceptance_keep");
 const { countPixels, isTrueMagenta } = require("./acceptance_sprites");
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -69,20 +70,6 @@ function ensureKeepDir(options = {}) {
     }
     fs.mkdirSync(FALLBACK_KEEP, { recursive: true });
     return FALLBACK_KEEP;
-  }
-}
-
-/**
- * Copies existing files into a keep directory.
- * @param {string} dest Destination.
- * @param {Record<string,string>} files Basename to source path.
- * @returns {void}
- */
-function keepFiles(dest, files) {
-  if (!dest) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const [name, from] of Object.entries(files)) {
-    if (from && fs.existsSync(from)) fs.copyFileSync(from, path.join(dest, name));
   }
 }
 
