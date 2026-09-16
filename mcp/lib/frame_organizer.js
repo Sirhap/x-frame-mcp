@@ -3,7 +3,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { estimateFrameBoxes, upsertEstimatedFrameBoxes } = require("./box_estimator");
 const { ensureInitialCharacterScale } = require("./import_scale");
-const { stripAnimationOwnedData } = require("./animation_mutations");
+const {
+  normalizeBindings,
+  safeResolve: resolveWorkspaceCopy,
+  stripAnimationOwnedData,
+  unlinkUnreferencedWorkspaceCopy,
+} = require("./animation_mutations");
 
 const ANIMATION_TYPES = Object.freeze(["actor", "boss", "vfx", "prop", "scene_prop_attachment"]);
 
@@ -657,6 +662,52 @@ function importAnimation(options) {
       projectStore.writeJson(paths.attackTrails, originals.attackTrails);
     }
     throw error;
+  }
+  if (replacing) {
+    const retainedWorkspaceCopyPaths = new Set(
+      [...nextAudio, ...nextAttachments, ...nextAssets]
+        .map((entry) => resolveWorkspaceCopy(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const retainedAttackTrailTexturePaths = new Set(
+      Object.values(nextTrails.bindings || {})
+        .flat()
+        .map((segment) => resolveWorkspaceCopy(root, segment?.texture?.path || ""))
+        .filter(Boolean),
+    );
+    const audioWorkspaceRoot = path.join(workspaceDir, "audio");
+    const attachmentsWorkspaceRoot = path.join(workspaceDir, "attachments");
+    const attackTrailWorkspaceRoot = path.join(workspaceDir, "attack_trails");
+    for (const binding of normalizeBindings(originals.frameAudio)) {
+      unlinkUnreferencedWorkspaceCopy(
+        binding.path,
+        audioWorkspaceRoot,
+        retainedWorkspaceCopyPaths,
+        root,
+        workspaceDir,
+      );
+    }
+    for (const binding of normalizeBindings(originals.frameImageAttachments)) {
+      unlinkUnreferencedWorkspaceCopy(
+        binding.path,
+        attachmentsWorkspaceRoot,
+        retainedWorkspaceCopyPaths,
+        root,
+        workspaceDir,
+      );
+    }
+    for (const asset of normalizeBindings(originals.attachmentAssets)) {
+      unlinkUnreferencedWorkspaceCopy(asset.path, workspaceDir, retainedWorkspaceCopyPaths, root, workspaceDir);
+    }
+    for (const segment of Object.values(originals.attackTrails?.bindings || {}).flat()) {
+      unlinkUnreferencedWorkspaceCopy(
+        segment?.texture?.path || "",
+        attackTrailWorkspaceRoot,
+        retainedAttackTrailTexturePaths,
+        root,
+        workspaceDir,
+      );
+    }
   }
   if (backupCreated) {
     try {
