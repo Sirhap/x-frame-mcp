@@ -100,7 +100,7 @@ test("checkpoint compare restore and undo preserve bytes, metadata and attachmen
   }));
 
 test("copy split merge rename retain timing boxes attachments and sound ownership", async () =>
-  fixture(async ({ call, png, paths }) => {
+  fixture(async ({ call, png, paths, root }) => {
     await call("xsxb_update_timing", { frame: 1, duration: 2 });
     await call("xsxb_add_attachment", {
       file_path: png,
@@ -153,6 +153,12 @@ test("copy split merge rename retain timing boxes attachments and sound ownershi
     assert.equal(renamed.attachments[0].key, "hero/renamed:1");
     const manifest = JSON.parse(fs.readFileSync(paths.manifest));
     assert.ok(!manifest.profiles[0].animations.some((a) => a.id === "joined"));
+    const store = createProjectStore(root);
+    const workspace = store.projectWorkspaceDir(store.activeProject("test"));
+    assert.equal(fs.existsSync(path.join(workspace, "assets", "hero", "joined")), false);
+    assert.ok(
+      fs.readdirSync(path.join(workspace, "assets", "hero", "renamed")).some((name) => name.endsWith(".png")),
+    );
   }));
 
 test("partial cutout changes selected frames only and preserves other timing/bytes", async () =>
