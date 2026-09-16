@@ -498,8 +498,8 @@ function toolDefinitions() {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Alias of threshold. Same organizer 重复比例 slider.",
+            description:
+              "Alias of threshold. Same organizer 重复比例 slider. No separate default; omit means use threshold.",
           },
           auto_adjust: {
             type: "boolean",
@@ -571,8 +571,8 @@ function toolDefinitions() {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Alias of threshold. Same organizer 重复比例 slider.",
+            description:
+              "Alias of threshold. Same organizer 重复比例 slider. No separate default; omit means use threshold.",
           },
           auto_adjust: {
             type: "boolean",
