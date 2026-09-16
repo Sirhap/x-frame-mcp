@@ -4240,6 +4240,18 @@ function createXsxbMcpService(options = {}) {
       context.profileId = "";
       context.animationId = "";
     },
+    /**
+     * Points the in-memory session at a clip after a mutation that created or renamed it.
+     * @param {string} projectId Registry project id.
+     * @param {string} profileId Profile id.
+     * @param {string} animationId Clip id.
+     * @returns {void}
+     */
+    selectAnimation(projectId, profileId, animationId) {
+      selectProject(projectId);
+      context.profileId = profileId;
+      context.animationId = animationId;
+    },
   });
 
   const handlers = {

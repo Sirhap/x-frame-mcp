@@ -239,7 +239,9 @@ function createAnimationManager(context, revisions) {
             .filter((file) => file && file.startsWith(`${workspace}${path.sep}`) && !referenced.has(file))
         : [];
     commitDocuments(paths, documents, files, removed);
-    if (action === "rename") context.clearAnimationSelection();
+    if (action === "rename" || action === "copy" || action === "merge") {
+      context.selectAnimation(project.id, profile.id, outputPlans[0].id);
+    }
     return { ...result, sync: context.synchronize(project, args.sync === true) };
   }
   return manage;
