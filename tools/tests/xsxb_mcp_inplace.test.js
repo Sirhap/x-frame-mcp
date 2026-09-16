@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const zlib = require("node:zlib");
 const { createProjectStore, FRAME_STORE_DIR } = require("../project_store");
 const { createXsxbMcpService, toolDefinitions } = require("../xsxb_mcp_service");
 const { encodePngRgba } = require("../xsxb_mcp_cutout");
@@ -528,6 +529,60 @@ test("shift_frames in_place forgets stale Godot imported ctex on kept pack png",
     await current.service.call("xsxb_shift_frames", {
       frames: [{ frame: 0, dy: 4 }],
     });
+
+    assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
+    assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
+    assert.ok(fs.existsSync(`${png}.import`), "01.png.import sidecar must stay");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "01.ctex")),
+      false,
+      "01.ctex must be forgotten from .godot/imported",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "01.md5")),
+      false,
+      "01.md5 must be forgotten from .godot/imported",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("compress_frames in_place forgets stale Godot imported ctex on kept pack png", async () => {
+  const current = fixture();
+  const pack = path.join(current.godotRoot, "sprites", "run");
+  try {
+    const sources = writeSequence(pack, 2);
+    fs.writeFileSync(path.join(pack, "notes.txt"), "keep me\n");
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      in_place: true,
+    });
+
+    const width = 32;
+    const height = 32;
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    for (let offset = 0; offset < rgba.length; offset += 4) {
+      rgba.set([offset % 251, (offset * 7) % 253, (offset * 13) % 247, 255], offset);
+    }
+    fs.writeFileSync(
+      sources[0],
+      encodePngRgba(rgba, width, height, { level: zlib.constants.Z_NO_COMPRESSION }),
+    );
+
+    const png = sources[0];
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${png}.import`, 'path="res://.godot/imported/01.ctex"\n');
+    fs.writeFileSync(path.join(importedDir, "01.ctex"), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, "01.md5"), "stale-ctex");
+
+    const written = await current.service.call("xsxb_compress_frames", {
+      dry_run: false,
+    });
+    assert.ok(written.rewritten >= 1, "compress must rewrite at least one bloated pack png");
 
     assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
     assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
