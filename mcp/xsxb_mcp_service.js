@@ -2268,7 +2268,7 @@ function createXsxbMcpService(options = {}) {
           if (!Array.isArray(raw.warnings)) raw.warnings = [];
           raw.warnings.push(`${animationId}: empty manifest frames; omitted from evidence.cells`);
         }
-        if (!(animation.frames || []).length) continue;
+        if (!clipFrames.length) continue;
         clips.push({
           id: animationId,
           kind: profile.kind || animation.type || "actor",
