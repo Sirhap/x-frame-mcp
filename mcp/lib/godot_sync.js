@@ -159,7 +159,13 @@ function pruneGeneratedDirectory(directory, retainedPaths) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) pruneGeneratedDirectory(fullPath, retainedPaths);
-    else if (!retainedPaths.has(path.resolve(fullPath))) unretained.push(fullPath);
+    else {
+      const resolved = path.resolve(fullPath);
+      if (retainedPaths.has(resolved)) continue;
+      const pngForSidecar = /\.png\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : "";
+      if (pngForSidecar && retainedPaths.has(path.resolve(pngForSidecar))) continue;
+      unretained.push(fullPath);
+    }
   }
   for (const fullPath of unretained) {
     if (!/\.png(?:\.import)?$/i.test(fullPath)) continue;
@@ -456,7 +462,10 @@ function syncFrameImageAttachments(root, projectStore, project, attachmentsInput
     const hash = String(next.assetHash || fileContentHash(source));
     const nextRel = godotProjectRelPath("attachments", "projects", project.id, `${hash}${ext.toLowerCase()}`);
     const target = path.join(projectRoot, nextRel);
-    if (copyFileIfChanged(source, target)) copiedImageAttachments += 1;
+    if (copyFileIfChanged(source, target)) {
+      copiedImageAttachments += 1;
+      forgetGodotImportCache(projectRoot, target);
+    }
     retainedAttachments.add(path.resolve(target));
     next.path = `res://${nextRel}`;
     next.assetHash = hash;
@@ -485,7 +494,10 @@ function syncAttackTrails(root, projectStore, project, trailsInput = null) {
     const presetHash = String(local.presetTexture.assetHash || fileContentHash(presetSource));
     const presetRel = godotProjectRelPath("attack_trails", "presets", `${presetHash}.png`);
     const presetTarget = path.join(projectRoot, presetRel);
-    if (copyFileIfChanged(presetSource, presetTarget)) copiedAttackTrailTextures += 1;
+    if (copyFileIfChanged(presetSource, presetTarget)) {
+      copiedAttackTrailTextures += 1;
+      forgetGodotImportCache(projectRoot, presetTarget);
+    }
     local.presetTexture.path = `res://${presetRel}`;
     local.presetTexture.assetHash = presetHash;
   }
@@ -506,7 +518,10 @@ function syncAttackTrails(root, projectStore, project, trailsInput = null) {
       );
       const target = path.join(projectRoot, nextRel);
       retainedProjectTextures.add(path.resolve(target));
-      if (copyFileIfChanged(source, target)) copiedAttackTrailTextures += 1;
+      if (copyFileIfChanged(source, target)) {
+        copiedAttackTrailTextures += 1;
+        forgetGodotImportCache(projectRoot, target);
+      }
       segment.texture.path = `res://${nextRel}`;
       segment.texture.assetHash = hash;
     }
