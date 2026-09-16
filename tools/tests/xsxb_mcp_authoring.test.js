@@ -146,7 +146,9 @@ test("copy split merge rename retain timing boxes attachments and sound ownershi
     assert.equal(joined.frameCount, 3);
     assert.equal(joined.attachments[0].frame, 1);
     assert.equal(joined.timing.frameOverrides[1].duration, 4);
+    assert.equal((await call("xsxb_get_animation")).animation.id, "joined");
     await call("xsxb_manage_animation", { action: "rename", target_animation_id: "renamed", dry_run: false });
+    assert.equal((await call("xsxb_get_animation")).animation.id, "renamed");
     const renamed = await call("xsxb_get_animation", { animation_id: "renamed", include: ["attachments"] });
     assert.equal(renamed.attachments[0].key, "hero/renamed:1");
     const manifest = JSON.parse(fs.readFileSync(paths.manifest));
