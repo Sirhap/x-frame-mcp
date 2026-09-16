@@ -666,3 +666,73 @@ test("add_sfx rebind unlinks leftover workspace hash wav", async () => {
     current.cleanup();
   }
 });
+
+test("add_attack_trail rebind unlinks leftover workspace texture png", async () => {
+  const current = await importedFixture();
+  try {
+    const trailA = path.join(current.root, "trail-a.png");
+    const trailB = path.join(current.root, "trail-b.png");
+    fs.writeFileSync(trailA, bodyFrame(1));
+    fs.writeFileSync(trailB, bodyFrame(3));
+    const sticks = [
+      { frame: 0, top: { x: -10, y: -40 }, bottom: { x: 10, y: -8 } },
+      { frame: 1, top: { x: 40, y: -12 }, bottom: { x: 8, y: -6 } },
+    ];
+    const slash = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailA,
+      sticks,
+      sync: false,
+    });
+    const oldRel = slash.segment.texture.path;
+    const oldAbs = path.resolve(current.root, oldRel);
+    assert.equal(fs.existsSync(oldAbs), true, "first slash workspace texture exists");
+    assert.match(oldRel, /[/\\]attack_trails[/\\]/);
+    assert.ok(!oldRel.includes("presets"), "must not be the preset texture");
+    assert.match(path.basename(oldRel), /^[0-9a-f]{64}\.png$/);
+
+    const glow = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "glow",
+      texture_path: trailA,
+      sticks,
+      sync: false,
+    });
+    assert.equal(glow.segment.texture.path, slash.segment.texture.path, "same dest");
+    assert.equal(fs.existsSync(oldAbs), true, "old dest stays after glow bind");
+
+    const slashRebound = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailB,
+      sticks,
+      sync: false,
+    });
+    assert.notEqual(slashRebound.segment.texture.path, oldRel, "slash path must change");
+    const newAbs = path.resolve(current.root, slashRebound.segment.texture.path);
+    assert.equal(fs.existsSync(newAbs), true, "new slash hash file exists");
+    assert.equal(fs.existsSync(oldAbs), true, "old hash stays while glow still references it");
+
+    const glowRebound = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "glow",
+      texture_path: trailB,
+      sticks,
+      sync: false,
+    });
+    assert.equal(fs.existsSync(oldAbs), false, "old hash unlinks after last rebind");
+    assert.equal(
+      glowRebound.segment.texture.path,
+      slashRebound.segment.texture.path,
+      "both point at new hash file",
+    );
+    assert.equal(
+      fs.existsSync(path.resolve(current.root, glowRebound.segment.texture.path)),
+      true,
+      "new hash file exists",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
