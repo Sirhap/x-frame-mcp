@@ -173,10 +173,10 @@ async function runPlaybookAcceptance(options = {}) {
       heroFrame({ stride: 0, arm: -1 }),
     ];
     const walkFrames = [
-      heroFrame({ stride: -3, arm: 2 }),
-      heroFrame({ stride: 0, arm: 0 }),
-      heroFrame({ stride: 3, arm: -2 }),
-      heroFrame({ stride: 1, arm: 1 }),
+      heroFrame({ stride: 2, arm: 2 }),
+      heroFrame({ stride: 3, arm: 0 }),
+      heroFrame({ stride: 5, arm: -2 }),
+      heroFrame({ stride: 4, arm: 1 }),
     ];
     const jumpFrames = [
       heroFrame({ stride: 0, arm: 1, lift: 0 }),
@@ -389,12 +389,12 @@ async function runPlaybookAcceptance(options = {}) {
     fs.mkdirSync(driftGame);
     fs.writeFileSync(path.join(driftGame, "project.godot"), '[application]\nconfig/name="Drift"\n');
     const bounceDir = writePngSequence(path.join(root, "bounce-seq"), [
-      heroFrame({ stride: -2, arm: 1, lift: 0 }),
-      heroFrame({ stride: 2, arm: -1, lift: 8 }),
+      heroFrame({ stride: 2, arm: 1, lift: 0 }),
+      heroFrame({ stride: 4, arm: -1, lift: 8 }),
     ]);
     const tallDir = writePngSequence(path.join(root, "tall-seq"), [
       heroFrame({ stride: 2, arm: 1, tall: 6 }),
-      heroFrame({ stride: -2, arm: -1, tall: 6 }),
+      heroFrame({ stride: 4, arm: -1, tall: 6 }),
     ]);
     const jumperDir = writePngSequence(path.join(root, "jumper-seq"), [
       heroFrame({ stride: 1, lift: 8 }),

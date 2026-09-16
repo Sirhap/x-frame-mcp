@@ -37,3 +37,22 @@ test("paintHero is a standing figure whose keyed soles stay on the boot row", ()
   }
   assert.ok(hair >= 20 && skin >= 20 && pant >= 20 && boot >= 16, { hair, skin, pant, boot });
 });
+
+test("wide walk stride keeps two separate boot clusters", () => {
+  const walk = heroFrame({ stride: 5 });
+  const xs = [];
+  for (let y = 0; y < walk.height; y += 1) {
+    for (let x = 0; x < walk.width; x += 1) {
+      const i = (y * walk.width + x) * 4;
+      if (
+        walk.data[i] === HERO_COLORS.boot[0] &&
+        walk.data[i + 1] === HERO_COLORS.boot[1] &&
+        walk.data[i + 2] === HERO_COLORS.boot[2]
+      ) {
+        xs.push(x);
+      }
+    }
+  }
+  const span = Math.max(...xs) - Math.min(...xs);
+  assert.ok(span >= 12, `walk boots must be planted apart, span=${span}`);
+});
