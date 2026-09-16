@@ -494,6 +494,47 @@ test("committed slice+import must create an undo checkpoint", async () => {
   }
 });
 
+test("slice_sheet forgets stale Godot imported ctex when dest is a Godot folder", async () => {
+  const current = fixture();
+  try {
+    const dest = path.join(current.root, "godot", "cells");
+    const sheetPath = path.join(current.root, "sheet.png");
+    writeColorSheet(sheetPath, [RED, GREEN, BLUE, YELLOW]);
+    const first = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 2,
+      dest,
+    });
+    assert.equal(first.frameCount, 4);
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    const imported = path.join(current.root, "godot", ".godot", "imported");
+    fs.mkdirSync(imported, { recursive: true });
+    fs.writeFileSync(path.join(dest, "2.png.import"), 'path="res://.godot/imported/cell_2.ctex"\n');
+    fs.writeFileSync(path.join(imported, "cell_2.ctex"), "stale-ctex-2");
+    fs.writeFileSync(path.join(imported, "cell_2.md5"), 'source_md5="deadbeef"\n');
+    fs.writeFileSync(path.join(dest, "0.png.import"), 'path="res://.godot/imported/cell_0.ctex"\n');
+    fs.writeFileSync(path.join(imported, "cell_0.ctex"), "stale-ctex-0");
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 1,
+      cell: 4,
+      dest,
+    });
+    assert.equal(sliced.frameCount, 2);
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "2.png.import")), false);
+    assert.equal(fs.existsSync(path.join(imported, "cell_2.ctex")), false);
+    assert.equal(fs.existsSync(path.join(imported, "cell_0.ctex")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("wrong path, non-png, and zero columns throw clearly", async () => {
   const current = fixture();
   try {
