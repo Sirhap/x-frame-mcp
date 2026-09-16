@@ -70,4 +70,56 @@ function commitDocuments(paths, documents, files = [], removed = []) {
     for (const [key, value] of Object.entries(documents)) transaction.writeJson(paths[key], value);
   });
 }
-module.exports = { clone, requireId, frameIndexes, walkFiles, loadDocuments, commitDocuments };
+/** Moves persisted point coordinates by the same origin delta as their frame pixels. */
+function translateAnnotations(documents, key, dx, dy) {
+  const boxes = documents.tuning.frame_box_overrides?.[key];
+  for (const box of Object.values(boxes || {}))
+    if (box?.offset) {
+      box.offset.x = Number(box.offset.x || 0) + dx;
+      box.offset.y = Number(box.offset.y || 0) + dy;
+    }
+  for (const binding of documents.frameImageAttachments || [])
+    if ((binding.key || binding.frameKey) === key && binding.transform?.offset) {
+      binding.transform.offset.x += dx;
+      binding.transform.offset.y += dy;
+    }
+  const split = key.lastIndexOf(":"),
+    group = key.slice(0, split),
+    frame = Number(key.slice(split + 1));
+  for (const segment of documents.attackTrails.bindings?.[group] || [])
+    for (const stick of segment.sticks || [])
+      if (stick.frame === frame)
+        for (const name of ["top", "bottom"])
+          if (stick[name]) {
+            stick[name].x += dx;
+            stick[name].y += dy;
+          }
+}
+/**
+ * Writes tuning, attachments, and trails only when those documents already hold bindings.
+ * @param {{writeJson:Function}} transaction Open file transaction.
+ * @param {object} paths Project store paths.
+ * @param {object} documents Loaded authoring documents.
+ * @returns {void}
+ */
+function persistAnnotationDocuments(transaction, paths, documents) {
+  if (documents.tuning?.frame_box_overrides && Object.keys(documents.tuning.frame_box_overrides).length) {
+    transaction.writeJson(paths.tuning, documents.tuning);
+  }
+  if (Array.isArray(documents.frameImageAttachments) && documents.frameImageAttachments.length) {
+    transaction.writeJson(paths.frameImageAttachments, documents.frameImageAttachments);
+  }
+  if (documents.attackTrails?.bindings && Object.keys(documents.attackTrails.bindings).length) {
+    transaction.writeJson(paths.attackTrails, documents.attackTrails);
+  }
+}
+module.exports = {
+  clone,
+  requireId,
+  frameIndexes,
+  walkFiles,
+  loadDocuments,
+  commitDocuments,
+  translateAnnotations,
+  persistAnnotationDocuments,
+};

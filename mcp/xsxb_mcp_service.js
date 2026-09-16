@@ -23,7 +23,12 @@ const {
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
 const { shouldCommit } = require("./xsxb_mcp_commit");
-const { frameIndexes } = require("./authoring/common");
+const {
+  frameIndexes,
+  loadDocuments,
+  persistAnnotationDocuments,
+  translateAnnotations,
+} = require("./authoring/common");
 const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
@@ -3424,6 +3429,9 @@ function createXsxbMcpService(options = {}) {
     if (!rawShifts.length) throw new Error("frames is required; each entry needs frame plus dx and/or dy.");
     const shifted = [];
     let sizeChanged = false;
+    let annotationsChanged = false;
+    const { paths, documents } = loadDocuments(projectStore, project);
+    const annotationKey = (index) => `${profile.id}/${animation.id || animation.name}:${index}`;
     withFileTransaction((transaction) => {
       for (const entry of rawShifts) {
         if (!entry || typeof entry !== "object") continue;
@@ -3457,6 +3465,14 @@ function createXsxbMcpService(options = {}) {
         const outHeight = Math.max(image.height, destMaxY + 1);
         const next = shiftPlantedRgba(image.data, image.width, image.height, dx, dy, outHeight);
         transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
+        const oldAnchor = canvasAnchor(image.width, image.height, animation.anchorMode);
+        const newAnchor = canvasAnchor(image.width, outHeight, animation.anchorMode);
+        const shiftX = oldAnchor.x + dx - newAnchor.x;
+        const shiftY = oldAnchor.y + dy - newAnchor.y;
+        if (shiftX !== 0 || shiftY !== 0) {
+          translateAnnotations(documents, annotationKey(index), shiftX, shiftY);
+          annotationsChanged = true;
+        }
         if (
           Number(frames[index].width || 0) !== image.width ||
           Number(frames[index].height || 0) !== outHeight
@@ -3471,6 +3487,7 @@ function createXsxbMcpService(options = {}) {
       if (sizeChanged) {
         transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
       }
+      if (annotationsChanged) persistAnnotationDocuments(transaction, paths, documents);
     });
     return {
       projectId: project.id,
@@ -3572,6 +3589,9 @@ function createXsxbMcpService(options = {}) {
         : rawTargetY;
     const receipts = [];
     let sizeChanged = false;
+    let annotationsChanged = false;
+    const { paths, documents } = loadDocuments(projectStore, project);
+    const annotationKey = (index) => `${profile.id}/${animation.id || animation.name}:${index}`;
     withFileTransaction((transaction) => {
       for (const index of indexes) {
         const target = resolveAnimationFramePath(project, frames[index].path, animation);
@@ -3603,6 +3623,14 @@ function createXsxbMcpService(options = {}) {
           transaction.writeFile(target, encodePngRgba(next, outWidth, outHeight));
         }
         if (apply) {
+          const oldAnchor = canvasAnchor(padded.width, padded.height, animation.anchorMode);
+          const newAnchor = canvasAnchor(outWidth, outHeight, animation.anchorMode);
+          const shiftX = oldAnchor.x - newAnchor.x;
+          const shiftY = oldAnchor.y + planned.dy - newAnchor.y;
+          if (shiftX !== 0 || shiftY !== 0) {
+            translateAnnotations(documents, annotationKey(index), shiftX, shiftY);
+            annotationsChanged = true;
+          }
           if (
             Number(frames[index].width || 0) !== outWidth ||
             Number(frames[index].height || 0) !== outHeight
@@ -3662,6 +3690,7 @@ function createXsxbMcpService(options = {}) {
       if (apply && sizeChanged) {
         transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
       }
+      if (apply && annotationsChanged) persistAnnotationDocuments(transaction, paths, documents);
     });
     return {
       projectId: project.id,
