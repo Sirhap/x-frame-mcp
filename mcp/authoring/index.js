@@ -70,6 +70,7 @@ function createAuthoringTools(context) {
   const checkpointTools = new Set([
     "xsxb_import_video",
     "xsxb_import_animation",
+    "xsxb_slice_sheet",
     "xsxb_cutout",
     "xsxb_update_frame_boxes",
     "xsxb_update_timing",
@@ -92,6 +93,7 @@ function createAuthoringTools(context) {
   function checkpoint(name, args) {
     if (!checkpointTools.has(name) || args.dry_run === true || (name === "xsxb_cutout" && args.file_path))
       return null;
+    if (name === "xsxb_slice_sheet" && !(args.animation_id || args.animation)) return null;
     if (
       ["xsxb_register_clip", "xsxb_plant_feet", "xsxb_estimate_visual"].includes(name) &&
       !shouldCommit(args)

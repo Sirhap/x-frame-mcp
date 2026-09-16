@@ -71,6 +71,16 @@ function pixelAt(filePath, x, y) {
   return [...image.data.subarray(index, index + 4)];
 }
 
+/**
+ * Walk-clip frameCount from xsxb_get_project, or 0 if the clip is absent.
+ * @param {object} project Project snapshot receipt.
+ * @returns {number} Frame count.
+ */
+function walkFrameCount(project) {
+  const animation = (project.animations || []).find((entry) => entry.id === "walk");
+  return animation ? animation.frameCount : 0;
+}
+
 test("catalog contains xsxb_slice_sheet immediately after import_video", () => {
   const video = MCP_TOOL_NAMES.indexOf("xsxb_import_video");
   const animation = MCP_TOOL_NAMES.indexOf("xsxb_import_animation");
@@ -281,6 +291,61 @@ test("contact-sheet sidecar: explicit columns+rows still works", async () => {
     assert.equal(sliced.rows, 1);
     assert.deepEqual(pixelAt(sliced.paths[0], 0, 0), RED);
     assert.deepEqual(pixelAt(sliced.paths[3], 4, 4), YELLOW);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("committed slice+import must create an undo checkpoint", async () => {
+  const current = fixture();
+  try {
+    await current.service.call("xsxb_set_active_project", { project_id: "slice" });
+    const sheetPath = path.join(current.root, "sheet.png");
+    writeColorSheet(sheetPath, [RED, GREEN, BLUE, YELLOW]);
+    const revisionsBeforeStandalone = (await current.service.call("xsxb_list_revisions")).revisions.length;
+    const standalone = await current.service.callMcp("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 2,
+      dest: path.join(current.root, "standalone-cells"),
+      project_id: "slice",
+    });
+    assert.equal(standalone.data.frameCount, 4);
+    assert.equal(standalone.data.imported, undefined);
+    assert.equal(
+      (await current.service.call("xsxb_list_revisions")).revisions.length,
+      revisionsBeforeStandalone,
+      "standalone slice must not create a checkpoint",
+    );
+    const projectBefore = await current.service.call("xsxb_get_project", { project_id: "slice" });
+    const frameCountBefore = projectBefore.frameCount;
+    assert.equal(walkFrameCount(projectBefore), 0);
+    const revisionsBefore = (await current.service.call("xsxb_list_revisions")).revisions.length;
+    const sliced = await current.service.callMcp("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 2,
+      animation_id: "walk",
+      project_id: "slice",
+    });
+    assert.ok(sliced.data.imported, "imported");
+    assert.equal(sliced.data.imported.animationId, "walk");
+    assert.equal(sliced.data.imported.importedFrameCount, 4);
+    assert.equal(sliced.data.frameCount, 4);
+    assert.equal(walkFrameCount(await current.service.call("xsxb_get_project", { project_id: "slice" })), 4);
+    assert.ok(
+      (await current.service.call("xsxb_list_revisions")).revisions.length > revisionsBefore,
+      "committed slice+import must create an undo checkpoint",
+    );
+    const undone = await current.service.call("xsxb_undo", { dry_run: false });
+    assert.equal(undone.restored, true);
+    const restored = await current.service.call("xsxb_get_project", { project_id: "slice" });
+    assert.equal(walkFrameCount(restored), 0);
+    assert.equal(restored.frameCount, frameCountBefore);
+    assert.equal(
+      (restored.animations || []).some((entry) => entry.id === "walk"),
+      false,
+    );
   } finally {
     current.cleanup();
   }
