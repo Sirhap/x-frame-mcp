@@ -4,7 +4,7 @@ const { animationLooksAttack, frameBoxKey } = require("./box_estimator");
 const { EMPTY_ATTACK_TRAILS, normalizeAttackTrails, pngInfo } = require("./attack_trails");
 const { EMPTY_MANIFEST, EMPTY_TUNING, createProjectStore, slug } = require("./project_store");
 const { resolveXsxbRoot } = require("./xsxb_root");
-const { GODOT_SYNC_ROOT } = require("./godot_sync");
+const { fileContentHash, GODOT_SYNC_ROOT, sourcePathForFrame } = require("./godot_sync");
 
 const ROOT = resolveXsxbRoot(__dirname);
 const projectStore = createProjectStore(ROOT);
@@ -137,13 +137,17 @@ function resolveSyncRoot(projectRoot) {
 /**
  * True when a bound Godot root has stale or missing game-local authoring copies.
  * Unbound projects return false so callers do not sync.
+ * Detects tuning/manifest identity drift and per-frame PNG content drift
+ * (pixel edits that leave frame counts unchanged).
  * @param {object} project Registry project.
  * @param {object} [store] Project store.
- * @returns {boolean} Whether standalone tuning or manifest identity diverges.
+ * @param {string} [xsxbRoot] Standalone XSXB root used to resolve frame.path.
+ * @returns {boolean} Whether standalone authoring diverges from game-local copies.
  */
-function gameLocalAuthoringStale(project, store = projectStore) {
+function gameLocalAuthoringStale(project, store = projectStore, xsxbRoot = ROOT) {
   const projectRoot = project?.projectRoot ? path.resolve(project.projectRoot) : "";
   if (!projectRoot || !fs.existsSync(path.join(projectRoot, "project.godot"))) return false;
+  const authoringRoot = path.resolve(xsxbRoot || ROOT);
   const paths = store.projectPaths(project);
   const manifest = readJson(paths.manifest, EMPTY_MANIFEST);
   const tuning = readJson(paths.tuning, EMPTY_TUNING);
@@ -162,6 +166,17 @@ function gameLocalAuthoringStale(project, store = projectStore) {
     const expectedFrames = record.animation.frames || [];
     const gameFrames = gameRecord.animation.frames || [];
     if (expectedFrames.length !== gameFrames.length) return true;
+    const pairCount = Math.min(expectedFrames.length, gameFrames.length);
+    for (let index = 0; index < pairCount; index += 1) {
+      const standalonePath = sourcePathForFrame(authoringRoot, projectRoot, expectedFrames[index]?.path);
+      const gameRelative = String(gameFrames[index]?.path || "")
+        .replace(/^res:\/\//, "")
+        .replace(/^\/+/, "");
+      const gamePath = gameRelative ? path.resolve(projectRoot, gameRelative) : "";
+      if (!gamePath || !fs.existsSync(gamePath)) return true;
+      if (!standalonePath || !fs.existsSync(standalonePath)) continue;
+      if (fileContentHash(standalonePath) !== fileContentHash(gamePath)) return true;
+    }
   }
   return false;
 }

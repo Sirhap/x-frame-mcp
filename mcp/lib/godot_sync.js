@@ -497,8 +497,10 @@ function syncGodotProject(root, projectStore, project, options = {}) {
 
 module.exports = {
   GODOT_SYNC_ROOT,
+  fileContentHash,
   godotDataRelPath,
   localFrameRelPath,
+  sourcePathForFrame,
   syncFrameAudio,
   syncFrameImageAttachments,
   syncAttackTrails,

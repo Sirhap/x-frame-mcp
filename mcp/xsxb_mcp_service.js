@@ -2203,8 +2203,9 @@ function createXsxbMcpService(options = {}) {
 
   /**
    * Validates Godot handoff including gameplay wiring and the idle scale contract.
-   * When bound and standalone tuning/manifest diverge from game-local copies,
-   * syncs through the same `synchronize` path as `xsxb_sync_godot` first.
+   * When bound and standalone tuning, manifest identity, or frame PNG bytes
+   * diverge from game-local copies, syncs through the same `synchronize` path
+   * as `xsxb_sync_godot` first.
    * Evidence `cells` lists each blit `{id, frame}` in sheet order for measurable clips.
    * Clips with empty frames, zero decodable PNGs, or no measurable subject are listed in evidence `skipped`.
    * @param {object} args Tool arguments.
@@ -2214,7 +2215,7 @@ function createXsxbMcpService(options = {}) {
     const project = registryProject(args.project_id || args.project, false);
     const requireGameplay = booleanFlag(args.require_gameplay, true);
     const strict = booleanFlag(args.strict, false);
-    if (validGodotProjectRoot(project) && gameLocalAuthoringStale(project, projectStore)) {
+    if (validGodotProjectRoot(project) && gameLocalAuthoringStale(project, projectStore, root)) {
       synchronize(project, true);
     }
     const raw = validateImport(
