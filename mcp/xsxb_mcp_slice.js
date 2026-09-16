@@ -7,6 +7,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { findGodotProjectRoot, forgetGodotImportCache } = require("./lib/godot_sync");
 const { booleanFlag, PNG_NAME, requireExistingFile } = require("./xsxb_mcp_arguments");
 const { decodePngRgba, encodePngRgba } = require("./xsxb_mcp_cutout");
 
@@ -419,6 +420,18 @@ function sliceSheet(args = {}) {
     throw new Error("dest must be a directory, not the sheet PNG.");
   }
   fs.mkdirSync(dest, { recursive: true });
+  const godotRoot = findGodotProjectRoot(dest);
+  if (godotRoot) {
+    for (const name of fs.readdirSync(dest)) {
+      const pngName = /^\d+\.png$/i.test(name)
+        ? name
+        : /^\d+\.png\.import$/i.test(name)
+          ? name.replace(/\.import$/i, "")
+          : "";
+      if (!pngName) continue;
+      forgetGodotImportCache(godotRoot, path.join(dest, pngName));
+    }
+  }
   clearNumberedPngs(dest);
   const paths = [];
   const skipped = [];
