@@ -203,6 +203,47 @@ function overlayGridOptions(args = {}) {
 }
 
 /**
+ * Pads one RGBA frame onto a larger canvas without resampling.
+ * Placement matches `xsxb_resize_canvas` mode=pad (`preserve_origin` default):
+ * destination minus source `canvasAnchor`, integer origin only.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Source frame.
+ * @param {number} width Destination width.
+ * @param {number} height Destination height.
+ * @param {string} [anchorMode] Animation anchor.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} Padded frame.
+ */
+function padFramePreserveOrigin(image, width, height, anchorMode) {
+  const destWidth = Math.trunc(Number(width) || 0);
+  const destHeight = Math.trunc(Number(height) || 0);
+  if (destWidth < 1 || destHeight < 1) {
+    throw new Error("Canvas dimensions must be 1–4096 pixels.");
+  }
+  if (destWidth === image.width && destHeight === image.height) return image;
+  const srcAnchor = canvasAnchor(image.width, image.height, anchorMode);
+  const destAnchor = canvasAnchor(destWidth, destHeight, anchorMode);
+  const rawX = destAnchor.x - srcAnchor.x;
+  const rawY = destAnchor.y - srcAnchor.y;
+  if (!Number.isInteger(rawX) || !Number.isInteger(rawY)) {
+    throw new Error(
+      "Exact origin preservation requires matching width parity; choose an even/odd width matching source canvases.",
+    );
+  }
+  const dx = Math.round(rawX);
+  const dy = Math.round(rawY);
+  const data = new Uint8ClampedArray(destWidth * destHeight * 4);
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= destWidth || ny >= destHeight) continue;
+      const from = (y * image.width + x) * 4;
+      data.set(image.data.subarray(from, from + 4), (ny * destWidth + nx) * 4);
+    }
+  }
+  return { data, width: destWidth, height: destHeight };
+}
+
+/**
  * Frame size + overlay grid used to resolve write-tool cell ids.
  * @param {object} animation Animation record.
  * @param {object} [frameRecord] Manifest frame.
@@ -2107,7 +2148,8 @@ function createXsxbMcpService(options = {}) {
     });
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(composed.data, composed.width, composed.height));
-    const qa = classifyInspectQa({ changedPixelCount: composed.changedPixelCount });
+    const issues = Array.isArray(composed.issues) ? composed.issues : [];
+    const qa = composed.qa || classifyInspectQa({ changedPixelCount: composed.changedPixelCount });
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -2117,9 +2159,12 @@ function createXsxbMcpService(options = {}) {
       mode: composed.mode,
       changedPixelCount: composed.changedPixelCount,
       qa,
+      issues,
       next:
         qa === "warn"
-          ? "stop; frames are identical — confirm the wrong pair was not selected"
+          ? issues[0]
+            ? `stop; ${issues[0]}`
+            : "stop; frames are identical — confirm the wrong pair was not selected"
           : "open preview.path; import is not a visual pass",
       preview: { path: outputPath, width: composed.width, height: composed.height },
     };
@@ -2169,6 +2214,8 @@ function createXsxbMcpService(options = {}) {
           }),
           feetYs: geos.map((geometry) => geometry.feetY),
           bodyHs: geos.map((geometry) => geometry.bodyH),
+          canvasWs: geos.map((geometry) => geometry.canvasW),
+          canvasHs: geos.map((geometry) => geometry.canvasH),
         });
       }
     }
@@ -3275,6 +3322,9 @@ function createXsxbMcpService(options = {}) {
 
   /**
    * Plants opaque soles onto a target group-Y. Translate only.
+   * When `reference_animation_id` is set, pads to at least that canvas first
+   * (same origin-preserving pad as `xsxb_resize_canvas`) then plants at y=-1
+   * of the shared canvas.
    * @param {object} args Tool arguments.
    * @returns {object} Plant receipt.
    */
@@ -3293,6 +3343,20 @@ function createXsxbMcpService(options = {}) {
       indexes = args.frames.map((value) => requireFrameIndex(value, lastIndex));
     }
     const apply = shouldCommit(args);
+    const referenceAnimationId = String(args.reference_animation_id || "").trim();
+    let lockWidth = 0;
+    let lockHeight = 0;
+    if (referenceAnimationId) {
+      const reference = (profile.animations || []).find(
+        (entry) => String(entry.id || entry.name) === referenceAnimationId,
+      );
+      if (!reference) throw new Error(`Reference animation not found: ${referenceAnimationId}`);
+      const referenceImages = collectFramePaths(project, reference, "Reference frame").map((filePath) =>
+        decodePngRgba(filePath),
+      );
+      lockWidth = Math.max(0, ...referenceImages.map((image) => image.width));
+      lockHeight = Math.max(0, ...referenceImages.map((image) => image.height));
+    }
     const receipts = [];
     let sizeChanged = false;
     withFileTransaction((transaction) => {
@@ -3306,27 +3370,43 @@ function createXsxbMcpService(options = {}) {
         );
         if (!fs.existsSync(target)) throw new Error(`Plant refused missing on-disk frame ${index}.`);
         const image = decodePngRgba(transaction.readPath(target));
-        const planned = planPlantFeet(image.data, image.width, image.height, {
+        const destWidth = Math.max(image.width, lockWidth);
+        const destHeight = Math.max(image.height, lockHeight);
+        const padded = padFramePreserveOrigin(image, destWidth, destHeight, animation.anchorMode);
+        const planned = planPlantFeet(padded.data, padded.width, padded.height, {
           targetY: args.target_y,
           to: args.to,
-          ...writePointOptions(animation, frames[index], args, image),
+          ...writePointOptions(animation, frames[index], args, padded),
         });
-        const outHeight = Math.max(image.height, Number(planned.outHeight) || image.height);
-        if (apply && (planned.dy !== 0 || outHeight > image.height)) {
-          const next = shiftPlantedRgba(image.data, image.width, image.height, 0, planned.dy, outHeight);
-          transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
+        const outHeight = Math.max(padded.height, Number(planned.outHeight) || padded.height);
+        const outWidth = padded.width;
+        const grew =
+          planned.dy !== 0 ||
+          outHeight > padded.height ||
+          outWidth !== image.width ||
+          padded.height !== image.height;
+        if (apply && grew) {
+          const next = shiftPlantedRgba(padded.data, padded.width, padded.height, 0, planned.dy, outHeight);
+          transaction.writeFile(target, encodePngRgba(next, outWidth, outHeight));
         }
         if (apply) {
           if (
-            Number(frames[index].width || 0) !== image.width ||
+            Number(frames[index].width || 0) !== outWidth ||
             Number(frames[index].height || 0) !== outHeight
           ) {
-            frames[index].width = image.width;
+            frames[index].width = outWidth;
             frames[index].height = outHeight;
             sizeChanged = true;
           }
         }
-        receipts.push({ index, feetY: planned.feetY, dy: planned.dy, targetY: planned.targetY });
+        receipts.push({
+          index,
+          feetY: planned.feetY,
+          dy: planned.dy,
+          targetY: planned.targetY,
+          width: outWidth,
+          height: outHeight,
+        });
       }
       if (apply && sizeChanged) {
         transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
@@ -3338,6 +3418,7 @@ function createXsxbMcpService(options = {}) {
       animationId: String(animation.id || animation.name),
       applied: apply,
       dryRun: booleanFlag(args.dry_run) || !apply,
+      referenceAnimationId: referenceAnimationId || undefined,
       frames: receipts,
       space: "group",
       sync: synchronize(project, apply ? booleanFlag(args.sync) : false),

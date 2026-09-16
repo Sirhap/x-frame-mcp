@@ -14,6 +14,7 @@ const FX_TYPES = new Set(["vfx", "prop", "scene_prop_attachment", "overlay", "fx
 const FX_TOKENS = new Set(["vfx", "fx", "effect", "overlay", "prop", "airborne", "jump"]);
 const DEFAULT_FEET_TOLERANCE = 2;
 const DEFAULT_HEIGHT_TOLERANCE = 2;
+const DEFAULT_CANVAS_TOLERANCE = 0;
 const SYNC_ROOT_ALIASES = Object.freeze(["xsxb_frame_tuner", "x_frame"]);
 
 /**
@@ -66,10 +67,27 @@ function median(values) {
 }
 
 /**
- * Compares grounded clips to idle (or the first grounded clip) for feet/height drift.
- * @param {Array<{id:string,grounded?:boolean,feetY?:number,bodyH?:number,feetYs?:number[],bodyHs?:number[]}>} clips
+ * Reads a clip canvas edge from a scalar or per-frame list.
+ * @param {object} clip Measured clip.
+ * @param {"W"|"H"} axis Width or height.
+ * @returns {number|null} Pixel size, or null when unknown.
+ */
+function resolveClipCanvas(clip, axis) {
+  const scalarKey = axis === "W" ? "canvasW" : "canvasH";
+  const listKey = axis === "W" ? "canvasWs" : "canvasHs";
+  const scalar = Number(clip?.[scalarKey]);
+  if (Number.isFinite(scalar) && scalar > 0) return scalar;
+  const list = Array.isArray(clip?.[listKey]) ? clip[listKey] : [];
+  const values = list.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+  return values.length ? median(values) : null;
+}
+
+/**
+ * Compares grounded clips to idle (or the first grounded clip) for feet, height, and canvas size.
+ * Canvas mismatch uses 0px slop so a 256-tall walk against a 264-tall idle cannot pass as clean.
+ * @param {Array<{id:string,grounded?:boolean,feetY?:number,bodyH?:number,feetYs?:number[],bodyHs?:number[],canvasW?:number,canvasH?:number,canvasWs?:number[],canvasHs?:number[]}>} clips
  *   Measured animations.
- * @param {{feetTolerance?:number,heightTolerance?:number}} [options] Pixel slop.
+ * @param {{feetTolerance?:number,heightTolerance?:number,canvasTolerance?:number}} [options] Pixel slop.
  * @returns {{ok:boolean,reference:string|null,issues:string[],clips:object[]}} Contract.
  */
 function evaluateScaleContract(clips, options = {}) {
@@ -79,6 +97,9 @@ function evaluateScaleContract(clips, options = {}) {
   const heightTolerance = Number.isFinite(Number(options.heightTolerance))
     ? Number(options.heightTolerance)
     : DEFAULT_HEIGHT_TOLERANCE;
+  const canvasTolerance = Number.isFinite(Number(options.canvasTolerance))
+    ? Number(options.canvasTolerance)
+    : DEFAULT_CANVAS_TOLERANCE;
   const grounded = (Array.isArray(clips) ? clips : [])
     .filter((clip) => clip && clip.grounded !== false)
     .map((clip) => {
@@ -91,6 +112,8 @@ function evaluateScaleContract(clips, options = {}) {
         ...clip,
         feetY,
         bodyH,
+        canvasW: resolveClipCanvas(clip, "W"),
+        canvasH: resolveClipCanvas(clip, "H"),
         feetSpan: finiteFeet.length ? Math.max(...finiteFeet) - Math.min(...finiteFeet) : 0,
       };
     });
@@ -106,6 +129,10 @@ function evaluateScaleContract(clips, options = {}) {
     if (clip.id === reference.id) continue;
     const dFeet = Math.abs(Number(clip.feetY || 0) - Number(reference.feetY || 0));
     const dHeight = Math.abs(Number(clip.bodyH || 0) - Number(reference.bodyH || 0));
+    const dCanvasW =
+      clip.canvasW != null && reference.canvasW != null ? Math.abs(clip.canvasW - reference.canvasW) : 0;
+    const dCanvasH =
+      clip.canvasH != null && reference.canvasH != null ? Math.abs(clip.canvasH - reference.canvasH) : 0;
     if (dFeet > feetTolerance) {
       issues.push(
         `${clip.id}: feet row drifted ${dFeet}px from ${reference.id} (sole ${clip.feetY} vs ${reference.feetY})`,
@@ -114,6 +141,16 @@ function evaluateScaleContract(clips, options = {}) {
     if (dHeight > heightTolerance) {
       issues.push(
         `${clip.id}: body height drifted ${dHeight}px from ${reference.id} (${clip.bodyH} vs ${reference.bodyH})`,
+      );
+    }
+    if (clip.canvasW != null && reference.canvasW != null && dCanvasW > canvasTolerance) {
+      issues.push(
+        `${clip.id}: canvas width differs ${dCanvasW}px from ${reference.id} (${clip.canvasW} vs ${reference.canvasW})`,
+      );
+    }
+    if (clip.canvasH != null && reference.canvasH != null && dCanvasH > canvasTolerance) {
+      issues.push(
+        `${clip.id}: canvas height differs ${dCanvasH}px from ${reference.id} (${clip.canvasH} vs ${reference.canvasH})`,
       );
     }
   }
@@ -126,8 +163,12 @@ function evaluateScaleContract(clips, options = {}) {
       feetY: clip.feetY,
       bodyH: clip.bodyH,
       feetSpan: clip.feetSpan,
+      canvasW: clip.canvasW,
+      canvasH: clip.canvasH,
       dFeet: Number(clip.feetY || 0) - Number(reference.feetY || 0),
       dBody: Number(clip.bodyH || 0) - Number(reference.bodyH || 0),
+      dCanvasW: clip.canvasW != null && reference.canvasW != null ? clip.canvasW - reference.canvasW : 0,
+      dCanvasH: clip.canvasH != null && reference.canvasH != null ? clip.canvasH - reference.canvasH : 0,
     })),
   };
 }

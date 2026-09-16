@@ -50,6 +50,27 @@ function bodyFrame(canvas, bodyW, bodyH) {
 }
 
 /**
+ * Opaque standing block whose sole sits on an explicit canvas row.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @param {number} feetY Sole row.
+ * @param {number} [bodyW=8] Body width.
+ * @param {number} [bodyH=12] Body height.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} RGBA frame.
+ */
+function bodyOnCanvas(width, height, feetY, bodyW = 8, bodyH = 12) {
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  const left = Math.floor((width - bodyW) / 2);
+  const top = feetY - bodyH + 1;
+  for (let y = top; y <= feetY; y += 1) {
+    for (let x = left; x < left + bodyW; x += 1) {
+      setPixel(rgba, width, x, y, BOOT);
+    }
+  }
+  return { data: rgba, width, height };
+}
+
+/**
  * Standing figure with disconnected ice crystals hanging below the boots.
  * @param {number} canvas Edge length.
  * @returns {{data:Uint8ClampedArray,width:number,height:number}} RGBA frame.
@@ -236,6 +257,58 @@ test("plant keeps hanging ice below the sole by padding the canvas", async () =>
       measureSpriteGeometry(imageAgain.data, imageAgain.width, imageAgain.height).feetY,
       after.feetY,
     );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("catalog plant_feet accepts reference_animation_id", () => {
+  const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
+  assert.ok(plant.inputSchema.properties.reference_animation_id);
+  assert.match(plant.inputSchema.properties.reference_animation_id.description, /idle|canvas/i);
+});
+
+test("plant_feet pads to reference idle canvas then plants at y=-1", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-seq");
+    const walkDir = path.join(current.root, "walk-seq");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idle = bodyOnCanvas(32, 40, 30);
+    const walk = bodyOnCanvas(32, 32, 30);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(walk.data, walk.width, walk.height));
+    fs.writeFileSync(path.join(walkDir, "02.png"), encodePngRgba(walk.data, walk.width, walk.height));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await importWalk(current, walkDir);
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "walk",
+      reference_animation_id: "idle",
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.referenceAnimationId, "idle");
+    assert.equal(planted.frames[0].targetY, -1);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    assert.equal(image.width, 32);
+    assert.equal(image.height, 40);
+    assert.equal(animation.animation.frames[0].width, 32);
+    assert.equal(animation.animation.frames[0].height, 40);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.ok(
+      Math.abs(after.feetY - (image.height - 1)) <= 1,
+      `feetY ${after.feetY} should land on last pixel row ${image.height - 1} of the reference canvas`,
+    );
+    const idleAnim = await current.service.call("xsxb_get_animation", { animation_id: "idle" });
+    const idleImage = decodePngRgba(idleAnim.animation.frames[0].absolutePath);
+    assert.equal(idleImage.width, 32);
+    assert.equal(idleImage.height, 40);
   } finally {
     current.cleanup();
   }

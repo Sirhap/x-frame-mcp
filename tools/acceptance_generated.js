@@ -262,6 +262,148 @@ function isGoldSlash(r, g, b, a) {
 }
 
 /**
+ * True when a pixel is saturated yellow/gold glow, not brown hair or white plate.
+ * @param {number} r Red.
+ * @param {number} g Green.
+ * @param {number} b Blue.
+ * @param {number} a Alpha.
+ * @returns {boolean} Crescent gold sample.
+ */
+function isCrescentGold(r, g, b, a) {
+  if (a < 160) return false;
+  const sat = Math.max(r, g, b) - Math.min(r, g, b);
+  return r >= 220 && g >= 180 && b <= 180 && r - b >= 50 && g - b >= 20 && sat >= 40;
+}
+
+/**
+ * Restricts samples to the right-hand slash (below the head, away from hair).
+ * @param {number} x Column.
+ * @param {number} y Row.
+ * @param {number} width Frame width.
+ * @param {number} height Frame height.
+ * @returns {boolean} Inside the slash region.
+ */
+function inSlashRegion(x, y, width, height) {
+  return x >= Math.round(width * 0.55) && y >= Math.round(height * 0.35);
+}
+
+/**
+ * Finds 8-connected crescent-gold blobs in the slash region.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame.
+ * @returns {Array<{count:number,width:number,height:number,minX:number,minY:number,maxX:number,maxY:number}>}
+ */
+function slashGoldBlobs(image) {
+  const { data, width, height } = image;
+  const seen = new Uint8Array(width * height);
+  const blobs = [];
+  const hit = (x, y) => {
+    const offset = (y * width + x) * 4;
+    return (
+      inSlashRegion(x, y, width, height) &&
+      isCrescentGold(data[offset], data[offset + 1], data[offset + 2], data[offset + 3])
+    );
+  };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const start = y * width + x;
+      if (seen[start] || !hit(x, y)) continue;
+      const stack = [start];
+      seen[start] = 1;
+      let count = 0;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      while (stack.length) {
+        const index = stack.pop();
+        const px = index % width;
+        const py = Math.floor(index / width);
+        count += 1;
+        minX = Math.min(minX, px);
+        minY = Math.min(minY, py);
+        maxX = Math.max(maxX, px);
+        maxY = Math.max(maxY, py);
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (!dx && !dy) continue;
+            const nx = px + dx;
+            const ny = py + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const next = ny * width + nx;
+            if (seen[next] || !hit(nx, ny)) continue;
+            seen[next] = 1;
+            stack.push(next);
+          }
+        }
+      }
+      blobs.push({
+        count,
+        width: maxX - minX + 1,
+        height: maxY - minY + 1,
+        minX,
+        minY,
+        maxX,
+        maxY,
+      });
+    }
+  }
+  return blobs.sort((left, right) => right.count - left.count);
+}
+
+/**
+ * Counts slash-region gold on the steel highlight versus the crescent wings.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame.
+ * @returns {{gold:number,onBlade:number,offBlade:number}} Counts.
+ */
+function goldVersusBladeBox(image) {
+  const { data, width, height } = image;
+  const boxX1 = Math.round((176 / 256) * width);
+  const boxX2 = Math.round((224 / 256) * width);
+  const boxY1 = Math.round((112 / 256) * height);
+  const boxY2 = Math.round((160 / 256) * height);
+  let gold = 0;
+  let onBlade = 0;
+  let offBlade = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      if (!inSlashRegion(x, y, width, height)) continue;
+      if (!isCrescentGold(data[offset], data[offset + 1], data[offset + 2], data[offset + 3])) continue;
+      gold += 1;
+      if (x >= boxX1 && x <= boxX2 && y >= boxY1 && y <= boxY2) onBlade += 1;
+      else offBlade += 1;
+    }
+  }
+  return { gold, onBlade, offBlade };
+}
+
+/**
+ * Asserts the keyed attack plate still has a gold crescent, not a blade sliver.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Keyed frame.
+ * @param {string} label Step label.
+ * @returns {{largest:object,versus:{gold:number,onBlade:number,offBlade:number}}} Metrics.
+ */
+function inspectGoldCrescent(image, label) {
+  const blobs = slashGoldBlobs(image);
+  const largest = blobs[0];
+  const versus = goldVersusBladeBox(image);
+  assert.ok(largest, `${label} left no slash-region gold`);
+  assert.ok(
+    largest.count >= 160,
+    `${label} gold crescent collapsed to a sliver (${largest.count} px, bbox ${largest.width}x${largest.height}; off-blade ${versus.offBlade})`,
+  );
+  assert.ok(
+    largest.width >= 28 && largest.height >= 20,
+    `${label} gold remains a blade-line sliver, not an arc (bbox ${largest.width}x${largest.height} at ${largest.minX},${largest.minY})`,
+  );
+  assert.ok(
+    versus.offBlade >= 200,
+    `${label} gold off the steel box is ${versus.offBlade} (need crescent wings, not a blade highlight; on-blade ${versus.onBlade})`,
+  );
+  return { largest, versus };
+}
+
+/**
  * Opens a magenta flatten and checks the coat/boots were not keyed away.
  * @param {string} previewPath Cutout preview.path.
  * @param {string} label Step label.
@@ -299,19 +441,192 @@ function inspectMagentaPreview(previewPath, label, options = {}) {
   if (options.requireBoots !== false) {
     assert.ok(boot >= 12, `${label} black boots vanished (${boot}) — keyed=true is not enough`);
   }
+  let crescent = null;
   if (options.requireGold) {
-    assert.ok(gold >= 8, `${label} gold slash vanished (${gold})`);
+    crescent = inspectGoldCrescent(image, label);
   }
   return {
     magenta,
     navy,
     boot,
     gold,
+    crescent,
     subject,
     width: image.width,
     height: image.height,
     path: previewPath,
   };
+}
+
+/**
+ * Reads a uniform on-disk canvas from get_animation.
+ * @param {object} receipt Animation receipt.
+ * @returns {{width:number,height:number}} Shared frame size.
+ */
+function readClipCanvas(receipt) {
+  const frames = (receipt.data.animation.frames || []).map((frame) => decodePngRgba(frame.absolutePath));
+  assert.ok(frames.length, "clip has no frames to measure canvas");
+  const width = frames[0].width;
+  const height = frames[0].height;
+  assert.ok(
+    frames.every((frame) => frame.width === width && frame.height === height),
+    `clip frames differ in canvas (${frames.map((frame) => `${frame.width}x${frame.height}`).join(",")})`,
+  );
+  return { width, height };
+}
+
+/**
+ * Asserts grounded clip canvases match idle after plant-to-reference.
+ * @param {object} service MCP service.
+ * @param {string} projectId Project id.
+ * @param {readonly string[]} [animationIds] Clips already imported.
+ * @returns {Promise<Record<string,{width:number,height:number}>>} Measured canvases.
+ */
+async function assertGroundedCanvasesMatchIdle(service, projectId, animationIds = ["walk", "attack"]) {
+  const idle = readClipCanvas(
+    await callTool(service, "xsxb_get_animation", { project_id: projectId, animation_id: "idle" }),
+  );
+  const matched = { idle };
+  for (const animationId of animationIds) {
+    const listed = await callTool(service, "xsxb_get_animation", {
+      project_id: projectId,
+      animation_id: animationId,
+    });
+    const canvas = readClipCanvas(listed);
+    assert.equal(
+      canvas.width,
+      idle.width,
+      `${animationId} canvas width ${canvas.width} != idle ${idle.width}`,
+    );
+    assert.equal(
+      canvas.height,
+      idle.height,
+      `${animationId} canvas height ${canvas.height} != idle ${idle.height}`,
+    );
+    matched[animationId] = canvas;
+  }
+  return matched;
+}
+
+/**
+ * Plants a grounded clip onto idle's canvas at y=-1, then onto idle's sole row.
+ * Reference plant pads to the idle bitmap; y=-1 of that bitmap is the last
+ * pixel row, which sits below idle when plant kept hang/AA under the boots.
+ * @param {object} service MCP service.
+ * @param {string} projectId Project id.
+ * @param {string} animationId Clip to plant.
+ * @returns {Promise<object>} Last plant receipt.
+ */
+async function plantToIdleCanvas(service, projectId, animationId) {
+  const planted = await callTool(service, "xsxb_plant_feet", {
+    project_id: projectId,
+    animation_id: animationId,
+    reference_animation_id: "idle",
+    target_y: -1,
+    apply: true,
+  });
+  assert.equal(planted.ok, true, JSON.stringify(planted.error || planted));
+  const idleCanvas = readClipCanvas(
+    await callTool(service, "xsxb_get_animation", { project_id: projectId, animation_id: "idle" }),
+  );
+  const measured = await callTool(service, "xsxb_measure_frames", {
+    project_id: projectId,
+    animation_id: animationId,
+    reference_animation_id: "idle",
+  });
+  assert.equal(measured.ok, true, JSON.stringify(measured.error || measured));
+  const idleFeetY = Number(measured.data.reference?.feetY);
+  const drift = Math.max(...measured.data.frames.map((frame) => Math.abs(Number(frame.dFeet) || 0)));
+  if (!Number.isFinite(idleFeetY) || drift <= 2) return planted;
+  const aligned = await callTool(service, "xsxb_plant_feet", {
+    project_id: projectId,
+    animation_id: animationId,
+    target_y: idleFeetY - idleCanvas.height,
+    apply: true,
+  });
+  assert.equal(aligned.ok, true, JSON.stringify(aligned.error || aligned));
+  return aligned;
+}
+
+/**
+ * Opens the idle occupancy-diff flatten and asserts a sword-scale delta.
+ * Interior navy mismatch may set qa=warn; that is recorded, not a session fail.
+ * @param {string} previewPath Diff preview.path.
+ * @param {object} diffed Diff receipt.
+ * @returns {{magenta:number,navy:number,subject:number,interiorMagenta:number,changed:number,qa:string,issues:string[]}}
+ */
+function inspectIdleOccupancyDiff(previewPath, diffed) {
+  assert.ok(previewPath && fs.existsSync(previewPath), "idle diff missing preview.path");
+  const image = decodePngRgba(previewPath);
+  const magenta = countPixels(image, isTrueMagenta);
+  let navy = 0;
+  let subject = 0;
+  let interiorMagenta = 0;
+  const x0 = Math.round(image.width * 0.32);
+  const x1 = Math.round(image.width * 0.62);
+  const y0 = Math.round(image.height * 0.22);
+  const y1 = Math.round(image.height * 0.78);
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      const offset = (y * image.width + x) * 4;
+      const r = image.data[offset];
+      const g = image.data[offset + 1];
+      const b = image.data[offset + 2];
+      const a = image.data[offset + 3];
+      if (isTrueMagenta(r, g, b, a)) {
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1) interiorMagenta += 1;
+        continue;
+      }
+      if (a < 160) continue;
+      subject += 1;
+      if (isNavyCoat(r, g, b, a)) navy += 1;
+    }
+  }
+  const changed = Number(diffed.changedPixelCount);
+  const occupancy = Math.max(1, subject + magenta);
+  const fillBudget = Math.max(2500, Math.round(occupancy * 0.18));
+  assert.ok(changed < fillBudget, `idle occupancy delta is a full-body fill (${changed} of ${occupancy})`);
+  assert.ok(magenta < fillBudget, `idle diff preview filled the coat (${magenta} of ${occupancy})`);
+  assert.ok(navy >= 30, `idle diff preview is a filled magenta silhouette (navy=${navy})`);
+  assert.ok(
+    interiorMagenta < fillBudget * 0.5,
+    `idle diff painted the coat interior magenta (${interiorMagenta})`,
+  );
+  if (diffed.qa !== "warn" && changed > 0) {
+    assert.ok(changed >= 20, `idle occupancy delta vanished (${changed})`);
+  }
+  return {
+    magenta,
+    navy,
+    subject,
+    interiorMagenta,
+    changed,
+    qa: diffed.qa,
+    issues: Array.isArray(diffed.issues) ? diffed.issues : [],
+  };
+}
+
+/**
+ * Asserts Godot scale clips share idle/walk/attack canvas height.
+ * @param {object} receipt Validation receipt.
+ * @returns {{idle:object,walk:object,attack:object}} Scale rows.
+ */
+function assertScaleCanvasesMatch(receipt) {
+  const idleScale = scaleClip(receipt, "idle");
+  const walkScale = scaleClip(receipt, "walk");
+  const attackScale = scaleClip(receipt, "attack");
+  assert.ok(idleScale && walkScale && attackScale, "scale_contract missing idle/walk/attack");
+  assert.equal(Number(walkScale.dCanvasH) || 0, 0, `walk dCanvasH=${walkScale.dCanvasH}`);
+  assert.equal(Number(attackScale.dCanvasH) || 0, 0, `attack dCanvasH=${attackScale.dCanvasH}`);
+  if (idleScale.canvasH != null) {
+    assert.equal(walkScale.canvasH, idleScale.canvasH, "walk canvasH != idle");
+    assert.equal(attackScale.canvasH, idleScale.canvasH, "attack canvasH != idle");
+  }
+  if (walkScale.dCanvasW != null) {
+    assert.equal(Number(walkScale.dCanvasW) || 0, 0, `walk dCanvasW=${walkScale.dCanvasW}`);
+    assert.equal(Number(attackScale.dCanvasW) || 0, 0, `attack dCanvasW=${attackScale.dCanvasW}`);
+  }
+  return { idle: idleScale, walk: walkScale, attack: attackScale };
 }
 
 /**
@@ -399,12 +714,7 @@ async function repairGroundedScale(service, projectId) {
       metric: "bbox",
       apply: true,
     });
-    await callTool(service, "xsxb_plant_feet", {
-      project_id: projectId,
-      animation_id: animationId,
-      target_y: -1,
-      apply: true,
-    });
+    await plantToIdleCanvas(service, projectId, animationId);
   }
   return callTool(service, "xsxb_validate_for_godot", {
     project_id: projectId,
@@ -429,8 +739,11 @@ async function runGeneratedAcceptance(options = {}) {
     log,
     visual,
     qa: null,
-    feetY: { idle: null, walk: null },
+    feetY: { idle: null, walk: null, attack: null },
+    canvas: { idle: null, walk: null, attack: null },
     changedPixelCount: null,
+    idleDiff: null,
+    goldCrescent: null,
     idlePreview: null,
     issues: [],
   };
@@ -563,22 +876,20 @@ async function runGeneratedAcceptance(options = {}) {
     const plantPreview = await callTool(service, "xsxb_plant_feet", {
       project_id: "generated",
       animation_id: "walk",
+      reference_animation_id: "idle",
       target_y: -1,
     });
     assert.equal(plantPreview.ok, true);
-    const plantApply = await callTool(service, "xsxb_plant_feet", {
-      project_id: "generated",
-      animation_id: "walk",
-      target_y: -1,
-      apply: true,
-    });
-    assert.equal(plantApply.ok, true, JSON.stringify(plantApply.error || plantApply));
+    const plantApply = await plantToIdleCanvas(service, "generated", "walk");
     const walkPad = await equalizeClipCanvas(
       service,
       { project_id: "generated", animation_id: "walk" },
-      { replant: true },
+      { replant: false },
     );
     if (!walkPad.skipped) log.push(`pad walk ${walkPad.width}x${walkPad.height}`);
+    const groundedAfterWalk = await assertGroundedCanvasesMatchIdle(service, "generated", ["walk"]);
+    report.canvas.idle = groundedAfterWalk.idle;
+    report.canvas.walk = groundedAfterWalk.walk;
     const afterLock = await callTool(service, "xsxb_measure_frames", {
       project_id: "generated",
       animation_id: "walk",
@@ -601,7 +912,12 @@ async function runGeneratedAcceptance(options = {}) {
     assert.equal(diffed.ok, true, JSON.stringify(diffed.error || diffed));
     assert.ok(fs.existsSync(diffed.data.preview.path), "idle diff missing preview.path");
     report.changedPixelCount = diffed.data.changedPixelCount;
-    if (diffed.data.qa === "warn" || Number(diffed.data.changedPixelCount) === 0) {
+    report.idleDiff = inspectIdleOccupancyDiff(diffed.data.preview.path, diffed.data);
+    if (diffed.data.qa === "warn") {
+      visual.push(
+        `idle 0 vs 1 qa=warn occupancy=${diffed.data.changedPixelCount} issues=${(diffed.data.issues || []).join("; ")}`,
+      );
+    } else if (Number(diffed.data.changedPixelCount) === 0) {
       visual.push(
         `idle 0 vs 1 looked identical (qa=${diffed.data.qa} changed=${diffed.data.changedPixelCount})`,
       );
@@ -685,8 +1001,17 @@ async function runGeneratedAcceptance(options = {}) {
       basis_snapshot_id: attackSnap.snapshotId,
     });
     assert.equal(attackCut.ok, true, JSON.stringify(attackCut.error || attackCut));
-    inspectMagentaPreview(attackCut.data.preview.path, "attack cutout", { requireGold: true });
+    inspectMagentaPreview(attackCut.data.preview.path, "attack cutout");
     kept["generated_cutout_attack_preview.png"] = attackCut.data.preview.path;
+    const attackKeyed = await callTool(service, "xsxb_get_animation", {
+      project_id: "generated",
+      animation_id: "attack",
+    });
+    assert.equal(attackKeyed.ok, true, JSON.stringify(attackKeyed.error || attackKeyed));
+    report.goldCrescent = inspectGoldCrescent(
+      decodePngRgba(attackKeyed.data.animation.frames[0].absolutePath),
+      "attack keyed frame 0",
+    );
     const attackLock = await callTool(service, "xsxb_register_clip", {
       project_id: "generated",
       animation_id: "attack",
@@ -695,15 +1020,19 @@ async function runGeneratedAcceptance(options = {}) {
       apply: true,
     });
     assert.equal(attackLock.ok, true, JSON.stringify(attackLock.error || attackLock));
-    const attackPlant = await callTool(service, "xsxb_plant_feet", {
-      project_id: "generated",
-      animation_id: "attack",
-      target_y: -1,
-      apply: true,
-    });
+    const attackPlant = await plantToIdleCanvas(service, "generated", "attack");
     assert.equal(attackPlant.ok, true, JSON.stringify(attackPlant.error || attackPlant));
-    await equalizeClipCanvas(service, { project_id: "generated", animation_id: "attack" }, { replant: true });
-    log.push("cutout jump; lock+plant attack");
+    await equalizeClipCanvas(
+      service,
+      { project_id: "generated", animation_id: "attack" },
+      { replant: false },
+    );
+    const groundedAfterAttack = await assertGroundedCanvasesMatchIdle(service, "generated", [
+      "walk",
+      "attack",
+    ]);
+    report.canvas = { ...report.canvas, ...groundedAfterAttack };
+    log.push("cutout jump; lock+plant attack to idle canvas");
 
     const fxSnap = await observe(service, { project_id: "generated", animation_id: "hit_vfx" });
     const fxCut = await callTool(service, "xsxb_cutout", {
@@ -720,6 +1049,31 @@ async function runGeneratedAcceptance(options = {}) {
     });
     kept["generated_cutout_vfx_preview.png"] = fxCut.data.preview.path;
     log.push("cutout hit_vfx");
+
+    if (resolved.clips.ink_idle) {
+      const inkImport = await callTool(service, "xsxb_import_animation", {
+        project_id: "generated",
+        source: "png_sequence",
+        directory: clipDir("ink_idle"),
+        profile_id: "generated",
+        animation_id: "ink_idle",
+        animation_type: "vfx",
+        fps: 8,
+      });
+      assert.equal(inkImport.ok, true, JSON.stringify(inkImport.error || inkImport));
+      const inkSnap = await observe(service, { project_id: "generated", animation_id: "ink_idle" });
+      const inkCut = await callTool(service, "xsxb_cutout", {
+        project_id: "generated",
+        animation_id: "ink_idle",
+        key_mode: "border_flood",
+        key_color: "#000000",
+        basis_snapshot_id: inkSnap.snapshotId,
+      });
+      assert.equal(inkCut.ok, true, JSON.stringify(inkCut.error || inkCut));
+      inspectMagentaPreview(inkCut.data.preview.path, "ink_idle cutout");
+      kept["generated_cutout_ink_idle_preview.png"] = inkCut.data.preview.path;
+      log.push("cutout ink_idle (vfx, not planted into Godot gate)");
+    }
 
     for (const animationId of ["idle", "walk", "attack"]) {
       const boxes = await callTool(service, "xsxb_estimate_boxes", {
@@ -752,11 +1106,23 @@ async function runGeneratedAcceptance(options = {}) {
     assert.equal(gate.ok, true, JSON.stringify(gate.data?.errors || gate.error || gate));
     assert.equal(gate.data.qa, "clean", JSON.stringify(gate.data?.scale_contract || gate.data));
     assert.equal(gate.data.scale_contract.ok, true);
-    assert.ok(!(gate.data.scale_contract.issues || []).some((issue) => /hit_vfx/.test(issue)));
-    const idleScale = scaleClip(gate, "idle");
-    const walkScale = scaleClip(gate, "walk");
-    if (idleScale) report.feetY.idle = idleScale.feetY;
-    if (walkScale) report.feetY.walk = walkScale.feetY;
+    assert.ok(!(gate.data.scale_contract.issues || []).some((issue) => /hit_vfx|ink_idle/.test(issue)));
+    const scaleCanvases = assertScaleCanvasesMatch(gate);
+    report.feetY.idle = scaleCanvases.idle.feetY;
+    report.feetY.walk = scaleCanvases.walk.feetY;
+    report.feetY.attack = scaleCanvases.attack.feetY;
+    report.canvas.idle = {
+      width: scaleCanvases.idle.canvasW,
+      height: scaleCanvases.idle.canvasH,
+    };
+    report.canvas.walk = {
+      width: scaleCanvases.walk.canvasW,
+      height: scaleCanvases.walk.canvasH,
+    };
+    report.canvas.attack = {
+      width: scaleCanvases.attack.canvasW,
+      height: scaleCanvases.attack.canvasH,
+    };
     report.qa = gate.data.qa;
     kept["generated_godot_evidence.png"] = gate.data.evidence.path;
     kept["generated_run_summary.json"] = gate.data.run_summary.path;
@@ -777,7 +1143,10 @@ async function runGeneratedAcceptance(options = {}) {
             log: report.log,
             qa: report.qa,
             feetY: report.feetY,
+            canvas: report.canvas,
             changedPixelCount: report.changedPixelCount,
+            idleDiff: report.idleDiff,
+            goldCrescent: report.goldCrescent,
             idlePreview: report.idlePreview,
             issues: report.issues,
             visual: report.visual,
@@ -799,7 +1168,7 @@ if (require.main === module) {
   runGeneratedAcceptance()
     .then((report) => {
       process.stdout.write(
-        `Generated session passed. qa=${report.qa} idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} diff=${report.changedPixelCount} keep=${report.keepDir}\n`,
+        `Generated session passed. qa=${report.qa} idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} canvas=${JSON.stringify(report.canvas)} diff=${report.changedPixelCount} keep=${report.keepDir}\n`,
       );
     })
     .catch((error) => {
