@@ -8,8 +8,8 @@ const test = require("node:test");
 const { cutoutFrameFiles, decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { flattenFrameBackground, resolvePreviewBackground } = require("../xsxb_mcp_lock");
 
-const FIXTURE = path.join(__dirname, "../fixtures/generated_hero/attack/00.png");
-const FIXTURE_FOLLOWTHROUGH = path.join(__dirname, "../fixtures/generated_hero/attack/01.png");
+const FIXTURE = path.join(__dirname, "../fixtures/generated_hero/attack/01.png");
+const FIXTURE_FOLLOWTHROUGH = path.join(__dirname, "../fixtures/generated_hero/attack/02.png");
 const PROTECTED_GOLDS = ["#ffe040", "#ffe080", "#ffd070", "#ffcc33"];
 const PREVIEW_PATH = "/tmp/xsxb_cutout_gold_preview.png";
 const PREVIEW_FOLLOWTHROUGH_PATH = "/tmp/xsxb_cutout_gold_followthrough_preview.png";
@@ -203,7 +203,7 @@ function assertNavyCoatIntoBoots(preview) {
 test("fixture attack plate contains a gold crescent, not only blade sparks", () => {
   const source = decodePngRgba(FIXTURE);
   const blobs = slashGoldBlobs(source);
-  assert.ok(blobs.length, "attack/00.png must decode");
+  assert.ok(blobs.length, "attack/01.png slash frame must decode");
   const largest = blobs[0];
   assert.ok(
     largest && largest.count >= 160 && largest.width >= 28 && largest.height >= 20,
@@ -212,7 +212,7 @@ test("fixture attack plate contains a gold crescent, not only blade sparks", () 
 });
 
 test("border_flood + key_color keeps a gold crescent off the steel blade", () => {
-  assert.equal(fs.existsSync(FIXTURE), true, "generated_hero attack/00.png is required");
+  assert.equal(fs.existsSync(FIXTURE), true, "generated_hero attack/01.png slash frame is required");
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-cutout-gold-"));
   const dest = path.join(folder, "00.png");
   try {

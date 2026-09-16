@@ -13,8 +13,8 @@ const { createProjectStore } = require("../../mcp/lib/project_store");
 const { assertFrameBoxes, boxRectOnCanvas, drawBoxesOnMagenta } = require("../acceptance_generated");
 
 const GENERATED_IDLE_0 = path.join(__dirname, "../fixtures/generated_hero/idle/00.png");
-const GENERATED_ATTACK_0 = path.join(__dirname, "../fixtures/generated_hero/attack/00.png");
-const GENERATED_ATTACK_1 = path.join(__dirname, "../fixtures/generated_hero/attack/01.png");
+const GENERATED_ATTACK_SLASH = path.join(__dirname, "../fixtures/generated_hero/attack/01.png");
+const GENERATED_ATTACK_FOLLOW = path.join(__dirname, "../fixtures/generated_hero/attack/02.png");
 
 const CANVAS_W = 256;
 const CANVAS_H = 264;
@@ -321,11 +321,11 @@ test("estimateFrameBoxes hurtbox reaches the hair on generated idle, not the nec
 });
 
 test("estimateFrameBoxes hitbox covers the generated attack gold crescent", () => {
-  assert.ok(fs.existsSync(GENERATED_ATTACK_0), `missing fixture ${GENERATED_ATTACK_0}`);
+  assert.ok(fs.existsSync(GENERATED_ATTACK_SLASH), `missing fixture ${GENERATED_ATTACK_SLASH}`);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-atk-crescent-"));
   try {
     const filePath = path.join(root, "attack0.png");
-    const image = writeKeyedGeneratedPng(GENERATED_ATTACK_0, filePath);
+    const image = writeKeyedGeneratedPng(GENERATED_ATTACK_SLASH, filePath);
     const boxes = estimateFrameBoxes(filePath, {
       type: "actor",
       animationId: "attack",
@@ -376,11 +376,11 @@ test("estimateFrameBoxes hitbox covers the generated attack gold crescent", () =
 });
 
 test("estimateFrameBoxes hitbox covers the generated attack follow-through crescent", () => {
-  assert.ok(fs.existsSync(GENERATED_ATTACK_1), `missing fixture ${GENERATED_ATTACK_1}`);
+  assert.ok(fs.existsSync(GENERATED_ATTACK_FOLLOW), `missing fixture ${GENERATED_ATTACK_FOLLOW}`);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-box-atk-followthrough-"));
   try {
     const filePath = path.join(root, "attack1.png");
-    const image = writeKeyedGeneratedPng(GENERATED_ATTACK_1, filePath);
+    const image = writeKeyedGeneratedPng(GENERATED_ATTACK_FOLLOW, filePath);
     const boxes = estimateFrameBoxes(filePath, {
       type: "actor",
       animationId: "attack",
