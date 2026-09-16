@@ -86,6 +86,7 @@ function createAuthoringTools(context) {
     "xsxb_remove_binding",
     "xsxb_delete_animation",
     "xsxb_reorganize_frames",
+    "xsxb_compress_frames",
   ]);
   /** Records recovery data only for project mutations, never standalone image operations. */
   function checkpoint(name, args) {
@@ -100,6 +101,7 @@ function createAuthoringTools(context) {
       const hasOrder = Array.isArray(args.order) && args.order.length > 0;
       if (booleanFlag(args.dry_run, !hasOrder)) return null;
     }
+    if (name === "xsxb_compress_frames" && booleanFlag(args.dry_run, true)) return null;
     const p = context.registryProject(args.project_id, false);
     return { project: p, revisionId: revisions.save(p, `before ${name}`, true, true).revisionId };
   }

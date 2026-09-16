@@ -86,6 +86,41 @@ test("compression defaults to preview and leaves imported files untouched", asyn
     assert.equal(fs.statSync(file).mtimeMs, before);
   }));
 
+/**
+ * Builds a small unoptimized RGBA PNG so committed compress rewrites bytes.
+ * @param {number} width Pixel width.
+ * @param {number} height Pixel height.
+ * @returns {Buffer} PNG encoded at zlib level 0.
+ */
+function bulkyWalkFramePng(width, height) {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let offset = 0; offset < pixels.length; offset += 4) pixels.set([offset % 250, 40, 200, 255], offset);
+  return encodePngRgba(pixels, width, height, { level: 0 });
+}
+
+test("committed compression checkpoints walk frames and undo restores bytes", async () =>
+  fixture(async ({ call, service }) => {
+    const state = await call("xsxb_get_animation");
+    const file = state.animation.frames[0].absolutePath;
+    fs.writeFileSync(file, bulkyWalkFramePng(16, 16));
+    const before = fs.readFileSync(file);
+    const revisions = (await call("xsxb_list_revisions")).revisions.length;
+    const result = await service.callMcp("xsxb_compress_frames", {
+      animation_id: "walk",
+      dry_run: false,
+    });
+    assert.equal(result.data.dryRun, false);
+    assert.ok(result.data.rewritten >= 1, "level-0 walk frame must shrink on committed compress");
+    assert.ok(!fs.readFileSync(file).equals(before), "committed compress must rewrite PNG bytes");
+    assert.ok(
+      (await call("xsxb_list_revisions")).revisions.length > revisions,
+      "committed compress must create an undo checkpoint",
+    );
+    const undone = await call("xsxb_undo", { dry_run: false });
+    assert.equal(undone.restored, true);
+    assert.deepEqual(fs.readFileSync(file), before);
+  }));
+
 /** Reads walk-clip frameCount from the on-disk project manifest. */
 function walkFrameCountOnDisk(manifestPath) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
