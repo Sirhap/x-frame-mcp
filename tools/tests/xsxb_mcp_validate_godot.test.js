@@ -437,6 +437,67 @@ test("validate_for_godot evidence is one cell per clip, not a 4-frame strip", as
   }
 });
 
+test("validate_for_godot omits zero-decodable clips from evidence.cells and reports them in skipped", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-skipped-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="EvidenceSkipped"\n');
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  const clips = [{ id: "idle" }, { id: "walk" }, { id: "attack" }];
+  try {
+    const body = bodyOnCanvas(256, 264, 256);
+    for (const clip of clips) {
+      const directory = path.join(root, `${clip.id}-seq`);
+      fs.mkdirSync(directory);
+      const png = encodePngRgba(body.data, body.width, body.height);
+      fs.writeFileSync(path.join(directory, "01.png"), png);
+      fs.writeFileSync(path.join(directory, "02.png"), png);
+      const imported = await service.call("xsxb_import_animation", {
+        source: "png_sequence",
+        directory,
+        animation_id: clip.id,
+      });
+      if (clip.id === "attack") {
+        for (const name of fs.readdirSync(imported.targetDirectory)) {
+          if (/\.png$/i.test(name)) fs.unlinkSync(path.join(imported.targetDirectory, name));
+        }
+      }
+    }
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.deepEqual(
+      (gate.evidence.cells || []).map((cell) => cell.id),
+      ["idle", "walk"],
+      "evidence.cells ids must be only idle and walk",
+    );
+    assert.ok(Array.isArray(gate.evidence.skipped), "evidence.skipped must be an array");
+    assert.ok(
+      gate.evidence.skipped.some((entry) => entry && entry.id === "attack"),
+      `evidence.skipped must contain { id: "attack" }: ${JSON.stringify(gate.evidence.skipped)}`,
+    );
+    assert.ok(
+      (gate.warnings || []).some(
+        (warning) => /attack/i.test(warning) && /decodable|missing/i.test(warning),
+      ),
+      `warnings must mention attack / decodable / missing: ${(gate.warnings || []).join("; ")}`,
+    );
+    assert.ok(
+      !(gate.evidence.cells || []).some((cell) => cell.id === "attack"),
+      "gate.evidence.cells must not include attack",
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 const STEEL = Object.freeze([200, 204, 214, 255]);
 const CRESCENT_GOLD = Object.freeze([255, 214, 56, 255]);
 const NAVY = Object.freeze([36, 58, 118, 255]);
