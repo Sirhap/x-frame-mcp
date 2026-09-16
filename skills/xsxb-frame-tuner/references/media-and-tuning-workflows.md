@@ -60,9 +60,9 @@ For a local video that should become one looping animation, stay on XSXB MCP. Fo
 1. If no project exists, `xsxb_create_project`. Import with `xsxb_import_animation` or `xsxb_import_video` (optional `start_time` / `duration`; omit for the full file).
 2. Run `xsxb_cutout` (omit sliders for the shared smart profile; generated black/white plates use `key_mode=border_flood`). Look at `preview.path` (magenta flatten) — not the planted contact sheet — to confirm dark clothes remain.
 3. `xsxb_analyze` (one decode: duplicates, loop, motion, plus a `grid=false` preview sheet). Look at `preview.path` — do not export every candidate with `xsxb_export_sheet`. `oneShotLikely` means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. Skip apply when the receipt has `autoAdjustedThreshold` unless you passed `auto_adjust`.
-4. Inspect the preview, pick `loop.recommended.order` or `motion.order`, and `xsxb_reorganize_frames`.
+4. Inspect the preview and `xsxb_reorganize_frames` with `applyOrder` (not `loop.recommended.order` or `motion.order` alone — those index the full imported clip and keep rest holds).
 5. Keep character scale the same across clips: choose one animation as the template, `xsxb_estimate_visual` with `reference_animation_id` and `apply`, then `xsxb_cutout apply_visual` on a shared canvas.
-6. Finish with one `xsxb_export_gif` of the kept loop.
+6. Finish with one `xsxb_export_gif` of the kept loop with `fps=suggestedGameFps` from the import receipt.
 
 Do not treat a finder or analyze receipt as applied. `xsxb_analyze`, `xsxb_find_duplicates`, and `xsxb_find_loop` only return orders.
 
