@@ -582,6 +582,7 @@ async function runPlaybookAcceptance(options = {}) {
 }
 
 module.exports = {
+  callTool,
   paintGroundedActor,
   paintHero,
   runPlaybookAcceptance,
