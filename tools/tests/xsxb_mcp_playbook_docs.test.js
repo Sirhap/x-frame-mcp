@@ -175,3 +175,26 @@ test("cutout skill keeps gold crescents and re-keys from raw", () => {
   assert.match(cutout, /force/);
   assert.match(cutout, /key_color/);
 });
+
+test("diff_frames catalog names occupancy XOR and qa=warn beyond identical pixels", () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_diff_frames");
+  assert.ok(tool, "xsxb_diff_frames must stay in the catalog");
+  assert.match(
+    tool.description,
+    /occupancy[- ]xor|occupancy delta|occupancy-xor/i,
+    "agents must not treat magenta as a raw RGBA pixel compare",
+  );
+  assert.doesNotMatch(
+    tool.description,
+    /qa is review when pixels changed, warn when frames are identical/,
+    "interior navy/key mismatch also warns; do not equate qa=warn with identical pixels",
+  );
+  assert.match(
+    tool.description,
+    /interior|navy|key mismatch|wrong pair/i,
+    "qa=warn must name the rekey/wrong-pair stop, not only identical frames",
+  );
+  const mode = tool.inputSchema.properties.mode.description || "";
+  assert.match(mode, /occupancy/i, "mode blurb must say occupancy, not generic changed pixels");
+  assert.doesNotMatch(mode, /^diff marks changed pixels magenta/i);
+});

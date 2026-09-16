@@ -1602,7 +1602,7 @@ function toolDefinitions() {
     {
       name: "xsxb_diff_frames",
       description:
-        "Write a real PNG comparing two animation frames. mode=diff paints changed pixels magenta; mode=onion keys the studio plate then paints red/cyan/white. qa is review when pixels changed, warn when frames are identical. Open preview.path — import or sync is not a visual pass. Same-size frames only.",
+        "Write a real PNG comparing two animation frames. Keys both studio plates, then occupancy-XOR (1px pad/AA ignored — not raw RGBA). mode=diff paints occupancy-delta magenta; mode=onion paints red/cyan/white. qa is review when occupancy changed; qa=warn means stop (identical occupancy or interior navy/key mismatch, not only identical pixels). Open preview.path — import or sync is not a visual pass. Same-size frames only.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1613,7 +1613,8 @@ function toolDefinitions() {
             type: "string",
             enum: ["diff", "onion"],
             default: "diff",
-            description: "diff marks changed pixels magenta. onion composites red/cyan intersection.",
+            description:
+              "diff marks occupancy-XOR pixels magenta. onion composites keyed red/cyan intersection.",
           },
           output_path: { type: "string", description: "Optional PNG path. May leave the XSXB root." },
         },
