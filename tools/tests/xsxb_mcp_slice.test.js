@@ -99,6 +99,41 @@ test("catalog contains xsxb_slice_sheet immediately after import_video", () => {
   );
 });
 
+test("slice_sheet pad schema has no injected default so padding alias works", async () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(
+    tool.inputSchema.properties.pad.default,
+    undefined,
+    "schema default 0 is injected and skips the padding alias",
+  );
+
+  const current = fixture();
+  try {
+    const sheetPath = path.join(current.root, "padded-sheet.png");
+    writePaddedTwoCellSheet(sheetPath, RED, GREEN, 8, 4);
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      cell: 8,
+      padding: 4,
+    });
+    assert.equal(sliced.pad, 4);
+    assert.equal(sliced.frameCount, 2);
+    assert.deepEqual(pixelAt(sliced.paths[1], 0, 0), GREEN);
+    await assert.rejects(
+      () =>
+        current.service.call("xsxb_slice_sheet", {
+          file_path: sheetPath,
+          cell: 8,
+          pad: 0,
+          padding: 4,
+        }),
+      /disagree|do not pass both/i,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("a 2×2 sheet of known-color cells slices to 4 PNGs with correct colors", async () => {
   const current = fixture();
   try {
@@ -187,6 +222,28 @@ test("dest outside the XSXB root works", async () => {
     fs.rmSync(dest, { recursive: true, force: true });
   }
 });
+
+/**
+ * Writes a 2×1 sheet of square cells with a transparent gap between them.
+ * @param {string} filePath Destination PNG.
+ * @param {number[]} left RGBA of the first cell.
+ * @param {number[]} right RGBA of the second cell.
+ * @param {number} cellSize Uniform cell edge.
+ * @param {number} pad Transparent pixels between cells.
+ * @returns {void}
+ */
+function writePaddedTwoCellSheet(filePath, left, right, cellSize, pad) {
+  const width = cellSize * 2 + pad;
+  const height = cellSize;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < cellSize; x += 1) {
+      rgba.set(left, (y * width + x) * 4);
+      rgba.set(right, (y * width + cellSize + pad + x) * 4);
+    }
+  }
+  fs.writeFileSync(filePath, encodePngRgba(rgba, width, height));
+}
 
 /**
  * Writes a 1-row packed sheet of equal square cells (no pad).
