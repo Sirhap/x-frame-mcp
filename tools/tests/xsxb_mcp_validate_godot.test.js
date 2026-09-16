@@ -484,9 +484,7 @@ test("validate_for_godot omits zero-decodable clips from evidence.cells and repo
       `evidence.skipped must contain { id: "attack" }: ${JSON.stringify(gate.evidence.skipped)}`,
     );
     assert.ok(
-      (gate.warnings || []).some(
-        (warning) => /attack/i.test(warning) && /decodable|missing/i.test(warning),
-      ),
+      (gate.warnings || []).some((warning) => /attack/i.test(warning) && /decodable|missing/i.test(warning)),
       `warnings must mention attack / decodable / missing: ${(gate.warnings || []).join("; ")}`,
     );
     assert.ok(
