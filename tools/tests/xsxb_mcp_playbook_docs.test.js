@@ -34,6 +34,16 @@ test("video-to-loop playbooks reorganize with applyOrder and export at suggested
   );
 });
 
+test("playbook acceptance pins evidence.cells so attack windup cannot hide", () => {
+  const playbook = fs.readFileSync(path.join(repoRoot, "tools/acceptance_playbooks.js"), "utf8");
+  assert.match(
+    playbook,
+    /deepEqual\(\s*\w+\.data\.evidence\.cells/,
+    "older playbook must pin receipt cells; a windup-as-attack picker must fail",
+  );
+  assert.match(playbook, /expectedPlaybookEvidenceCells/, "pin must use the shared {id,frame} helper");
+});
+
 test("godot skill names evidence as one cell per clip, not always frame 0", () => {
   const godot = fs.readFileSync(path.join(repoRoot, "skills/x-frame-godot/SKILL.md"), "utf8");
   assert.match(godot, /one cell per clip/);

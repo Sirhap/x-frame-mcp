@@ -27,6 +27,24 @@ const {
 
 const BLACK_PLATE = Object.freeze([0, 0, 0, 255]);
 
+/** Import order in `runPlaybookAcceptance` hero project: idle, walk, jump, attack, hit_vfx. */
+const PLAYBOOK_CLIPS = Object.freeze(["idle", "walk", "jump", "attack", "hit_vfx"]);
+
+/**
+ * Sheet-order evidence cells for the painted-hero playbook.
+ * Import order is PLAYBOOK_CLIPS. Idle/walk/hit_vfx stay on 0; jump is
+ * apex 01 (lifted sole); attack is first gold crescent (01), not sword-only
+ * windup 00. A picker that still shows windup as the attack cell must fail.
+ * @param {readonly string[]} [clipIds] Imported clip ids in sheet order.
+ * @returns {Array<{id:string,frame:number}>} One `{id,frame}` per imported clip.
+ */
+function expectedPlaybookEvidenceCells(clipIds = PLAYBOOK_CLIPS) {
+  return [...clipIds].map((id) => ({
+    id,
+    frame: id === "jump" ? 1 : id === "attack" ? 1 : 0,
+  }));
+}
+
 /**
  * Sends one public JSON-RPC tools/call and returns the v2 receipt.
  * @param {object} service MCP service.
@@ -276,6 +294,11 @@ async function runPlaybookAcceptance(options = {}) {
     assertHeroPresent(decodePngRgba(ready.data.evidence.path), "hero evidence");
     assert.ok(ready.data.godot?.runtime?.actorScript);
     assert.equal(JSON.parse(fs.readFileSync(ready.data.run_summary.path, "utf8")).qa, "clean");
+    assert.deepEqual(
+      ready.data.evidence.cells,
+      expectedPlaybookEvidenceCells(["idle"]),
+      "evidence.cells must pin idle=0",
+    );
     kept["playbook_evidence_hero.png"] = ready.data.evidence.path;
     kept["playbook_run_summary_hero.json"] = ready.data.run_summary.path;
 
@@ -293,6 +316,11 @@ async function runPlaybookAcceptance(options = {}) {
     assert.equal(planted.data.scale_contract.ok, true);
     assert.equal(scaleClip(planted, "idle").feetY, HERO.feetY);
     assert.equal(scaleClip(planted, "walk").feetY, HERO.feetY);
+    assert.deepEqual(
+      planted.data.evidence.cells,
+      expectedPlaybookEvidenceCells(["idle", "walk"]),
+      "evidence.cells must pin idle/walk=0",
+    );
 
     await importClip(service, {
       project_id: "hero",
@@ -307,6 +335,11 @@ async function runPlaybookAcceptance(options = {}) {
     assert.equal(withJump.ok, true, JSON.stringify(withJump.data?.errors || withJump.error || withJump));
     assert.equal(withJump.data.scale_contract.ok, true);
     assert.ok(!(withJump.data.scale_contract.issues || []).some((issue) => /jump/.test(issue)));
+    assert.deepEqual(
+      withJump.data.evidence.cells,
+      expectedPlaybookEvidenceCells(["idle", "walk", "jump"]),
+      "evidence.cells must pin jump=1 (apex), not takeoff 0",
+    );
 
     await importClip(service, {
       project_id: "hero",
@@ -321,6 +354,11 @@ async function runPlaybookAcceptance(options = {}) {
     assert.equal(withSlash.ok, true, JSON.stringify(withSlash.data?.errors || withSlash.error || withSlash));
     assert.equal(withSlash.data.scale_contract.ok, true);
     assert.equal(scaleClip(withSlash, "attack").feetY, HERO.feetY);
+    assert.deepEqual(
+      withSlash.data.evidence.cells,
+      expectedPlaybookEvidenceCells(["idle", "walk", "jump", "attack"]),
+      "evidence.cells must pin attack=1 (slash), not windup 0",
+    );
 
     await importClip(service, {
       project_id: "hero",
@@ -335,6 +373,11 @@ async function runPlaybookAcceptance(options = {}) {
     assert.equal(withFx.ok, true, JSON.stringify(withFx.data?.errors || withFx.error || withFx));
     assert.equal(withFx.data.scale_contract.ok, true);
     assert.ok(!(withFx.data.scale_contract.issues || []).some((issue) => /hit_vfx/.test(issue)));
+    assert.deepEqual(
+      withFx.data.evidence.cells,
+      expectedPlaybookEvidenceCells(),
+      "evidence.cells must pin attack=1 (slash), not windup 0",
+    );
 
     const mixedDir = writePngSequence(path.join(root, "mixed-seq"), [
       heroFrame({ stride: 0 }),
@@ -569,7 +612,9 @@ async function runPlaybookAcceptance(options = {}) {
 }
 
 module.exports = {
+  PLAYBOOK_CLIPS,
   callTool,
+  expectedPlaybookEvidenceCells,
   paintGroundedActor,
   paintHero,
   runPlaybookAcceptance,
