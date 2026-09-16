@@ -1496,6 +1496,20 @@ async function runGeneratedAcceptance(options = {}) {
     report.qa = gate.data.qa;
     kept["generated_godot_evidence.png"] = gate.data.evidence.path;
     kept["generated_run_summary.json"] = gate.data.run_summary.path;
+    const evidenceClipCount = REQUIRED_CLIPS.length + (resolved.clips.ink_idle ? 1 : 0);
+    const evidenceCellW = Number(scaleCanvases.idle.canvasW) || Number(report.canvas.idle?.width);
+    assert.ok(Number.isFinite(evidenceCellW) && evidenceCellW > 0, "idle canvasW for evidence cells");
+    assert.notEqual(
+      gate.data.evidence.width,
+      evidenceCellW * 4,
+      "evidence must not stay a 4-cell idle/walk strip",
+    );
+    assert.equal(
+      gate.data.evidence.width,
+      evidenceCellW * evidenceClipCount,
+      `evidence must be one cell per imported clip (${gate.data.evidence.width} vs ${evidenceCellW}×${evidenceClipCount})`,
+    );
+    assert.ok(gate.data.evidence.width >= evidenceCellW * 5);
     log.push(
       `validate_for_godot clean idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} attackFeetY=${report.feetY.attack} dFeet=${scaleCanvases.idle.dFeet}/${scaleCanvases.walk.dFeet}/${scaleCanvases.attack.dFeet}`,
     );

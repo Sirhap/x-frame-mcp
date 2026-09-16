@@ -2198,7 +2198,8 @@ function createXsxbMcpService(options = {}) {
           const filePath = resolveAnimationFramePath(project, frame.path, animation);
           if (!filePath || !fs.existsSync(filePath)) continue;
           const image = decodePngRgba(filePath);
-          if (evidenceFrames.length < 4) evidenceFrames.push(image);
+          // Frame 0 of every clip; a 4-frame cap hid jump/attack/vfx.
+          if (!geos.length) evidenceFrames.push(image);
           geos.push(measureKeyedSubject(image));
         }
         clips.push({

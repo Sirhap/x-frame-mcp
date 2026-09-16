@@ -147,6 +147,55 @@ test("validate_for_godot scale contract fails 256-tall walk against 264-tall idl
   }
 });
 
+test("validate_for_godot evidence is one cell per clip, not a 4-frame strip", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-clips-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="EvidenceClips"\n');
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  const clips = [
+    { id: "idle" },
+    { id: "walk" },
+    { id: "jump" },
+    { id: "attack" },
+    { id: "hit_vfx", animation_type: "vfx" },
+  ];
+  const cellW = 256;
+  const cellH = 264;
+  try {
+    const body = bodyOnCanvas(cellW, cellH, 256);
+    for (const clip of clips) {
+      const directory = path.join(root, `${clip.id}-seq`);
+      fs.mkdirSync(directory);
+      const png = encodePngRgba(body.data, body.width, body.height);
+      fs.writeFileSync(path.join(directory, "01.png"), png);
+      fs.writeFileSync(path.join(directory, "02.png"), png);
+      await service.call("xsxb_import_animation", {
+        source: "png_sequence",
+        directory,
+        animation_id: clip.id,
+        ...(clip.animation_type ? { animation_type: clip.animation_type } : {}),
+      });
+    }
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.equal(gate.evidence.height, cellH);
+    assert.notEqual(gate.evidence.width, cellW * 4, "evidence must not stay a 4-cell idle/walk strip");
+    assert.equal(gate.evidence.width, cellW * clips.length);
+    assert.ok(gate.evidence.width >= cellW * 5);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("isFxOrAirborne matches type and whole tokens, not substrings", () => {
   assert.equal(isFxOrAirborne({ id: "hit_vfx" }), true);
   assert.equal(isFxOrAirborne({ id: "jump" }), true);
