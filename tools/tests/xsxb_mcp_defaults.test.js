@@ -224,9 +224,9 @@ test("catalog preview and sync flags match runtime and avoid conflicting injecte
   assert.match(estimateDryRun.description, /dry_run:\s*true preview/i);
   const reorganizeDryRun = definitions.get("xsxb_reorganize_frames").inputSchema.properties.dry_run;
   assert.equal(reorganizeDryRun.default, undefined);
-  assert.match(reorganizeDryRun.description, /omit.*preview.*order is omitted|omitted.*preview/i);
-  assert.match(reorganizeDryRun.description, /commits? when order is non-empty|non-empty order commits/i);
-  assert.match(reorganizeDryRun.description, /dry_run:\s*true always preview|true always preview/i);
+  assert.match(reorganizeDryRun.description, /omit order always previews.*even dry_run:\s*false/i);
+  assert.match(reorganizeDryRun.description, /non-empty order commits/i);
+  assert.match(reorganizeDryRun.description, /unless dry_run:\s*true/i);
   for (const name of [
     "xsxb_add_attachment",
     "xsxb_add_sfx",

@@ -922,7 +922,7 @@ function toolDefinitions() {
           dry_run: {
             type: "boolean",
             description:
-              "Omit to preview when order is omitted and commit when order is non-empty; dry_run:true always previews.",
+              "Omit order always previews (even dry_run:false); non-empty order commits unless dry_run:true.",
           },
           sync: { type: "boolean", default: false },
         },

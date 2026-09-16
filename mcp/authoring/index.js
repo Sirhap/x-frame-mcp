@@ -101,7 +101,7 @@ function createAuthoringTools(context) {
       return null;
     if (name === "xsxb_reorganize_frames") {
       const hasOrder = Array.isArray(args.order) && args.order.length > 0;
-      if (booleanFlag(args.dry_run, !hasOrder)) return null;
+      if (!hasOrder || booleanFlag(args.dry_run)) return null;
     }
     if (name === "xsxb_compress_frames" && booleanFlag(args.dry_run, true)) return null;
     const p = context.registryProject(args.project_id, false);

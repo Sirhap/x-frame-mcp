@@ -535,6 +535,8 @@ test("XSXB MCP service executes the complete mutation workflow", async () => {
     assert.equal(sfx.sync.audioCount, 1);
 
     const reorganized = await current.service.call("xsxb_reorganize_frames", { dry_run: false });
+    assert.equal(reorganized.dryRun, true);
+    assert.equal(reorganized.applied, false);
     assert.equal(reorganized.outputFrameCount, 3);
     assert.equal(reorganized.identityOrder, true);
 

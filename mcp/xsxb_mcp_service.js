@@ -3237,7 +3237,7 @@ function createXsxbMcpService(options = {}) {
     const { project, profile, animation } = animationFor(args);
     const frames = animation.frames || [];
     const hasOrder = Array.isArray(args.order) && args.order.length > 0;
-    const dryRun = booleanFlag(args.dry_run, !hasOrder);
+    const dryRun = !hasOrder || booleanFlag(args.dry_run);
     let order = Array.isArray(args.order) ? args.order.map(Number) : frames.map((_, index) => index);
     if (String(args.loop_endpoint || "none") === "duplicate_first" && frames.length) {
       order = [...order, 0];
