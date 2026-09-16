@@ -1692,6 +1692,108 @@ test("sync_godot_forgets_stale_imported_ctex_after_attachment_remove", async () 
   }
 });
 
+test("sync_godot_forgets_stale_imported_ctex_after_kept_attachment_overwrite", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const dest = path.join(attachmentDir, pngs[0]);
+    const stem = path.basename(dest, path.extname(dest));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${dest}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+
+    const authoringAttachmentsPath = path.join(
+      current.godotRoot,
+      ".x-frame",
+      "data",
+      "projects",
+      "mcp-test",
+      "frame_image_attachments.json",
+    );
+    assert.equal(fs.existsSync(authoringAttachmentsPath), true, "authoring attachments JSON must exist");
+    const authoringAttachments = JSON.parse(fs.readFileSync(authoringAttachmentsPath, "utf8"));
+    const sparkEntry =
+      authoringAttachments.find((entry) => String(entry?.id || "") === "spark") || authoringAttachments[0];
+    assert.ok(sparkEntry, "authoring frame_image_attachments.json must list spark");
+    if (!sparkEntry.assetHash) sparkEntry.assetHash = stem;
+    fs.writeFileSync(authoringAttachmentsPath, `${JSON.stringify(authoringAttachments, null, 2)}\n`);
+
+    const receiptPath = String(added.binding?.path || "");
+    let sourcePath = receiptPath
+      ? path.isAbsolute(receiptPath)
+        ? receiptPath
+        : path.join(current.root, receiptPath)
+      : "";
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      const recorded = String(sparkEntry.path || "");
+      sourcePath = path.isAbsolute(recorded) ? recorded : path.join(current.root, recorded);
+    }
+    assert.ok(fs.existsSync(sourcePath), "must find workspace attachment source for overwrite");
+
+    const redPng = encodePngRgba(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1);
+    fs.writeFileSync(sourcePath, redPng);
+
+    const synced = await current.service.call("xsxb_sync_godot");
+    assert.equal(synced.ok, true);
+    assert.equal(fs.existsSync(dest), true, "kept dest hash PNG must still exist");
+    assert.equal(
+      fs.readFileSync(dest).equals(ONE_PIXEL_PNG),
+      false,
+      "dest bytes must change after source overwrite",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+      false,
+      `kept ${stem}.ctex must be forgotten after overwrite+sync`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `kept ${stem}.md5 must be forgotten after overwrite+sync`,
+    );
+    assert.equal(fs.existsSync(`${dest}.import`), true, "dest .import sidecar must stay");
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("import can slice frames, replace the same id, and cutout updates the files", async () => {
   const current = fixture();
   try {
