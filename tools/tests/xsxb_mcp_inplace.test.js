@@ -30,14 +30,19 @@ function fixture() {
 }
 
 /**
- * Writes a two-frame PNG sequence.
+ * Writes a numbered PNG sequence.
  * @param {string} directory Sequence directory.
+ * @param {number} [count=2] How many frames to write.
  * @returns {string[]} Absolute PNG paths.
  */
-function writeSequence(directory) {
+function writeSequence(directory, count = 2) {
   fs.mkdirSync(directory, { recursive: true });
-  const files = [path.join(directory, "01.png"), path.join(directory, "02.png")];
-  for (const filePath of files) fs.writeFileSync(filePath, ONE_PIXEL_PNG);
+  const files = [];
+  for (let index = 1; index <= count; index += 1) {
+    const filePath = path.join(directory, `${String(index).padStart(2, "0")}.png`);
+    fs.writeFileSync(filePath, ONE_PIXEL_PNG);
+    files.push(filePath);
+  }
   return files;
 }
 
@@ -242,6 +247,48 @@ test("replacing a copied animation with in_place drops the stale workspace folde
     assert.ok(animation.allFramesGenerated);
   } finally {
     current.cleanup();
+  }
+});
+
+test("import_in_place_replace_drops_stale_pack_pngs", async () => {
+  const current = fixture();
+  const pack = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-game-pack-"));
+  try {
+    const sources = writeSequence(pack, 4);
+    fs.writeFileSync(path.join(pack, "notes.txt"), "keep me\n");
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      in_place: true,
+    });
+    assert.equal(imported.importedFrameCount, 4);
+    const replaced = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      replace: true,
+      in_place: true,
+      start_frame: 0,
+      end_frame: 1,
+    });
+    assert.equal(replaced.replaced, true);
+    assert.equal(replaced.importedFrameCount, 2);
+    assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
+    assert.ok(fs.existsSync(sources[1]), "02.png must stay as the kept source");
+    assert.equal(fs.existsSync(sources[2]), false, "03.png must be unlinked after in_place replace shrinks the clip");
+    assert.equal(fs.existsSync(sources[3]), false, "04.png must be unlinked after in_place replace shrinks the clip");
+    assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "run" });
+    assert.equal(animation.frameCount, 2);
+    assert.equal(animation.animation.frames.length, 2);
+    assert.equal(path.resolve(animation.animation.frames[0].absolutePath), path.resolve(sources[0]));
+    assert.equal(path.resolve(animation.animation.frames[1].absolutePath), path.resolve(sources[1]));
+    assert.ok(sameInode(animation.animation.frames[0].absolutePath, sources[0]));
+    assert.ok(sameInode(animation.animation.frames[1].absolutePath, sources[1]));
+  } finally {
+    current.cleanup();
+    fs.rmSync(pack, { recursive: true, force: true });
   }
 });
 
