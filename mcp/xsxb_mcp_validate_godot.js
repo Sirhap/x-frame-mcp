@@ -8,6 +8,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { GODOT_SYNC_ROOT } = require("./lib/godot_sync");
+const { ALPHA_VISIBLE } = require("./xsxb_mcp_cutout");
 const { borderFloodKey, measureSpriteGeometry } = require("./xsxb_mcp_lock");
 
 const FX_TYPES = new Set(["vfx", "prop", "scene_prop_attachment", "overlay", "fx", "effect"]);
@@ -190,6 +191,7 @@ function classifyInspectQa(signal = {}) {
 
 /**
  * Paints a magenta-backed strip of decoded frames for the Godot evidence PNG.
+ * Only visible pixels (`a > ALPHA_VISIBLE`) are copied so pad and shorter cells keep magenta.
  * @param {Array<{data:Uint8ClampedArray|Uint8Array,width:number,height:number}>} images Frames.
  * @returns {{data:Uint8ClampedArray,width:number,height:number}} Evidence bitmap.
  */
@@ -206,6 +208,7 @@ function composeValidationEvidence(images) {
     for (let y = 0; y < frame.height; y += 1) {
       for (let x = 0; x < frame.width; x += 1) {
         const source = (y * frame.width + x) * 4;
+        if (frame.data[source + 3] <= ALPHA_VISIBLE) continue;
         data.set(frame.data.subarray(source, source + 4), (y * width + originX + x) * 4);
       }
     }

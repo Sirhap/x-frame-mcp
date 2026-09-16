@@ -10,6 +10,7 @@ const { createXsxbMcpService } = require("../xsxb_mcp_service");
 const { encodePngRgba } = require("../xsxb_mcp_cutout");
 const {
   classifyInspectQa,
+  composeValidationEvidence,
   evaluateScaleContract,
   isFxOrAirborne,
   measureKeyedSubject,
@@ -351,6 +352,60 @@ test("classifyInspectQa is warn on errors and review on a real diff", () => {
   assert.equal(classifyInspectQa({ changedPixelCount: 0 }), "warn");
   assert.equal(classifyInspectQa({ changedPixelCount: 40 }), "review");
   assert.equal(classifyInspectQa({ errors: [], warnings: [], scaleOk: true }), "clean");
+});
+
+const MAGENTA = Object.freeze([255, 0, 255, 255]);
+
+/**
+ * Reads one RGBA pixel from a decoded bitmap.
+ * @param {{data:Uint8ClampedArray,width:number}} image Sheet or frame.
+ * @param {number} x Column.
+ * @param {number} y Row.
+ * @returns {number[]} `[r,g,b,a]`.
+ */
+function rgbaAt(image, x, y) {
+  const offset = (y * image.width + x) * 4;
+  return Array.from(image.data.subarray(offset, offset + 4));
+}
+
+/**
+ * Empty RGBA canvas, optionally stamped with one opaque pixel.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @param {{x:number,y:number,rgba:number[]}} [stamp] Visible pixel to copy.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} Frame.
+ */
+function blankFrame(width, height, stamp) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  if (stamp) data.set(stamp.rgba, (stamp.y * width + stamp.x) * 4);
+  return { data, width, height };
+}
+
+test("composeValidationEvidence leaves opaque magenta under a 256-tall cell beside a 264-tall sibling", () => {
+  const short = blankFrame(32, 256, { x: 4, y: 255, rgba: [10, 20, 30, 255] });
+  const tall = blankFrame(32, 264, { x: 4, y: 0, rgba: [40, 50, 60, 255] });
+  const sheet = composeValidationEvidence([short, tall]);
+  assert.equal(sheet.width, 64);
+  assert.equal(sheet.height, 264);
+  assert.deepEqual(rgbaAt(sheet, 4, 255), [10, 20, 30, 255]);
+  assert.deepEqual(rgbaAt(sheet, 4, 263), MAGENTA, "short cell must not scale into the extra rows");
+  for (let y = 256; y < 264; y += 1) {
+    assert.deepEqual(rgbaAt(sheet, 4, y), MAGENTA, `extra row ${y} must stay opaque #FF00FF`);
+  }
+});
+
+test("composeValidationEvidence leaves opaque magenta under a 264-tall frame's transparent bottom pad", () => {
+  const padded = blankFrame(32, 264, { x: 4, y: 0, rgba: [10, 20, 30, 255] });
+  const sheet = composeValidationEvidence([padded]);
+  assert.equal(sheet.height, 264);
+  assert.deepEqual(rgbaAt(sheet, 4, 0), [10, 20, 30, 255]);
+  for (let y = 256; y < 264; y += 1) {
+    assert.deepEqual(
+      rgbaAt(sheet, 4, y),
+      MAGENTA,
+      `transparent pad row ${y} must stay opaque #FF00FF, not a=0`,
+    );
+  }
 });
 
 test("measureKeyedSubject finds boot soles on a black plate", () => {
