@@ -408,6 +408,7 @@ function createXsxbMcpService(options = {}) {
 
   /**
    * Copies a local file into the project workspace and returns the repo-relative path.
+   * Rewrites the content-addressed dest when it already exists but bytes have drifted.
    * @param {object} project Project record.
    * @param {string} subdir Workspace subdirectory.
    * @param {string} absolutePath Source file.
@@ -420,7 +421,9 @@ function createXsxbMcpService(options = {}) {
     const hash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
     const extension = path.extname(absolutePath) || "";
     const destPath = path.join(destDir, `${hash}${extension}`);
-    if (!fs.existsSync(destPath)) fs.writeFileSync(destPath, buffer);
+    if (!fs.existsSync(destPath) || !fs.readFileSync(destPath).equals(buffer)) {
+      fs.writeFileSync(destPath, buffer);
+    }
     return reslash(path.relative(root, destPath));
   }
 
