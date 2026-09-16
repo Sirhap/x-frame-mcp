@@ -971,6 +971,52 @@ test("border_flood black plate keeps navy trousers that touch the silhouette", (
   }
 });
 
+test("file_path cutout honors key_mode=border_flood so navy trousers stay", async () => {
+  const width = 32;
+  const height = 32;
+  const black = [0, 0, 0, 255];
+  const skin = [180, 120, 90, 255];
+  const navy = [7, 9, 25, 255];
+  const boot = [80, 160, 200, 255];
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let offset = 0; offset < rgba.length; offset += 4) rgba.set(black, offset);
+  for (let y = 6; y <= 14; y += 1) {
+    for (let x = 12; x <= 19; x += 1) setPixel(rgba, width, x, y, skin);
+  }
+  for (let y = 15; y <= 22; y += 1) {
+    for (let x = 12; x <= 19; x += 1) setPixel(rgba, width, x, y, navy);
+  }
+  for (let y = 23; y <= 25; y += 1) {
+    for (let x = 12; x <= 19; x += 1) setPixel(rgba, width, x, y, boot);
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-cutout-file-flood-"));
+  const service = createXsxbMcpService({ root });
+  try {
+    const filePath = path.join(root, "still.png");
+    fs.writeFileSync(filePath, encodePngRgba(rgba, width, height));
+    const receipt = await service.call("xsxb_cutout", {
+      file_path: filePath,
+      key_mode: "border_flood",
+      key_color: "#000000",
+    });
+    assert.equal(receipt.keyed, true);
+    const out = decodePngRgba(receipt.output_path);
+    assert.equal(out.data[3], 0, "black plate must key");
+    assert.equal(
+      out.data[(18 * width + 15) * 4 + 3],
+      255,
+      "standalone file_path must pass key_mode; smart cutout keys navy trousers as the plate",
+    );
+    assert.deepEqual(
+      [...out.data.subarray((18 * width + 15) * 4, (18 * width + 15) * 4 + 3)],
+      navy.slice(0, 3),
+    );
+  } finally {
+    service.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("in-place file_path cutout does not report processedFrameCount 1 when it skipped", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-cutout-inplace-skip-"));
   const service = createXsxbMcpService({ root });

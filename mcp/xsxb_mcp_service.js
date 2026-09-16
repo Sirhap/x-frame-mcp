@@ -2381,6 +2381,7 @@ function createXsxbMcpService(options = {}) {
       ? Math.max(8, Number(args.output_height || args.canvas || explicitCanvas))
       : undefined;
     const keyColor = args.key_color || args.color || undefined;
+    const keyMode = String(args.key_mode || "smart");
     const cutoutImpl = cutoutPngFileImpl || cutoutPngFile;
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     const receipt = await Promise.resolve(
@@ -2390,6 +2391,7 @@ function createXsxbMcpService(options = {}) {
         outputWidth,
         outputHeight,
         force: booleanFlag(args.force),
+        keyMode,
       }),
     );
     if (!fs.existsSync(outputPath)) {
