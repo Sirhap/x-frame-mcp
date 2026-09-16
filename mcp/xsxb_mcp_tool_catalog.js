@@ -1463,7 +1463,7 @@ function toolDefinitions() {
           force: {
             type: "boolean",
             default: false,
-            description: "Re-cut frames whose borders are already transparent.",
+            description: "Re-key already-keyed frames only with key_color. force alone does not rematch.",
           },
           apply_visual: {
             type: "boolean",

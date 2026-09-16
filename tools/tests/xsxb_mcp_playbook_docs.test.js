@@ -200,6 +200,18 @@ test("cutout skill keeps gold crescents and re-keys from raw", () => {
   assert.match(cutout, /key_color/);
 });
 
+test("cutout catalog force does not rematch without key_color", () => {
+  const cutout = toolDefinitions().find((entry) => entry.name === "xsxb_cutout");
+  assert.ok(cutout, "xsxb_cutout is in the catalog");
+  const force = cutout.inputSchema.properties.force.description || "";
+  assert.match(force, /key_color/, "force must name the required key_color companion");
+  assert.match(
+    force,
+    /plus key_color|with key_color|and key_color/i,
+    "already-keyed rematch is force plus key_color, not force alone",
+  );
+});
+
 test("diff_frames catalog names occupancy XOR and qa=warn beyond identical pixels", () => {
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_diff_frames");
   assert.ok(tool, "xsxb_diff_frames must stay in the catalog");
