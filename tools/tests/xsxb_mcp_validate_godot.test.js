@@ -480,8 +480,10 @@ test("validate_for_godot omits zero-decodable clips from evidence.cells and repo
     );
     assert.ok(Array.isArray(gate.evidence.skipped), "evidence.skipped must be an array");
     assert.ok(
-      gate.evidence.skipped.some((entry) => entry && entry.id === "attack"),
-      `evidence.skipped must contain { id: "attack" }: ${JSON.stringify(gate.evidence.skipped)}`,
+      gate.evidence.skipped.some(
+        (entry) => entry && entry.id === "attack" && entry.reason === "zero_decodable_frames",
+      ),
+      `evidence.skipped must contain { id: "attack", reason: "zero_decodable_frames" }: ${JSON.stringify(gate.evidence.skipped)}`,
     );
     assert.ok(
       (gate.warnings || []).some((warning) => /attack/i.test(warning) && /decodable|missing/i.test(warning)),
@@ -491,6 +493,18 @@ test("validate_for_godot omits zero-decodable clips from evidence.cells and repo
       !(gate.evidence.cells || []).some((cell) => cell.id === "attack"),
       "gate.evidence.cells must not include attack",
     );
+    const scaleIssues = gate.scale_contract?.issues || [];
+    assert.ok(
+      !scaleIssues.some((issue) => /attack/i.test(issue)),
+      `scale_contract.issues must not mention attack: ${JSON.stringify(scaleIssues)}`,
+    );
+    const scaleClips = gate.scale_contract?.clips;
+    if (Array.isArray(scaleClips)) {
+      assert.ok(
+        !scaleClips.some((clip) => clip && clip.id === "attack"),
+        `scale_contract.clips must not include attack: ${JSON.stringify(scaleClips)}`,
+      );
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
