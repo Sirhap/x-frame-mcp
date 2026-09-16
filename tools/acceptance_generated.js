@@ -28,12 +28,18 @@ const HIT_RED = Object.freeze([255, 0, 0, 255]);
 const PREFERRED_ROOT = path.join(__dirname, "fixtures", "generated_hero");
 const ASSET_ROOT = "/opt/cursor/artifacts/assets";
 const DEFAULT_KEEP = "/opt/cursor/artifacts/generated_session_evidence";
-const REQUIRED_CLIPS = Object.freeze(["idle", "walk", "jump", "attack", "hit_vfx"]);
+const REQUIRED_CLIPS = Object.freeze(["idle", "walk", "jump", "attack", "hurt", "hit_vfx"]);
 const ASSET_CANDIDATES = Object.freeze({
   idle: Object.freeze(["hero_idle_a.png", "hero_idle_b.png"]),
   walk: Object.freeze(["hero_walk.png", "hero_walk_b.png", "hero_walk_c.png", "hero_walk_d.png"]),
-  jump: Object.freeze(["hero_jump.png", "hero_jump_b.png", "hero_jump.png"]),
-  attack: Object.freeze(["hero_attack.png", "hero_attack_followthrough.png"]),
+  jump: Object.freeze(["hero_jump_crouch.png", "hero_jump.png", "hero_jump_b.png", "hero_jump_land.png"]),
+  attack: Object.freeze([
+    "hero_attack_windup.png",
+    "hero_attack.png",
+    "hero_attack_followthrough.png",
+    "hero_attack_recover.png",
+  ]),
+  hurt: Object.freeze(["hero_hurt.png", "hero_hurt_b.png"]),
   hit_vfx: Object.freeze(["hero_vfx_burst.png", "hero_vfx_burst_b.png", "hero_vfx_burst.png"]),
   ink_idle: Object.freeze(["hero_idle_black.png", "hero_idle_black.png"]),
 });
@@ -493,7 +499,11 @@ function readClipCanvas(receipt) {
  * @param {readonly string[]} [animationIds] Clips already imported.
  * @returns {Promise<Record<string,{width:number,height:number}>>} Measured canvases.
  */
-async function assertGroundedCanvasesMatchIdle(service, projectId, animationIds = ["walk", "attack"]) {
+async function assertGroundedCanvasesMatchIdle(
+  service,
+  projectId,
+  animationIds = ["walk", "attack", "hurt"],
+) {
   const idle = readClipCanvas(
     await callTool(service, "xsxb_get_animation", { project_id: projectId, animation_id: "idle" }),
   );
@@ -645,16 +655,17 @@ function measureClipSoles(receipt) {
 }
 
 /**
- * Asserts idle/walk/attack sit on idle's measured sole after validate_for_godot.
+ * Asserts idle/walk/attack/hurt sit on idle's measured sole after validate_for_godot.
  * Prefer |dFeet|===0. A 1px AA fringe may use <=1 with a canvas comment; do
  * not keep a silent <=2 (that hid walk/attack one row above the idle sole).
- * @param {{idle:object,walk:object,attack:object}} scaleCanvases Scale rows.
- * @returns {{feetY:{idle:number,walk:number,attack:number},dFeet:{idle:number,walk:number,attack:number}}}
+ * Jump stays airborne and is not checked here.
+ * @param {{idle:object,walk:object,attack:object,hurt?:object}} scaleCanvases Scale rows.
+ * @returns {{feetY:Record<string,number>,dFeet:Record<string,number>}}
  */
 function assertScaleFeetOnIdleSole(scaleCanvases) {
   const feetY = {};
   const dFeet = {};
-  for (const id of ["idle", "walk", "attack"]) {
+  for (const id of ["idle", "walk", "attack", "hurt"]) {
     const clip = scaleCanvases[id];
     feetY[id] = requireFinitePixel(clip.feetY, `${id} feetY`);
     dFeet[id] = requireFinitePixel(clip.dFeet, `${id} dFeet`);
@@ -668,26 +679,33 @@ function assertScaleFeetOnIdleSole(scaleCanvases) {
 }
 
 /**
- * Asserts Godot scale clips share idle/walk/attack canvas height.
+ * Asserts Godot scale clips share idle/walk/attack/hurt canvas height.
  * @param {object} receipt Validation receipt.
- * @returns {{idle:object,walk:object,attack:object}} Scale rows.
+ * @returns {{idle:object,walk:object,attack:object,hurt:object}} Scale rows.
  */
 function assertScaleCanvasesMatch(receipt) {
   const idleScale = scaleClip(receipt, "idle");
   const walkScale = scaleClip(receipt, "walk");
   const attackScale = scaleClip(receipt, "attack");
-  assert.ok(idleScale && walkScale && attackScale, "scale_contract missing idle/walk/attack");
+  const hurtScale = scaleClip(receipt, "hurt");
+  assert.ok(
+    idleScale && walkScale && attackScale && hurtScale,
+    "scale_contract missing idle/walk/attack/hurt",
+  );
   assert.equal(Number(walkScale.dCanvasH) || 0, 0, `walk dCanvasH=${walkScale.dCanvasH}`);
   assert.equal(Number(attackScale.dCanvasH) || 0, 0, `attack dCanvasH=${attackScale.dCanvasH}`);
+  assert.equal(Number(hurtScale.dCanvasH) || 0, 0, `hurt dCanvasH=${hurtScale.dCanvasH}`);
   if (idleScale.canvasH != null) {
     assert.equal(walkScale.canvasH, idleScale.canvasH, "walk canvasH != idle");
     assert.equal(attackScale.canvasH, idleScale.canvasH, "attack canvasH != idle");
+    assert.equal(hurtScale.canvasH, idleScale.canvasH, "hurt canvasH != idle");
   }
   if (walkScale.dCanvasW != null) {
     assert.equal(Number(walkScale.dCanvasW) || 0, 0, `walk dCanvasW=${walkScale.dCanvasW}`);
     assert.equal(Number(attackScale.dCanvasW) || 0, 0, `attack dCanvasW=${attackScale.dCanvasW}`);
+    assert.equal(Number(hurtScale.dCanvasW) || 0, 0, `hurt dCanvasW=${hurtScale.dCanvasW}`);
   }
-  return { idle: idleScale, walk: walkScale, attack: attackScale };
+  return { idle: idleScale, walk: walkScale, attack: attackScale, hurt: hurtScale };
 }
 
 /**
@@ -864,7 +882,8 @@ function assertFrameBoxes(animationId, frameIndex, boxes, image) {
   const { width, height } = image;
   const geometry = measureSpriteGeometry(image.data, width, height);
   const label = `${animationId} frame ${frameIndex}`;
-  const grounded = animationId === "idle" || animationId === "walk" || animationId === "attack";
+  const grounded =
+    animationId === "idle" || animationId === "walk" || animationId === "attack" || animationId === "hurt";
   if (grounded) {
     assert.ok(boxPresent(boxes?.hurtbox), `${label} missing hurtbox`);
     assert.ok(boxPresent(boxes?.collisionbox), `${label} missing collisionbox`);
@@ -993,7 +1012,7 @@ async function repairGroundedScale(service, projectId) {
     target_y: -1,
     apply: true,
   });
-  for (const animationId of ["walk", "attack"]) {
+  for (const animationId of ["walk", "attack", "hurt"]) {
     await callTool(service, "xsxb_register_clip", {
       project_id: projectId,
       animation_id: animationId,
@@ -1027,10 +1046,13 @@ async function runGeneratedAcceptance(options = {}) {
     log,
     visual,
     qa: null,
-    feetY: { idle: null, walk: null, attack: null },
-    canvas: { idle: null, walk: null, attack: null },
-    boxes: { idle: [], walk: [], attack: [] },
+    feetY: { idle: null, walk: null, attack: null, hurt: null },
+    canvas: { idle: null, walk: null, attack: null, hurt: null },
+    boxes: { idle: [], walk: [], attack: [], hurt: [] },
     walkFrameCount: null,
+    jumpFrameCount: null,
+    attackFrameCount: null,
+    hurtFrameCount: null,
     changedPixelCount: null,
     idleDiff: null,
     goldCrescent: null,
@@ -1252,6 +1274,11 @@ async function runGeneratedAcceptance(options = {}) {
       fps: 8,
     });
     assert.equal(jumpImport.ok, true, JSON.stringify(jumpImport.error || jumpImport));
+    report.jumpFrameCount = Number(jumpImport.data.importedFrameCount);
+    assert.ok(
+      report.jumpFrameCount >= 3,
+      `jump must keep at least three poses, got frameCount=${report.jumpFrameCount}`,
+    );
     const attackImport = await callTool(service, "xsxb_import_animation", {
       project_id: "generated",
       source: "png_sequence",
@@ -1261,6 +1288,26 @@ async function runGeneratedAcceptance(options = {}) {
       fps: 8,
     });
     assert.equal(attackImport.ok, true, JSON.stringify(attackImport.error || attackImport));
+    report.attackFrameCount = Number(attackImport.data.importedFrameCount);
+    assert.ok(
+      report.attackFrameCount >= 3,
+      `attack must keep at least three poses, got frameCount=${report.attackFrameCount}`,
+    );
+    const hurtImport = await callTool(service, "xsxb_import_animation", {
+      project_id: "generated",
+      source: "png_sequence",
+      directory: clipDir("hurt"),
+      profile_id: "generated",
+      animation_id: "hurt",
+      fps: 8,
+    });
+    assert.equal(hurtImport.ok, true, JSON.stringify(hurtImport.error || hurtImport));
+    assert.equal(hurtImport.data.animationType, "actor", "hurt is a grounded actor clip, not vfx");
+    report.hurtFrameCount = Number(hurtImport.data.importedFrameCount);
+    assert.ok(
+      report.hurtFrameCount >= 2,
+      `hurt must keep at least two poses, got frameCount=${report.hurtFrameCount}`,
+    );
     const fxImport = await callTool(service, "xsxb_import_animation", {
       project_id: "generated",
       source: "png_sequence",
@@ -1272,7 +1319,7 @@ async function runGeneratedAcceptance(options = {}) {
     });
     assert.equal(fxImport.ok, true, JSON.stringify(fxImport.error || fxImport));
     assert.equal(fxImport.data.animationType, "vfx");
-    log.push("import jump+attack+hit_vfx");
+    log.push("import jump+attack+hurt+hit_vfx");
 
     const jumpSnap = await observe(service, { project_id: "generated", animation_id: "jump" });
     const jumpCut = await callTool(service, "xsxb_cutout", {
@@ -1304,13 +1351,13 @@ async function runGeneratedAcceptance(options = {}) {
     });
     assert.equal(attackKeyed.ok, true, JSON.stringify(attackKeyed.error || attackKeyed));
     report.goldCrescent = {
-      0: inspectGoldCrescent(
-        decodePngRgba(attackKeyed.data.animation.frames[0].absolutePath),
-        "attack keyed frame 0",
-      ),
       1: inspectGoldCrescent(
         decodePngRgba(attackKeyed.data.animation.frames[1].absolutePath),
-        "attack keyed frame 1",
+        "attack keyed slash frame 1",
+      ),
+      2: inspectGoldCrescent(
+        decodePngRgba(attackKeyed.data.animation.frames[2].absolutePath),
+        "attack keyed follow-through frame 2",
       ),
     };
     const attackLock = await callTool(service, "xsxb_register_clip", {
@@ -1329,6 +1376,35 @@ async function runGeneratedAcceptance(options = {}) {
     ]);
     report.canvas = { ...report.canvas, ...groundedAfterAttack };
     log.push("cutout jump; lock+plant attack to idle canvas");
+
+    const hurtSnap = await observe(service, { project_id: "generated", animation_id: "hurt" });
+    const hurtCut = await callTool(service, "xsxb_cutout", {
+      project_id: "generated",
+      animation_id: "hurt",
+      key_mode: "border_flood",
+      key_color: "#F8F8F8",
+      basis_snapshot_id: hurtSnap.snapshotId,
+    });
+    assert.equal(hurtCut.ok, true, JSON.stringify(hurtCut.error || hurtCut));
+    inspectMagentaPreview(hurtCut.data.preview.path, "hurt cutout");
+    kept["generated_cutout_hurt_preview.png"] = hurtCut.data.preview.path;
+    const hurtLock = await callTool(service, "xsxb_register_clip", {
+      project_id: "generated",
+      animation_id: "hurt",
+      reference_animation_id: "idle",
+      mode: "shared_scale",
+      apply: true,
+    });
+    assert.equal(hurtLock.ok, true, JSON.stringify(hurtLock.error || hurtLock));
+    const hurtPlant = await plantToIdleCanvas(service, "generated", "hurt");
+    assert.equal(hurtPlant.ok, true, JSON.stringify(hurtPlant.error || hurtPlant));
+    const groundedAfterHurt = await assertGroundedCanvasesMatchIdle(service, "generated", [
+      "walk",
+      "attack",
+      "hurt",
+    ]);
+    report.canvas = { ...report.canvas, ...groundedAfterHurt };
+    log.push("cutout+lock+plant hurt to idle canvas");
 
     const fxSnap = await observe(service, { project_id: "generated", animation_id: "hit_vfx" });
     const fxCut = await callTool(service, "xsxb_cutout", {
@@ -1376,7 +1452,7 @@ async function runGeneratedAcceptance(options = {}) {
       log.push("cutout ink_idle in throwaway project (black-plate actor, not in Godot gate)");
     }
 
-    for (const animationId of ["idle", "walk", "attack"]) {
+    for (const animationId of ["idle", "walk", "attack", "hurt"]) {
       const estimated = await callTool(service, "xsxb_estimate_boxes", {
         project_id: "generated",
         animation_id: animationId,
@@ -1446,6 +1522,7 @@ async function runGeneratedAcceptance(options = {}) {
     report.feetY.idle = scaleCanvases.idle.feetY;
     report.feetY.walk = scaleCanvases.walk.feetY;
     report.feetY.attack = scaleCanvases.attack.feetY;
+    report.feetY.hurt = scaleCanvases.hurt.feetY;
     report.canvas.idle = {
       width: scaleCanvases.idle.canvasW,
       height: scaleCanvases.idle.canvasH,
@@ -1457,6 +1534,10 @@ async function runGeneratedAcceptance(options = {}) {
     report.canvas.attack = {
       width: scaleCanvases.attack.canvasW,
       height: scaleCanvases.attack.canvasH,
+    };
+    report.canvas.hurt = {
+      width: scaleCanvases.hurt.canvasW,
+      height: scaleCanvases.hurt.canvasH,
     };
     report.qa = gate.data.qa;
     kept["generated_godot_evidence.png"] = gate.data.evidence.path;
@@ -1476,7 +1557,7 @@ async function runGeneratedAcceptance(options = {}) {
     );
     assert.ok(gate.data.evidence.width >= evidenceCellW * 5);
     log.push(
-      `validate_for_godot clean idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} attackFeetY=${report.feetY.attack} dFeet=${scaleCanvases.idle.dFeet}/${scaleCanvases.walk.dFeet}/${scaleCanvases.attack.dFeet}`,
+      `validate_for_godot clean idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} attackFeetY=${report.feetY.attack} hurtFeetY=${report.feetY.hurt} dFeet=${scaleCanvases.idle.dFeet}/${scaleCanvases.walk.dFeet}/${scaleCanvases.attack.dFeet}/${scaleCanvases.hurt.dFeet}`,
     );
     assertScaleFeetOnIdleSole(scaleCanvases);
 
@@ -1498,6 +1579,9 @@ async function runGeneratedAcceptance(options = {}) {
             canvas: report.canvas,
             boxes: report.boxes,
             walkFrameCount: report.walkFrameCount,
+            jumpFrameCount: report.jumpFrameCount,
+            attackFrameCount: report.attackFrameCount,
+            hurtFrameCount: report.hurtFrameCount,
             changedPixelCount: report.changedPixelCount,
             idleDiff: report.idleDiff,
             goldCrescent: report.goldCrescent,
@@ -1518,6 +1602,7 @@ async function runGeneratedAcceptance(options = {}) {
 
 module.exports = {
   ASSET_CANDIDATES,
+  REQUIRED_CLIPS,
   assertFrameBoxes,
   boxRectOnCanvas,
   drawBoxesOnMagenta,

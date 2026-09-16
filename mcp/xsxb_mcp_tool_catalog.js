@@ -911,8 +911,8 @@ function toolDefinitions() {
           },
           dry_run: {
             type: "boolean",
-            default: true,
-            description: "Preview the output order; false commits the reorganization.",
+            description:
+              "Omit to preview when order is omitted and commit when order is non-empty; dry_run:true always previews.",
           },
           sync: { type: "boolean", default: false },
         },

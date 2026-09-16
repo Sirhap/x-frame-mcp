@@ -20,6 +20,7 @@
     "acceptance:session": "node tools/acceptance_session.js",
     "acceptance:generated": "node tools/acceptance_generated.js",
     "acceptance:analyze": "node tools/acceptance_analyze.js",
+    "acceptance:video": "node tools/acceptance_video.js",
     "check": "node tools/check_project.js",
     "benchmark:mcp": "node tools/benchmark_mcp.js"
   },
