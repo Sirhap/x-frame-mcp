@@ -239,6 +239,16 @@ function createAnimationManager(context, revisions) {
             .filter((file) => file && file.startsWith(`${workspace}${path.sep}`) && !referenced.has(file))
         : [];
     commitDocuments(paths, documents, files, removed);
+    if (action === "rename") {
+      const resolvedWorkspace = path.resolve(workspace);
+      const oldDir = path.resolve(resolvedWorkspace, "assets", profile.id, sourceId);
+      if (oldDir.startsWith(`${resolvedWorkspace}${path.sep}`) && fs.existsSync(oldDir)) {
+        const remaining = fs
+          .readdirSync(oldDir, { recursive: true, withFileTypes: true })
+          .some((entry) => entry.isFile());
+        if (!remaining) fs.rmSync(oldDir, { recursive: true, force: true });
+      }
+    }
     if (action === "rename" || action === "copy" || action === "merge") {
       context.selectAnimation(project.id, profile.id, outputPlans[0].id);
     }
