@@ -3174,14 +3174,19 @@ function createXsxbMcpService(options = {}) {
       next.push(attachment);
       added.push(attachment);
     }
-    const hashFile = `${crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex").slice(0, 16)}${path.extname(absolute) || ""}`;
-    const sharedPath = normalizeBindings(bindings).find((entry) => {
-      if (!entry?.path || path.basename(String(entry.path)) !== hashFile) return false;
-      const resolved = safeResolve(root, entry.path);
-      return Boolean(resolved && fs.existsSync(resolved));
-    })?.path;
+    const sourceBuffer = fs.readFileSync(absolute);
+    const hashFile = `${crypto.createHash("sha256").update(sourceBuffer).digest("hex").slice(0, 16)}${path.extname(absolute) || ""}`;
+    const sharedResolved = normalizeBindings(bindings)
+      .map((entry) =>
+        entry?.path && path.basename(String(entry.path)) === hashFile ? safeResolve(root, entry.path) : "",
+      )
+      .find((resolved) => resolved && fs.existsSync(resolved));
+    const sharedIntact =
+      sharedResolved && fs.readFileSync(sharedResolved).equals(sourceBuffer)
+        ? reslash(path.relative(root, sharedResolved))
+        : "";
     const relativePath =
-      sharedPath ||
+      sharedIntact ||
       copyIntoWorkspace(
         project,
         path.join("attachments", profile.id, String(animation.id || animation.name)),
