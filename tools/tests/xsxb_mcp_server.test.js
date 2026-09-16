@@ -701,6 +701,118 @@ animations = [{
   }
 });
 
+/**
+ * Writes a two-clip Godot SpriteFrames tres plus idle/walk PNGs.
+ * @param {string} godotRoot Bound Godot project root.
+ * @param {Buffer} idlePng Idle frame bytes.
+ * @param {Buffer} walkPng Walk frame bytes.
+ * @returns {string} Absolute path to hero.spriteframes.tres.
+ */
+function writeTwoClipSpriteFrames(godotRoot, idlePng, walkPng) {
+  const spriteDir = path.join(godotRoot, "sprites");
+  fs.mkdirSync(spriteDir, { recursive: true });
+  fs.writeFileSync(path.join(spriteDir, "idle.png"), idlePng);
+  fs.writeFileSync(path.join(spriteDir, "walk.png"), walkPng);
+  const tresPath = path.join(spriteDir, "hero.spriteframes.tres");
+  fs.writeFileSync(
+    tresPath,
+    `[ext_resource type="Texture2D" path="res://sprites/idle.png" id="1_tex"]
+[ext_resource type="Texture2D" path="res://sprites/walk.png" id="2_tex"]
+
+[resource]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_tex")
+}],
+"loop": true,
+"name": &"idle",
+"speed": 8.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("2_tex")
+}],
+"loop": true,
+"name": &"walk",
+"speed": 10.0
+}]
+`,
+  );
+  return tresPath;
+}
+
+test("import_spriteframes_animation_id_selects_one_clip_not_renames_every_row", async () => {
+  const idleColor = [210, 36, 42, 255];
+  const walkColor = [32, 80, 200, 255];
+  const idlePng = encodePngRgba(new Uint8ClampedArray(idleColor), 1, 1);
+  const walkPng = encodePngRgba(new Uint8ClampedArray(walkColor), 1, 1);
+
+  const current = fixture();
+  try {
+    const tresPath = writeTwoClipSpriteFrames(current.godotRoot, idlePng, walkPng);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "spriteframes",
+      file_path: tresPath,
+      animation_id: "walk",
+    });
+    assert.equal(imported.importedAnimationCount, 1);
+    assert.equal(imported.animationId, "walk");
+    assert.deepEqual(
+      imported.animations.map((entry) => entry.animationId),
+      ["walk"],
+    );
+
+    const walk = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const pixels = decodePngRgba(walk.animation.frames[0].absolutePath).data;
+    assert.equal(pixels[0], walkColor[0]);
+    assert.equal(pixels[1], walkColor[1]);
+    assert.equal(pixels[2], walkColor[2]);
+
+    const project = await current.service.call("xsxb_get_project");
+    assert.ok(!project.animations.some((entry) => entry.id === "walk_2"));
+    assert.ok(!project.animations.some((entry) => entry.id === "idle"));
+    await assert.rejects(
+      () => current.service.call("xsxb_get_animation", { animation_id: "idle" }),
+      /not found/i,
+    );
+    await assert.rejects(
+      () => current.service.call("xsxb_get_animation", { animation_id: "walk_2" }),
+      /not found/i,
+    );
+  } finally {
+    current.cleanup();
+  }
+
+  const omitted = fixture();
+  try {
+    const tresPath = writeTwoClipSpriteFrames(omitted.godotRoot, idlePng, walkPng);
+    const imported = await omitted.service.call("xsxb_import_animation", {
+      source: "spriteframes",
+      file_path: tresPath,
+    });
+    assert.equal(imported.importedAnimationCount, 2);
+    assert.deepEqual(imported.animations.map((entry) => entry.animationId).sort(), ["idle", "walk"]);
+    const idle = await omitted.service.call("xsxb_get_animation", { animation_id: "idle" });
+    const walk = await omitted.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const idlePixels = decodePngRgba(idle.animation.frames[0].absolutePath).data;
+    const walkPixels = decodePngRgba(walk.animation.frames[0].absolutePath).data;
+    assert.equal(idlePixels[0], idleColor[0]);
+    assert.equal(walkPixels[0], walkColor[0]);
+    await assert.rejects(
+      () =>
+        omitted.service.call("xsxb_import_animation", {
+          source: "spriteframes",
+          file_path: tresPath,
+          animation_id: "jump",
+        }),
+      /jump|available|idle|walk/i,
+    );
+  } finally {
+    omitted.cleanup();
+  }
+});
+
 test("MCP catalog exposes bind, cutout, and active tools without open_tuner", () => {
   for (const name of ["xsxb_bind_godot", "xsxb_cutout", "xsxb_set_active_project"]) {
     assert.ok(MCP_TOOL_NAMES.includes(name), name);
