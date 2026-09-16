@@ -1554,8 +1554,8 @@ function toolDefinitions() {
             type: "integer",
             minimum: 8,
             maximum: 1024,
-            default: 220,
-            description: "Shared cell edge in pixels.",
+            description:
+              "Shared cell edge in pixels. Omit uses 220 when grid is true, else the max frame edge (hosts must not inject 220).",
           },
           pad: { type: "integer", minimum: 1, maximum: 64, default: 8 },
           normalize: {
