@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -223,6 +224,134 @@ async function boundIdleWithoutSync() {
     },
   };
 }
+
+/**
+ * First matching animation's frames from a standalone or game-local manifest.
+ * @param {object} manifest Animation manifest.
+ * @param {string} animationId Clip id.
+ * @returns {object[]} Frame records.
+ */
+function manifestAnimationFrames(manifest, animationId) {
+  for (const profile of Array.isArray(manifest?.profiles) ? manifest.profiles : []) {
+    for (const animation of Array.isArray(profile?.animations) ? profile.animations : []) {
+      if (String(animation.id || animation.name) === animationId) {
+        return Array.isArray(animation.frames) ? animation.frames : [];
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * SHA-256 of one on-disk file.
+ * @param {string} filePath Absolute path.
+ * @returns {string} Hex digest.
+ */
+function fileSha256(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+test("validate_for_godot_syncs_stale_godot_frame_bytes_after_register_clip_without_sync", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-validate-stale-png-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="StalePng"\n');
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  try {
+    await service.call("xsxb_create_project", { project_id: "hero", label: "Hero" });
+    await service.call("xsxb_bind_godot", { project_id: "hero", project_root: godotRoot });
+    const idleDir = path.join(root, "idle-seq");
+    const walkDir = path.join(root, "walk-seq");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idle = bodyOnCanvas(32, 32, 28, 12);
+    const walkShort = bodyOnCanvas(32, 32, 28, 6);
+    const walkTall = bodyOnCanvas(32, 32, 28, 12);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(idleDir, "02.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(
+      path.join(walkDir, "01.png"),
+      encodePngRgba(walkShort.data, walkShort.width, walkShort.height),
+    );
+    fs.writeFileSync(
+      path.join(walkDir, "02.png"),
+      encodePngRgba(walkTall.data, walkTall.width, walkTall.height),
+    );
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+      sync: true,
+    });
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: walkDir,
+      animation_id: "walk",
+      sync: true,
+    });
+
+    const store = createProjectStore(root);
+    const project = store.activeProject("hero");
+    const standaloneManifest = JSON.parse(fs.readFileSync(store.projectPaths(project).manifest, "utf8"));
+    const gameManifestPath = path.join(
+      godotRoot,
+      "xsxb_frame_tuner",
+      "data",
+      "projects",
+      "hero",
+      "animation_manifest.json",
+    );
+    const gameManifest = JSON.parse(fs.readFileSync(gameManifestPath, "utf8"));
+    const standaloneWalk = manifestAnimationFrames(standaloneManifest, "walk")[0];
+    const gameWalk = manifestAnimationFrames(gameManifest, "walk")[0];
+    assert.ok(standaloneWalk?.path, "standalone walk frame 0 must exist after import");
+    assert.ok(gameWalk?.path, "Godot walk frame 0 must exist after sync:true import");
+    const workspacePng = path.resolve(root, standaloneWalk.path);
+    const godotPng = path.resolve(godotRoot, String(gameWalk.path).replace(/^res:\/\//, ""));
+    assert.equal(fs.existsSync(workspacePng), true, `workspace walk PNG missing: ${workspacePng}`);
+    assert.equal(fs.existsSync(godotPng), true, `Godot walk PNG missing: ${godotPng}`);
+
+    const godotHashBeforeEdit = fileSha256(godotPng);
+    assert.equal(fileSha256(workspacePng), godotHashBeforeEdit, "sync:true must copy walk frame 0");
+
+    const locked = await service.call("xsxb_register_clip", {
+      animation_id: "walk",
+      reference_animation_id: "idle",
+      mode: "equalize",
+      apply: true,
+    });
+    assert.equal(locked.applied, true);
+    const workspaceHashAfter = fileSha256(workspacePng);
+    assert.notEqual(
+      workspaceHashAfter,
+      godotHashBeforeEdit,
+      "register_clip apply must change workspace walk pixels",
+    );
+    assert.equal(
+      fileSha256(godotPng),
+      godotHashBeforeEdit,
+      "precondition: Godot walk PNG stays stale when register_clip does not sync",
+    );
+
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.equal(
+      fileSha256(godotPng),
+      workspaceHashAfter,
+      `validate_for_godot must copy drifted walk pixels into Godot: ${JSON.stringify(gate.errors || [])}`,
+    );
+  } finally {
+    service.close?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("validate_for_godot syncs stale game-local tuning after estimate_boxes without sync", async () => {
   const current = await boundIdleWithoutSync();
