@@ -1586,7 +1586,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_overlay",
       description:
-        "Paint two frames as red / cyan / white intersection for neighbor or idle-vs-run QA. Returns mse and leg width. Walk-loop comparison tool — not a smear mesh.",
+        "Paint two frames as red / cyan / white intersection for neighbor or idle-vs-run QA. Returns mse, leg width, and preview.path — agents must open it. Walk-loop comparison tool — not a smear mesh.",
       inputSchema: {
         type: "object",
         properties: {

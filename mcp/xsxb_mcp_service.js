@@ -2020,7 +2020,7 @@ function createXsxbMcpService(options = {}) {
   /**
    * Exports a red/cyan overlay of two frames.
    * @param {object} args Tool arguments.
-   * @returns {object} Overlay receipt.
+   * @returns {object} Overlay receipt including `preview.path` for walk-lock visual QA.
    */
   function exportOverlay(args = {}) {
     const selection = animationFor(args);
@@ -2071,6 +2071,7 @@ function createXsxbMcpService(options = {}) {
       mse: overlay.mse,
       legWidthA: overlay.legWidthA,
       legWidthB: overlay.legWidthB,
+      preview: { path: outputPath, width: overlay.width, height: overlay.height },
     };
   }
 
