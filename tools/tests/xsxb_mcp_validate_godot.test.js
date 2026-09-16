@@ -567,6 +567,40 @@ test("pickValidationEvidenceFrameIndex prefers enabled hit, else gold, else 0", 
   assert.equal(pickValidationEvidenceFrameIndex({ id: "attack" }, []), 0);
 });
 
+test("pickValidationEvidenceFrameIndex picks jump apex, not crouch, and ignores jumper", () => {
+  const width = 32;
+  const height = 32;
+  const crouch = bodyOnCanvas(width, height, height - 1);
+  const rise = bodyOnCanvas(width, height, height - 8);
+  const apex = bodyOnCanvas(width, height, height - 16);
+  const land = bodyOnCanvas(width, height, height - 3);
+  const jumpFrames = [{ image: crouch }, { image: rise }, { image: apex }, { image: land }];
+  assert.equal(
+    measureKeyedSubject(crouch).feetY,
+    height - 1,
+    "frame 0 must be a grounded crouch with soles on the bottom row",
+  );
+  assert.ok(
+    measureKeyedSubject(apex).feetY < measureKeyedSubject(crouch).feetY - 4,
+    "apex boots must sit several rows higher than the crouch",
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "jump" }, jumpFrames),
+    2,
+    "jump evidence must be the airborne apex (highest sole), not crouch frame 0",
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "airborne" }, [{ image: crouch }, { image: apex }]),
+    1,
+    "whole airborne token uses the same apex pick as jump",
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "jumper" }, jumpFrames),
+    0,
+    "jumper is not a whole jump token and must stay on frame 0",
+  );
+});
+
 test("validate_for_godot attack evidence cell is the slash, not windup", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-slash-"));
   const godotRoot = path.join(root, "godot");

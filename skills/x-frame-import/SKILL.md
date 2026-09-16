@@ -15,5 +15,6 @@ State the user goal in one sentence. `xsxb_list_projects` or `xsxb_get_project`.
 3. `xsxb_get_animation` and open a frame or sheet. Frame count matching the folder is not “the character looks right.”
 4. Prefer `xsxb_analyze` after import. Do not `xsxb_export_sheet` every candidate.
 5. Reorder with `xsxb_reorganize_frames` `applyOrder` (not `loop.recommended.order` alone); pass analyze `observation.snapshotId` as `basis_snapshot_id`. Non-empty `order` commits; omit `order` to preview.
+6. After reorganize, `xsxb_export_gif` with `fps=suggestedGameFps` from the import receipt. Omitting `fps` stores the camera rate.
 
 Idle is the scale reference for later grounded clips. Import idle before walk/run when both exist. Then hand off to `skills/x-frame-cutout` or `skills/x-frame-gameplay`. Do not call import or `xsxb_sync_godot` a visual pass. `qa=warn` from a later tool means stop.

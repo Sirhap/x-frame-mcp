@@ -15,6 +15,7 @@ const FX_TYPES = new Set(["vfx", "prop", "scene_prop_attachment", "overlay", "fx
 const FX_TOKENS = new Set(["vfx", "fx", "effect", "overlay", "prop", "airborne", "jump"]);
 const ACTION_HEIGHT_TOKENS = new Set(["attack", "slash", "hurt"]);
 const ATTACK_EVIDENCE_TOKENS = new Set(["attack", "slash"]);
+const JUMP_EVIDENCE_TOKENS = new Set(["jump", "airborne"]);
 const CRESCENT_MIN_PIXELS = 80;
 const CRESCENT_MIN_WIDTH = 20;
 const CRESCENT_MIN_HEIGHT = 8;
@@ -71,6 +72,57 @@ function isAttackEvidenceClip(clip) {
   return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) =>
     ATTACK_EVIDENCE_TOKENS.has(token),
   );
+}
+
+/**
+ * True when a clip is a jump or airborne and its evidence cell should show the apex.
+ * Whole tokens only, same style as `isFxOrAirborne` — jumper does not qualify.
+ * @param {{id?:string,name?:string}} clip Animation fields.
+ * @returns {boolean} True for jump/airborne clips.
+ */
+function isJumpEvidenceClip(clip) {
+  return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) =>
+    JUMP_EVIDENCE_TOKENS.has(token),
+  );
+}
+
+/**
+ * Measured sole row for one decoded evidence frame, or NaN when unusable.
+ * Keys the studio plate first so plate pixels are not treated as boots.
+ * @param {{image?:{data:Uint8ClampedArray|Uint8Array,width?:number,height?:number}}} frame
+ *   Clip frame with a decoded image.
+ * @returns {number} `feetY`, or NaN when the image or subject is missing.
+ */
+function measuredEvidenceFeetY(frame) {
+  const image = frame?.image;
+  const width = Number(image?.width);
+  const height = Number(image?.height);
+  if (!image?.data || !width || !height) return Number.NaN;
+  const geometry = measureKeyedSubject(image);
+  const feetY = Number(geometry?.feetY);
+  if (!Number.isFinite(feetY)) return Number.NaN;
+  if (!(Number(geometry.bodyH) > 0 || Number(geometry.bboxH) > 0)) return Number.NaN;
+  return feetY;
+}
+
+/**
+ * Picks the airborne apex: unique smallest measured `feetY`. Ties or missing stay 0.
+ * @param {Array<{image?:{data:Uint8ClampedArray|Uint8Array,width?:number,height?:number}}>} frames
+ *   Decoded clip frames in order.
+ * @returns {number} Index into `frames`, or 0 when empty, tied, or unmeasured.
+ */
+function pickJumpApexFrameIndex(frames) {
+  const feetYs = frames.map((frame) => measuredEvidenceFeetY(frame));
+  let best = Number.POSITIVE_INFINITY;
+  for (const feetY of feetYs) {
+    if (Number.isFinite(feetY) && feetY < best) best = feetY;
+  }
+  if (!Number.isFinite(best)) return 0;
+  const winners = [];
+  for (let index = 0; index < feetYs.length; index += 1) {
+    if (feetYs[index] === best) winners.push(index);
+  }
+  return winners.length === 1 ? winners[0] : 0;
 }
 
 /**
@@ -192,7 +244,10 @@ function frameHasGoldCrescent(image) {
 /**
  * Picks the representative evidence frame index for one clip.
  * Attack/slash clips prefer the first stored/estimated hitbox with `enabled: true`,
- * else the first gold-crescent frame, else 0. Idle/walk/jump/hurt/vfx stay on 0.
+ * else the first gold-crescent frame, else 0. Jump/airborne clips pick the frame
+ * whose measured sole is highest on the canvas (smallest `feetY` after
+ * `measureKeyedSubject`). Ties or missing `feetY` stay on 0. Idle/walk/hurt/vfx
+ * stay on 0. Whole tokens only — jumper is not a jump clip.
  * @param {{id?:string,name?:string}} clip Animation fields.
  * @param {Array<{image?:{data:Uint8ClampedArray|Uint8Array},hitbox?:{enabled?:boolean}|null}>} frames
  *   Decoded frames plus stored or estimated hitboxes, in clip order.
@@ -200,11 +255,14 @@ function frameHasGoldCrescent(image) {
  */
 function pickValidationEvidenceFrameIndex(clip, frames) {
   if (!Array.isArray(frames) || !frames.length) return 0;
-  if (!isAttackEvidenceClip(clip)) return 0;
-  const hitIndex = frames.findIndex((frame) => frame?.hitbox?.enabled === true);
-  if (hitIndex >= 0) return hitIndex;
-  const goldIndex = frames.findIndex((frame) => frameHasGoldCrescent(frame?.image));
-  if (goldIndex >= 0) return goldIndex;
+  if (isAttackEvidenceClip(clip)) {
+    const hitIndex = frames.findIndex((frame) => frame?.hitbox?.enabled === true);
+    if (hitIndex >= 0) return hitIndex;
+    const goldIndex = frames.findIndex((frame) => frameHasGoldCrescent(frame?.image));
+    if (goldIndex >= 0) return goldIndex;
+    return 0;
+  }
+  if (isJumpEvidenceClip(clip)) return pickJumpApexFrameIndex(frames);
   return 0;
 }
 
