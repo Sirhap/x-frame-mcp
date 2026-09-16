@@ -3234,6 +3234,12 @@ function createXsxbMcpService(options = {}) {
     const buffer = fs.readFileSync(absolute);
     const name = String(args.name || path.basename(absolute));
     const id = slug(args.id || path.basename(absolute, path.extname(absolute)), "sfx");
+    const previousPaths = new Set();
+    for (const entry of bindings) {
+      if (entry && String(entry.id) === id && String(entry.key) === key && entry.path) {
+        previousPaths.add(entry.path);
+      }
+    }
     const relativePath = copyIntoWorkspace(project, path.join("audio", profile.id), absolute);
     const binding = {
       id,
@@ -3251,6 +3257,16 @@ function createXsxbMcpService(options = {}) {
     };
     const next = [...bindings.filter((entry) => entry.key !== key || entry.id !== binding.id), binding];
     projectStore.writeJson(paths.frameAudio, next);
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const retained = new Set(
+      readSfxBindings(paths)
+        .map((entry) => safeResolve(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const allowedRoot = path.join(workspaceDir, "audio");
+    for (const oldPath of previousPaths) {
+      unlinkUnreferencedWorkspaceCopy(oldPath, allowedRoot, retained, root, workspaceDir);
+    }
     return {
       projectId: project.id,
       binding: { ...binding, data: `[${mime} omitted]` },
