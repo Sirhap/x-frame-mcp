@@ -270,7 +270,14 @@ test("create_project and import_video window fields stay optional and lenient", 
     "prop",
     "scene_prop_attachment",
   ]);
-  assert.equal(animation.inputSchema.properties.animation_type.default, "actor");
+  assert.equal(
+    animation.inputSchema.properties.animation_type.default,
+    undefined,
+    "schema default actor is injected on replace and overwrites a stored vfx/prop type",
+  );
+  const slice = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(video.inputSchema.properties.animation_type.default, undefined);
+  assert.equal(slice.inputSchema.properties.animation_type.default, undefined);
   assert.ok(video.inputSchema.properties.animation_type);
   assert.throws(
     () =>

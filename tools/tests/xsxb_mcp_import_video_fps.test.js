@@ -184,6 +184,52 @@ test("import_replace_preserves_manifest_fps_when_fps_omitted", async () => {
   });
 });
 
+test("import_replace_preserves_manifest_type_when_animation_type_omitted", async () => {
+  await withImportProject(async ({ call, root, game }) => {
+    const omitDir = path.join(root, "omit-type-first");
+    writePngSequence(omitDir, 2);
+    const firstOmit = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: omitDir,
+      animation_id: "fresh",
+    });
+    assert.equal(firstOmit.animationType, "actor", "first-import omit still defaults to actor");
+
+    const firstDir = path.join(root, "vfx-first");
+    writePngSequence(firstDir, 2);
+    const imported = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: firstDir,
+      animation_id: "spark",
+      animation_type: "vfx",
+    });
+    assert.equal(imported.animationType, "vfx");
+    assert.equal(imported.importedFrameCount, 2);
+
+    const secondDir = path.join(root, "vfx-second");
+    writePngSequence(secondDir, 3);
+    const replaced = await call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: secondDir,
+      animation_id: "spark",
+      replace: true,
+    });
+    assert.equal(replaced.replaced, true);
+    assert.equal(replaced.importedFrameCount, 3);
+    assert.equal(replaced.animationType, "vfx");
+
+    const stored = await call("xsxb_get_animation", { animation_id: "spark" });
+    assert.equal(stored.animation.type, "vfx");
+
+    const manifestPath = path.join(game, ".x-frame", "data", "projects", "fps", "animation_manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const spark = (manifest.profiles || [])
+      .flatMap((profile) => profile.animations || [])
+      .find((entry) => String(entry.id || entry.name) === "spark");
+    assert.equal(spark.type, "vfx");
+  });
+});
+
 test("import_video fps schema has no injected default so omit stores the probed source rate", () => {
   const video = toolDefinitions().find((entry) => entry.name === "xsxb_import_video");
   const fps = video.inputSchema.properties.fps;
