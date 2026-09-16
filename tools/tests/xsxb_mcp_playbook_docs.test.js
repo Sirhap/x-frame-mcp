@@ -38,6 +38,12 @@ test("godot skill names evidence as one cell per clip, not always frame 0", () =
   const godot = fs.readFileSync(path.join(repoRoot, "skills/x-frame-godot/SKILL.md"), "utf8");
   assert.match(godot, /one cell per clip/);
   assert.match(godot, /apex/);
+  assert.match(
+    godot,
+    /highest head among near-highest soles|head.*sole band|near-highest soles/,
+    "jump evidence is highest head among a near-highest sole band, not highest sole as apex",
+  );
+  assert.doesNotMatch(godot, /highest sole \/ apex/, "do not treat highest sole and apex as synonyms");
   assert.match(godot, /qa=review/);
 });
 

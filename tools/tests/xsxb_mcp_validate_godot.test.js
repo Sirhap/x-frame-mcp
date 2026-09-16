@@ -27,12 +27,12 @@ const BOOT = Object.freeze([210, 36, 42, 255]);
  * @param {number} width Canvas width.
  * @param {number} height Canvas height.
  * @param {number} feetY Sole row.
+ * @param {number} [bodyH=12] Body height in pixels (headY = feetY - bodyH + 1).
  * @returns {{data:Uint8ClampedArray,width:number,height:number}} RGBA frame.
  */
-function bodyOnCanvas(width, height, feetY) {
+function bodyOnCanvas(width, height, feetY, bodyH = 12) {
   const rgba = new Uint8ClampedArray(width * height * 4);
   const bodyW = 8;
-  const bodyH = 12;
   const left = Math.floor((width - bodyW) / 2);
   const top = feetY - bodyH + 1;
   for (let y = top; y <= feetY; y += 1) {
@@ -598,6 +598,45 @@ test("pickValidationEvidenceFrameIndex picks jump apex, not crouch, and ignores 
     pickValidationEvidenceFrameIndex({ id: "jumper" }, jumpFrames),
     0,
     "jumper is not a whole jump token and must stay on frame 0",
+  );
+});
+
+test("pickValidationEvidenceFrameIndex picks generated jump apex, not takeoff", () => {
+  const jumpDir = path.join(__dirname, "../fixtures/generated_hero/jump");
+  const frames = ["00", "01", "02", "03"].map((name) => ({
+    image: decodePngRgba(path.join(jumpDir, `${name}.png`)),
+  }));
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "jump" }, frames),
+    2,
+    "generated jump evidence must be apex 02 (highest head among near-highest soles), not takeoff 01",
+  );
+});
+
+test("pickValidationEvidenceFrameIndex picks apex when takeoff sole is 1px higher", () => {
+  const width = 32;
+  const height = 40;
+  const crouch = bodyOnCanvas(width, height, 36);
+  const takeoff = bodyOnCanvas(width, height, 20, 10);
+  const apex = bodyOnCanvas(width, height, 21, 16);
+  const land = bodyOnCanvas(width, height, 35);
+  const takeoffGeometry = measureKeyedSubject(takeoff);
+  const apexGeometry = measureKeyedSubject(apex);
+  assert.equal(takeoffGeometry.feetY, 20, "takeoff sole is one row higher than apex");
+  assert.equal(apexGeometry.feetY, 21);
+  assert.ok(
+    apexGeometry.headY < takeoffGeometry.headY,
+    `apex head must sit above takeoff (${apexGeometry.headY} vs ${takeoffGeometry.headY})`,
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "jump" }, [
+      { image: crouch },
+      { image: takeoff },
+      { image: apex },
+      { image: land },
+    ]),
+    2,
+    "near-min soles must break ties by highest head, not unique smallest feetY",
   );
 });
 

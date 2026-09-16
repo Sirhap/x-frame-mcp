@@ -20,6 +20,7 @@ const CRESCENT_MIN_PIXELS = 80;
 const CRESCENT_MIN_WIDTH = 20;
 const CRESCENT_MIN_HEIGHT = 8;
 const DEFAULT_FEET_TOLERANCE = 2;
+const JUMP_APEX_SOLE_BAND = 2;
 const DEFAULT_HEIGHT_TOLERANCE = 2;
 const ACTION_HEIGHT_TOLERANCE = 6;
 const DEFAULT_CANVAS_TOLERANCE = 0;
@@ -87,41 +88,61 @@ function isJumpEvidenceClip(clip) {
 }
 
 /**
- * Measured sole row for one decoded evidence frame, or NaN when unusable.
- * Keys the studio plate first so plate pixels are not treated as boots.
+ * Measured sole and crown rows for one decoded evidence frame.
+ * Keys the studio plate first so plate pixels are not treated as boots or hair.
+ * Same `bodyH`/`bboxH` guard as before: a sole without a body is unusable.
  * @param {{image?:{data:Uint8ClampedArray|Uint8Array,width?:number,height?:number}}} frame
  *   Clip frame with a decoded image.
- * @returns {number} `feetY`, or NaN when the image or subject is missing.
+ * @returns {{feetY:number,headY:number}} Rows, or NaN fields when the image or subject is missing.
  */
 function measuredEvidenceFeetY(frame) {
+  const missing = { feetY: Number.NaN, headY: Number.NaN };
   const image = frame?.image;
   const width = Number(image?.width);
   const height = Number(image?.height);
-  if (!image?.data || !width || !height) return Number.NaN;
+  if (!image?.data || !width || !height) return missing;
   const geometry = measureKeyedSubject(image);
   const feetY = Number(geometry?.feetY);
-  if (!Number.isFinite(feetY)) return Number.NaN;
-  if (!(Number(geometry.bodyH) > 0 || Number(geometry.bboxH) > 0)) return Number.NaN;
-  return feetY;
+  const headY = Number(geometry?.headY);
+  if (!Number.isFinite(feetY)) return missing;
+  if (!(Number(geometry.bodyH) > 0 || Number(geometry.bboxH) > 0)) return missing;
+  return { feetY, headY: Number.isFinite(headY) ? headY : Number.NaN };
 }
 
 /**
- * Picks the airborne apex: unique smallest measured `feetY`. Ties or missing stay 0.
+ * Picks the airborne apex: unique highest sole, or highest head among near-highest soles.
+ * `bestFeet` is the unique minimum finite `feetY`. Frames within
+ * `JUMP_APEX_SOLE_BAND` (2px) of that min are the sole-noise band. A unique
+ * band member wins (keeps a unique-highest-sole apex). Several near-min soles
+ * pick the unique smallest `headY`. Head ties or missing `headY` stay 0.
  * @param {Array<{image?:{data:Uint8ClampedArray|Uint8Array,width?:number,height?:number}}>} frames
  *   Decoded clip frames in order.
  * @returns {number} Index into `frames`, or 0 when empty, tied, or unmeasured.
  */
 function pickJumpApexFrameIndex(frames) {
-  const feetYs = frames.map((frame) => measuredEvidenceFeetY(frame));
-  let best = Number.POSITIVE_INFINITY;
-  for (const feetY of feetYs) {
-    if (Number.isFinite(feetY) && feetY < best) best = feetY;
+  const samples = frames.map((frame) => measuredEvidenceFeetY(frame));
+  let bestFeet = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    if (Number.isFinite(sample.feetY) && sample.feetY < bestFeet) bestFeet = sample.feetY;
   }
-  if (!Number.isFinite(best)) return 0;
-  const winners = [];
-  for (let index = 0; index < feetYs.length; index += 1) {
-    if (feetYs[index] === best) winners.push(index);
+  if (!Number.isFinite(bestFeet)) return 0;
+  const band = [];
+  for (let index = 0; index < samples.length; index += 1) {
+    if (
+      Number.isFinite(samples[index].feetY) &&
+      Math.abs(samples[index].feetY - bestFeet) <= JUMP_APEX_SOLE_BAND
+    ) {
+      band.push(index);
+    }
   }
+  if (band.length === 1) return band[0];
+  let bestHead = Number.POSITIVE_INFINITY;
+  for (const index of band) {
+    const headY = samples[index].headY;
+    if (Number.isFinite(headY) && headY < bestHead) bestHead = headY;
+  }
+  if (!Number.isFinite(bestHead)) return 0;
+  const winners = band.filter((index) => samples[index].headY === bestHead);
   return winners.length === 1 ? winners[0] : 0;
 }
 
@@ -244,10 +265,11 @@ function frameHasGoldCrescent(image) {
 /**
  * Picks the representative evidence frame index for one clip.
  * Attack/slash clips prefer the first stored/estimated hitbox with `enabled: true`,
- * else the first gold-crescent frame, else 0. Jump/airborne clips pick the frame
- * whose measured sole is highest on the canvas (smallest `feetY` after
- * `measureKeyedSubject`). Ties or missing `feetY` stay on 0. Idle/walk/hurt/vfx
- * stay on 0. Whole tokens only — jumper is not a jump clip.
+ * else the first gold-crescent frame, else 0. Jump/airborne clips pick the apex:
+ * unique highest sole (smallest `feetY` after `measureKeyedSubject`), or among
+ * soles within 2px of that min the unique highest head (smallest `headY`).
+ * Ties or missing measurements stay on 0. Idle/walk/hurt/vfx stay on 0. Whole
+ * tokens only — jumper is not a jump clip.
  * @param {{id?:string,name?:string}} clip Animation fields.
  * @param {Array<{image?:{data:Uint8ClampedArray|Uint8Array},hitbox?:{enabled?:boolean}|null}>} frames
  *   Decoded frames plus stored or estimated hitboxes, in clip order.
