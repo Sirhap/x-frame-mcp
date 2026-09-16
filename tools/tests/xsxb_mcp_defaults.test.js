@@ -86,17 +86,52 @@ test("compression defaults to preview and leaves imported files untouched", asyn
     assert.equal(fs.statSync(file).mtimeMs, before);
   }));
 
+/** Reads walk-clip frameCount from the on-disk project manifest. */
+function walkFrameCountOnDisk(manifestPath) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const profile = (manifest.profiles || []).find((entry) => entry.id === "hero");
+  const animation = (profile?.animations || []).find((entry) => entry.id === "walk" || entry.name === "walk");
+  return (animation?.frames || []).length;
+}
+
+test("reorganization with only order writes frames and changes on-disk frameCount", async () =>
+  fixture(async ({ service, paths }) => {
+    assert.equal(walkFrameCountOnDisk(paths.manifest), 3);
+    const snapshot = (await service.callMcp("xsxb_get_animation")).observation.snapshotId;
+    const committed = await service.callMcp("xsxb_reorganize_frames", {
+      order: [1, 0],
+      basis_snapshot_id: snapshot,
+    });
+    assert.equal(committed.data.dryRun, false);
+    assert.equal(committed.data.applied, true);
+    assert.equal(committed.data.outputFrameCount, 2);
+    assert.equal(walkFrameCountOnDisk(paths.manifest), 2);
+  }));
+
 test("reorganization previews by default and commits locally only when requested", async () =>
   fixture(async ({ call, service, paths }) => {
     const before = fs.readFileSync(paths.manifest);
     const revisions = (await call("xsxb_list_revisions")).revisions.length;
     const snapshot = (await service.callMcp("xsxb_get_animation")).observation.snapshotId;
+    const identityPreview = await service.callMcp("xsxb_reorganize_frames", {
+      sync: true,
+      basis_snapshot_id: snapshot,
+    });
+    assert.equal(identityPreview.data.dryRun, true);
+    assert.equal(identityPreview.data.applied, false);
+    assert.equal(identityPreview.data.identityOrder, true);
+    assert.equal(identityPreview.data.outputFrameCount, 3);
+    assert.equal(identityPreview.data.sync.requested, false);
+    assert.deepEqual(fs.readFileSync(paths.manifest), before);
+    assert.equal((await call("xsxb_list_revisions")).revisions.length, revisions);
     const preview = await service.callMcp("xsxb_reorganize_frames", {
       order: [1, 0],
+      dry_run: true,
       sync: true,
       basis_snapshot_id: snapshot,
     });
     assert.equal(preview.data.dryRun, true);
+    assert.equal(preview.data.applied, false);
     assert.equal(preview.data.outputFrameCount, 2);
     assert.equal(preview.data.sync.requested, false);
     assert.deepEqual(fs.readFileSync(paths.manifest), before);
@@ -107,6 +142,7 @@ test("reorganization previews by default and commits locally only when requested
       basis_snapshot_id: snapshot,
     });
     assert.equal(committed.data.dryRun, false);
+    assert.equal(committed.data.applied, true);
     assert.equal(committed.data.sync.requested, false);
     assert.equal((await call("xsxb_get_animation")).animation.frames.length, 2);
   }));

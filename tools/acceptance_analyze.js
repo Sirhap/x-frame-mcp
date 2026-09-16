@@ -4,7 +4,7 @@
 /**
  * Public tools/call session for the video-to-loop path: import a PNG
  * sequence, get_animation, optional plate cutout, xsxb_analyze, then
- * xsxb_reorganize_frames with the recommended loop or motion order.
+ * xsxb_reorganize_frames with applyOrder (holds dropped, then loop or motion).
  */
 
 const assert = require("node:assert/strict");
@@ -130,9 +130,8 @@ async function runAnalyzeAcceptance() {
     assert.ok(analyzed.observation?.snapshotId, "analyze must mint basis_snapshot_id");
     commands.push("xsxb_analyze");
 
-    const useLoop = Boolean(analyzed.data.loop?.recommended) && analyzed.data.loop.oneShotLikely !== true;
-    const used = useLoop ? "loop" : "motion";
-    const recommendedOrder = useLoop ? analyzed.data.loop.recommended.order : analyzed.data.motion.order;
+    const recommendedOrder = analyzed.data.applyOrder || analyzed.data.recommended?.applyOrder;
+    const used = analyzed.data.recommended?.kind || analyzed.data.preview?.kind;
     assert.ok(Array.isArray(recommendedOrder) && recommendedOrder.length >= 2, JSON.stringify(analyzed.data));
 
     const applied = await callTool(service, "xsxb_reorganize_frames", {

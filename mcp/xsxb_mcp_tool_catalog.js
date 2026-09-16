@@ -172,13 +172,19 @@ function toolDefinitions() {
     {
       name: "xsxb_import_video",
       description:
-        "Video alias of xsxb_import_animation: extract every native frame from a local video, import it as an XSXB animation, optionally sync to Godot, and validate the result.",
+        "Video alias of xsxb_import_animation: extract every native frame from a local video, import it as an XSXB animation, optionally sync to Godot, and validate the result. Omitting fps stores the probed source rate when it is between 1 and 60; otherwise 12. Receipt includes sourceFrameCount, sourceDurationSec when known, and suggestedFps.",
       inputSchema: {
         type: "object",
         required: ["file_path"],
         properties: {
           file_path: { type: "string", description: "Absolute local video path." },
-          fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
+          fps: {
+            type: "number",
+            minimum: 1,
+            maximum: 120,
+            default: 12,
+            description: "Playback fps. Omit to use the probed source rate (1–60) when known; otherwise 12.",
+          },
           start_time: {
             type: "number",
             minimum: 0,
@@ -460,7 +466,7 @@ function toolDefinitions() {
     {
       name: "xsxb_find_duplicates",
       description:
-        "Find near-duplicate hold frames with the same Tuner duplicate finder. Pass threshold or duplicate_ratio for the organizer 重复比例 slider; do not pass both unless they match. If autoAdjustedThreshold is set, do not apply order unless you passed auto_adjust. Query an imported animation, a PNG directory, or file_paths. Does not mutate frames; apply the keep-order with xsxb_reorganize_frames.",
+        "Find near-duplicate hold frames with the same Tuner duplicate finder. Pass threshold or duplicate_ratio for the organizer 重复比例 slider; do not pass both unless they match. If autoAdjustedThreshold is set and you did not pass auto_adjust, applyBlocked is true and order is empty — use suggestedOrder only after auto_adjust. Query an imported animation, a PNG directory, or file_paths. Does not mutate frames; apply the keep-order with xsxb_reorganize_frames.",
       inputSchema: {
         type: "object",
         properties: {
@@ -493,7 +499,7 @@ function toolDefinitions() {
             type: "boolean",
             default: false,
             description:
-              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default keeps order unchanged and reports autoAdjustedThreshold / suggestedOrder.",
+              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default sets applyBlocked, leaves order empty, and reports autoAdjustedThreshold / suggestedOrder / suggestedDrop.",
           },
           sample_size: {
             type: "integer",
@@ -533,7 +539,7 @@ function toolDefinitions() {
     {
       name: "xsxb_analyze",
       description:
-        "One-pass clip analysis after import: duplicates, loop, and motion window. Decodes each PNG once. Writes a grid=false preview sheet of the recommended window (loop, or motion when oneShotLikely). Does not mutate frames; apply with xsxb_reorganize_frames using loop.recommended.order or motion.order. Look at preview.path — do not export_sheet every candidate. oneShotLikely means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. After duplicates, do not apply order when autoAdjustedThreshold is set unless you passed auto_adjust. Surgical find_loop / find_duplicates / find_motion remain for a single query.",
+        "One-pass clip analysis after import: duplicates, loop, and motion window. Decodes each PNG once. Writes a grid=false preview sheet of the recommended window (loop, or motion when oneShotLikely). Does not mutate frames; apply with xsxb_reorganize_frames using applyOrder (or recommended.applyOrder): drop holds when auto_adjust is set or autoAdjustedThreshold is null, then slice to the loop or motion window. Do not pass loop.recommended.order or motion.order alone — those index the full imported clip and keep rest holds. Look at preview.path — do not export_sheet every candidate. oneShotLikely means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. When duplicates.applyBlocked, do not apply duplicates.order until you pass auto_adjust. Surgical find_loop / find_duplicates / find_motion remain for a single query.",
       inputSchema: {
         type: "object",
         properties: {
@@ -566,7 +572,7 @@ function toolDefinitions() {
             type: "boolean",
             default: false,
             description:
-              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default keeps order unchanged and reports autoAdjustedThreshold / suggestedOrder.",
+              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default sets applyBlocked, leaves order empty, and reports autoAdjustedThreshold / suggestedOrder / suggestedDrop.",
           },
           min_period: {
             type: "integer",
@@ -887,7 +893,7 @@ function toolDefinitions() {
     {
       name: "xsxb_reorganize_frames",
       description:
-        "Preview frame reordering and remapping of frame-owned tuning, audio, attachments, and trails; dry_run:false commits atomically and sync:true explicitly synchronizes Godot.",
+        "Reorder frames and remap frame-owned tuning, audio, attachments, and trails; a non-empty order commits unless dry_run is true, omitting order is an identity preview, and sync:true explicitly synchronizes Godot.",
       inputSchema: {
         type: "object",
         properties: {

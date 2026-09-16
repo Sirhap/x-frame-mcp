@@ -144,6 +144,44 @@ function summarizeCandidate(candidate, options = {}) {
 }
 
 /**
+ * Picks the analyze window agents should apply: loop unless oneShotLikely.
+ * @param {{recommended?:{start:number,end:number,order?:number[]}|null,oneShotLikely?:boolean}} loop Loop receipt.
+ * @param {{start:number,end:number,order?:number[]}} motion Motion window.
+ * @returns {{kind:"loop"|"motion",start:number,end:number,order:number[]}} Window to slice.
+ */
+function chooseAnalyzeWindow(loop, motion) {
+  const recommended = loop?.recommended;
+  const useLoop = Boolean(recommended) && loop.oneShotLikely !== true;
+  if (useLoop) {
+    return {
+      kind: "loop",
+      start: recommended.start,
+      end: recommended.end,
+      order: Array.isArray(recommended.order)
+        ? recommended.order
+        : inclusiveRange(recommended.start, recommended.end),
+    };
+  }
+  return {
+    kind: "motion",
+    start: motion.start,
+    end: motion.end,
+    order: Array.isArray(motion.order) ? motion.order : inclusiveRange(motion.start, motion.end),
+  };
+}
+
+/**
+ * Drops allowed holds, then keeps the recommended window indexes.
+ * @param {number[]} windowOrder Loop or motion indexes into the full clip.
+ * @param {number[]} [drop] Duplicate indexes that may be applied.
+ * @returns {number[]} Merged keep-list for xsxb_reorganize_frames.
+ */
+function mergeApplyOrder(windowOrder, drop) {
+  const dropped = new Set(Array.isArray(drop) ? drop : []);
+  return (Array.isArray(windowOrder) ? windowOrder : []).filter((index) => !dropped.has(index));
+}
+
+/**
  * Duplicate-hold analysis on already-built signatures.
  * @param {object[]} signatures Loop signatures.
  * @param {{threshold?:number,autoAdjust?:boolean}} [options] Finder options.
@@ -163,20 +201,28 @@ function duplicatesFromSignatures(signatures, options = {}) {
   const analyzed = analyzeDuplicateFrames(signatures, threshold);
   const suggestedDrop = analyzed.matches.map((entry) => Number(entry.index));
   const applyAuto = Boolean(options.autoAdjust) && analyzed.autoAdjustedThreshold != null;
-  const drop = analyzed.autoAdjustedThreshold == null || applyAuto ? suggestedDrop : [];
+  const applyBlocked = analyzed.autoAdjustedThreshold != null && !applyAuto;
+  const drop = applyBlocked ? [] : suggestedDrop;
   const dropped = new Set(drop);
   const suggestedDropped = new Set(suggestedDrop);
-  return {
+  const suggestedOrder = signatures.map((_, index) => index).filter((index) => !suggestedDropped.has(index));
+  const receipt = {
     threshold,
     autoAdjustedThreshold: analyzed.autoAdjustedThreshold,
+    applyBlocked,
     drop,
-    order: signatures.map((_, index) => index).filter((index) => !dropped.has(index)),
+    order: applyBlocked ? [] : signatures.map((_, index) => index).filter((index) => !dropped.has(index)),
     suggestedDrop,
-    suggestedOrder: signatures.map((_, index) => index).filter((index) => !suggestedDropped.has(index)),
+    suggestedOrder,
     matchCount: analyzed.matches.length,
     matches: analyzed.matches,
     applied: false,
   };
+  if (applyBlocked) {
+    receipt.note =
+      "autoAdjustedThreshold is set; pass auto_adjust to apply suggestedOrder. duplicates.order is empty, not identity.";
+  }
+  return receipt;
 }
 
 /**
@@ -217,7 +263,7 @@ function findLoopInPngFiles(filePaths, options = {}) {
  * Does not mutate frames; apply the keep-order with xsxb_reorganize_frames.
  * @param {string[]} filePaths Absolute PNG paths in playback order.
  * @param {{threshold?:number,sampleSize?:number}} [options] Search options.
- * @returns {{frameCount:number,sampleSize:number,threshold:number,autoAdjustedThreshold:number|null,drop:number[],order:number[],matches:object[],applied:boolean}}
+ * @returns {{frameCount:number,sampleSize:number,threshold:number,autoAdjustedThreshold:number|null,applyBlocked:boolean,drop:number[],order:number[],suggestedDrop:number[],suggestedOrder:number[],matches:object[],applied:boolean,note?:string}}
  */
 function findDuplicatesInPngFiles(filePaths, options = {}) {
   if (!Array.isArray(filePaths) || filePaths.length < MINIMUM_DUPLICATE_FRAMES) {
@@ -284,22 +330,33 @@ function analyzePngFiles(filePaths, options = {}) {
   );
   const heights = measured.map((frame) => Number(frame.bodyHeight || 0));
   const feet = measured.map((frame) => Number(frame.feetY || 0));
+  const loop = {
+    candidates: loopCandidates.slice(0, 5),
+    recommended,
+    oneShotLikely: advice.oneShotLikely,
+    note: advice.note || undefined,
+  };
+  const motion = {
+    start: motionFound.start,
+    end: motionFound.end,
+    order: motionFound.order,
+  };
+  const window = chooseAnalyzeWindow(loop, motion);
+  const applyOrder = mergeApplyOrder(window.order, duplicates.drop);
   return {
     frameCount: filePaths.length,
     sampleSize,
     decodeCount: images.length,
+    applyOrder,
+    recommended: {
+      applyOrder,
+      kind: window.kind,
+      start: window.start,
+      end: window.end,
+    },
     duplicates,
-    loop: {
-      candidates: loopCandidates.slice(0, 5),
-      recommended,
-      oneShotLikely: advice.oneShotLikely,
-      note: advice.note || undefined,
-    },
-    motion: {
-      start: motionFound.start,
-      end: motionFound.end,
-      order: motionFound.order,
-    },
+    loop,
+    motion,
     metrics: {
       bodyHeight: {
         min: heights.length ? Math.min(...heights) : 0,
@@ -345,8 +402,10 @@ module.exports = {
   MINIMUM_LOOP_FRAMES,
   adviseLoopCandidate,
   analyzePngFiles,
+  chooseAnalyzeWindow,
   downsampleRgba,
   findDuplicatesInPngFiles,
   findLoopInPngFiles,
+  mergeApplyOrder,
   resolveExternalLoopFrames,
 };

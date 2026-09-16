@@ -41,6 +41,7 @@ const {
   findLoopInPngFiles,
   resolveExternalLoopFrames,
   analyzePngFiles,
+  chooseAnalyzeWindow,
 } = require("./xsxb_mcp_loop");
 const {
   describeGroupGrid,
@@ -127,7 +128,14 @@ const {
   resolveImportSource,
   sliceExtractedFrames,
 } = require("./xsxb_mcp_arguments");
-const { createTestWav, encodeGifWithFfmpeg, extractVideoFrames } = require("./xsxb_mcp_processes");
+const {
+  createTestWav,
+  encodeGifWithFfmpeg,
+  extractVideoFrames,
+  probeVideoTiming,
+  resolveSourceDurationSec,
+  suggestImportFps,
+} = require("./xsxb_mcp_processes");
 
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
 
@@ -660,6 +668,16 @@ function createXsxbMcpService(options = {}) {
         args,
       );
       if (!extracted.paths.length) throw new Error("Video extraction produced no PNG frames.");
+      const probe = await probeVideoTiming(videoPath, args);
+      const sourceFrameCount = extracted.extractedCount;
+      const sourceDurationSec = resolveSourceDurationSec(args, probe);
+      const suggestedFps = suggestImportFps({
+        sourceFrameCount,
+        sourceDurationSec,
+        probedFps: probe.probedFps,
+      });
+      const fpsOmitted = args.fps === undefined || args.fps === null || args.fps === "";
+      const fps = fpsOmitted && suggestedFps !== undefined ? requireFps(suggestedFps) : requireFps(args.fps);
       const items = extracted.paths.map((framePath) => ({
         name: path.basename(framePath),
         sourcePath: framePath,
@@ -673,7 +691,7 @@ function createXsxbMcpService(options = {}) {
         animationId,
         animationName: animationId,
         animationType: resolveAnimationType(args.animation_type || args.animationType),
-        fps: requireFps(args.fps),
+        fps,
         replace: replaced,
         items,
       });
@@ -690,7 +708,10 @@ function createXsxbMcpService(options = {}) {
         animationId,
         animationType: resolveAnimationType(args.animation_type || args.animationType),
         sourceVideo: videoPath,
-        fps: requireFps(args.fps),
+        fps,
+        sourceFrameCount,
+        sourceDurationSec,
+        suggestedFps,
         extractedFrameCount: extracted.extractedCount,
         importedFrameCount: imported.frameCount,
         startFrame: extracted.startFrame,
@@ -1681,10 +1702,9 @@ function createXsxbMcpService(options = {}) {
    * @returns {{kind:string,path:string,start:number,end:number,frameCount:number}} Preview receipt.
    */
   function writeAnalyzePreview(args, project, payload, analyzed, images) {
-    const loop = analyzed.loop.recommended;
-    const useLoop = Boolean(loop) && analyzed.loop.oneShotLikely !== true;
-    const start = useLoop ? loop.start : analyzed.motion.start;
-    const end = useLoop ? loop.end : analyzed.motion.end;
+    const window = chooseAnalyzeWindow(analyzed.loop, analyzed.motion);
+    const start = window.start;
+    const end = window.end;
     const selected = images.slice(start, end + 1);
     if (!selected.length) {
       throw new Error("Analyze preview has no frames in the recommended window.");
@@ -1708,7 +1728,7 @@ function createXsxbMcpService(options = {}) {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(sheet.data, sheet.width, sheet.height));
     return {
-      kind: useLoop ? "loop" : "motion",
+      kind: window.kind,
       path: outputPath,
       start,
       end,
@@ -3157,7 +3177,8 @@ function createXsxbMcpService(options = {}) {
   async function reorganizeFrames(args = {}) {
     const { project, profile, animation } = animationFor(args);
     const frames = animation.frames || [];
-    const dryRun = booleanFlag(args.dry_run, true);
+    const hasOrder = Array.isArray(args.order) && args.order.length > 0;
+    const dryRun = booleanFlag(args.dry_run, !hasOrder);
     let order = Array.isArray(args.order) ? args.order.map(Number) : frames.map((_, index) => index);
     if (String(args.loop_endpoint || "none") === "duplicate_first" && frames.length) {
       order = [...order, 0];
@@ -3188,6 +3209,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       profileId: profile.id,
       animationId: String(animation.id || animation.name),
+      applied: !dryRun,
       dryRun,
       inputFrameCount: frames.length,
       outputFrameCount: result.frameCount,
