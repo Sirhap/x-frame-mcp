@@ -343,7 +343,13 @@ function toolDefinitions() {
             items: { type: "object" },
             description: "PNG data-URL items for source=items.",
           },
-          fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
+          fps: {
+            type: "number",
+            minimum: 1,
+            maximum: 120,
+            description:
+              "Playback fps. Video omit stores the probed source rate (1–60) when known; otherwise 12. Other sources omit 12. Pass fps=suggestedGameFps for GIF/Godot loops instead of the camera rate.",
+          },
           start_time: {
             type: "number",
             minimum: 0,

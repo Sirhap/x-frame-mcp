@@ -131,6 +131,17 @@ test("import_video fps schema has no injected default so omit stores the probed 
   assert.match(fps.description, /Omit to store the probed source rate/);
 });
 
+test("import_animation fps schema has no injected default so video omit stores the probed source rate", () => {
+  const animation = toolDefinitions().find((entry) => entry.name === "xsxb_import_animation");
+  const fps = animation.inputSchema.properties.fps;
+  assert.equal(
+    fps.default,
+    undefined,
+    "schema default 12 is injected as an explicit fps and skips importVideo probe-on-omit",
+  );
+  assert.match(fps.description, /probed source rate/);
+});
+
 test("xsxb_export_gif catalog tells video imports to pass suggestedGameFps", () => {
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   assert.match(gif.description, /imported from video at camera rate/);
@@ -222,6 +233,22 @@ test("import_video without fps uses the probed 30fps source rate", { skip: FFMPE
     assert.ok(imported.sourceDurationSec > 0.8 && imported.sourceDurationSec < 1.2, imported);
     assert.ok(imported.suggestedFps >= 28 && imported.suggestedFps <= 32, imported);
     assert.equal(imported.suggestedGameFps, 8, imported);
+    assert.equal(imported.fps, imported.suggestedFps);
+    assert.notEqual(imported.fps, 12);
+    const stored = await call("xsxb_get_animation", { animation_id: "clip" });
+    assert.equal(Number(stored.animation.fps), imported.fps);
+  });
+});
+
+test("import_animation video omit uses the probed 30fps source rate", { skip: FFMPEG_SKIP }, async () => {
+  await withImportProject(async ({ call, video }) => {
+    writeLavfiVideo(video, { fps: 30, durationSec: 1 });
+    const imported = await call("xsxb_import_animation", {
+      source: "video",
+      file_path: video,
+      animation_id: "clip",
+    });
+    assert.ok(imported.suggestedFps >= 28 && imported.suggestedFps <= 32, imported);
     assert.equal(imported.fps, imported.suggestedFps);
     assert.notEqual(imported.fps, 12);
     const stored = await call("xsxb_get_animation", { animation_id: "clip" });
