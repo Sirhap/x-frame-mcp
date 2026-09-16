@@ -31,7 +31,7 @@ const DEFAULT_KEEP = "/opt/cursor/artifacts/generated_session_evidence";
 const REQUIRED_CLIPS = Object.freeze(["idle", "walk", "jump", "attack", "hit_vfx"]);
 const ASSET_CANDIDATES = Object.freeze({
   idle: Object.freeze(["hero_idle_a.png", "hero_idle_b.png"]),
-  walk: Object.freeze(["hero_walk.png", "hero_walk_b.png", "hero_walk.png"]),
+  walk: Object.freeze(["hero_walk.png", "hero_walk_b.png", "hero_walk_c.png", "hero_walk_d.png"]),
   jump: Object.freeze(["hero_jump.png", "hero_jump_b.png", "hero_jump.png"]),
   attack: Object.freeze(["hero_attack.png", "hero_attack_followthrough.png"]),
   hit_vfx: Object.freeze(["hero_vfx_burst.png", "hero_vfx_burst_b.png", "hero_vfx_burst.png"]),
@@ -98,9 +98,9 @@ function findAsset(name) {
 }
 
 /**
- * Picks two source plates, duplicating the first when only one exists.
+ * Picks every unique source plate, duplicating the first when only one exists.
  * @param {readonly string[]} names Candidate basenames in preference order.
- * @returns {string[]|null} Two absolute paths.
+ * @returns {string[]|null} At least two absolute paths when any plate exists.
  */
 function pickAssetPair(names) {
   const found = [];
@@ -109,7 +109,7 @@ function pickAssetPair(names) {
     if (filePath) found.push(filePath);
   }
   const unique = [...new Set(found)];
-  if (unique.length >= 2) return unique.slice(0, 2);
+  if (unique.length >= 2) return unique;
   if (unique.length === 1) return [unique[0], unique[0]];
   return null;
 }
@@ -138,7 +138,7 @@ function downsampleRgbaToMax(image, maxEdge) {
 }
 
 /**
- * Writes a two-frame PNG sequence, downsampling large authored plates.
+ * Writes a PNG sequence, downsampling large authored plates.
  * @param {string} destDir Output folder.
  * @param {string[]} sourcePaths Source PNGs.
  * @param {number} [maxEdge=256] Long-edge cap.
@@ -197,6 +197,7 @@ async function resolveGeneratedHeroDirs(options) {
 }
 
 /**
+ * Ensures a clip folder has at least two PNGs. Does not cap length.
  * Copies a one-frame folder into a two-frame temp sequence.
  * @param {string} directory Source folder.
  * @param {string} incoming Session incoming root.
@@ -1029,6 +1030,7 @@ async function runGeneratedAcceptance(options = {}) {
     feetY: { idle: null, walk: null, attack: null },
     canvas: { idle: null, walk: null, attack: null },
     boxes: { idle: [], walk: [], attack: [] },
+    walkFrameCount: null,
     changedPixelCount: null,
     idleDiff: null,
     goldCrescent: null,
@@ -1113,6 +1115,12 @@ async function runGeneratedAcceptance(options = {}) {
     });
     assert.equal(walkImport.ok, true, JSON.stringify(walkImport.error || walkImport));
     const walkSnap = await observe(service, { project_id: "generated", animation_id: "walk" });
+    report.walkFrameCount = Number(walkSnap.receipt.data.frameCount);
+    assert.equal(
+      report.walkFrameCount,
+      4,
+      `walk must keep all four plates, got frameCount=${report.walkFrameCount}`,
+    );
     const walkCut = await callTool(service, "xsxb_cutout", {
       project_id: "generated",
       animation_id: "walk",
@@ -1405,6 +1413,11 @@ async function runGeneratedAcceptance(options = {}) {
         });
       }
     }
+    assert.equal(
+      report.boxes.walk.length,
+      4,
+      `walk plant/boxes must run on all four frames, got ${report.boxes.walk.length}`,
+    );
     log.push("estimate_boxes + assert + overlays");
 
     writeGameplayScene(game);
@@ -1484,6 +1497,7 @@ async function runGeneratedAcceptance(options = {}) {
             feetY: report.feetY,
             canvas: report.canvas,
             boxes: report.boxes,
+            walkFrameCount: report.walkFrameCount,
             changedPixelCount: report.changedPixelCount,
             idleDiff: report.idleDiff,
             goldCrescent: report.goldCrescent,
@@ -1503,11 +1517,17 @@ async function runGeneratedAcceptance(options = {}) {
 }
 
 module.exports = {
+  ASSET_CANDIDATES,
   assertFrameBoxes,
   boxRectOnCanvas,
   drawBoxesOnMagenta,
+  downsampleRgbaToMax,
+  ensureTwoFrames,
+  listClipPngs,
+  pickAssetPair,
   resolveGeneratedHeroDirs,
   runGeneratedAcceptance,
+  writeDownsampledSequence,
 };
 
 if (require.main === module) {

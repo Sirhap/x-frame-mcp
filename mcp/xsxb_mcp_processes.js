@@ -249,19 +249,21 @@ async function extractVideoFrames(videoPath, outputDirectory, options = {}) {
 async function encodeGifWithFfmpeg(job) {
   const escapePath = (filePath) => filePath.replace(/'/g, "'\\''");
   const lines = ["ffconcat version 1.0"];
+  let lastDurationSec = 0.001;
   job.framePaths.forEach((framePath, index) => {
     const duration = Number(job.durations?.[index]);
     if (!Number.isFinite(duration)) {
       throw new Error(`GIF duration is missing for frame ${index + 1}.`);
     }
+    lastDurationSec = Math.max(0.001, duration);
     lines.push(`file '${escapePath(framePath)}'`);
     // A 1/100s image timebase matches GIF delay resolution; the default 1/25 rounds delays to 40ms.
     lines.push("option framerate 100");
-    lines.push(`duration ${Math.max(0.001, duration).toFixed(6)}`);
+    lines.push(`duration ${lastDurationSec.toFixed(6)}`);
   });
-  // The concat demuxer ignores the trailing duration unless the last frame repeats.
-  lines.push(`file '${escapePath(job.framePaths[job.framePaths.length - 1])}'`);
-  lines.push("option framerate 100");
+  // Concat ignores the last duration. GIF `-final_delay` (centiseconds) keeps it
+  // without repeating the last file, so ffprobe nb_frames matches framePaths.length.
+  const finalDelayCs = Math.max(1, Math.round(lastDurationSec * 100));
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-gif-"));
   const concatPath = path.join(tempDir, "frames.ffconcat");
   try {
@@ -283,6 +285,8 @@ async function encodeGifWithFfmpeg(job) {
         "[0:v]split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128",
         "-loop",
         "0",
+        "-final_delay",
+        String(finalDelayCs),
         job.outputPath,
       ],
       { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 },
