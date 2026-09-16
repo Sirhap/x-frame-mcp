@@ -276,8 +276,16 @@ test("import_in_place_replace_drops_stale_pack_pngs", async () => {
     assert.equal(replaced.importedFrameCount, 2);
     assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
     assert.ok(fs.existsSync(sources[1]), "02.png must stay as the kept source");
-    assert.equal(fs.existsSync(sources[2]), false, "03.png must be unlinked after in_place replace shrinks the clip");
-    assert.equal(fs.existsSync(sources[3]), false, "04.png must be unlinked after in_place replace shrinks the clip");
+    assert.equal(
+      fs.existsSync(sources[2]),
+      false,
+      "03.png must be unlinked after in_place replace shrinks the clip",
+    );
+    assert.equal(
+      fs.existsSync(sources[3]),
+      false,
+      "04.png must be unlinked after in_place replace shrinks the clip",
+    );
     assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
     const animation = await current.service.call("xsxb_get_animation", { animation_id: "run" });
     assert.equal(animation.frameCount, 2);
