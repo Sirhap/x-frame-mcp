@@ -70,10 +70,18 @@ test("switching profiles clears only the old animation and same-project selectio
     });
     await call("xsxb_set_active_project", { project_id: "b" });
     assert.equal((await call("xsxb_get_animation")).animation.id, "jump");
-    const selected = await call("xsxb_get_animation", { profile_id: "enemy" });
+    const peeked = await call("xsxb_get_animation", { profile_id: "enemy" });
+    assert.equal(peeked.animation.id, "idle");
+    assert.equal((await call("xsxb_get_animation")).animation.id, "jump");
+    await call("xsxb_update_timing", {
+      profile_id: "enemy",
+      animation_id: "idle",
+      frame: 0,
+      duration: 2,
+    });
+    const selected = await call("xsxb_get_animation");
+    assert.equal(selected.profile.id, "enemy");
     assert.equal(selected.animation.id, "idle");
-    await call("xsxb_set_active_project", { project_id: "b" });
-    assert.equal((await call("xsxb_get_animation")).profile.id, "enemy");
     await call("xsxb_create_project", { project_id: "background", set_active: false });
     assert.equal((await call("xsxb_get_animation")).project.id, "b");
   });
@@ -85,6 +93,36 @@ test("create_project_existing_omit_set_active_keeps_active_project", async () =>
     assert.equal(again.created, false);
     const listed = await call("xsxb_list_projects");
     assert.equal(listed.activeProjectId, "b");
+  });
+});
+
+test("get_animation_inspect_does_not_steal_context", async () => {
+  await withProjects(async ({ service, call }) => {
+    const response = await handleMessage(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "xsxb_get_animation",
+          arguments: { project_id: "a", animation_id: "walk" },
+        },
+      },
+      service,
+    );
+    const receipt = response.result.structuredContent.data;
+    assert.equal(receipt.project.id, "a");
+    assert.equal(receipt.profile.id, "hero");
+    assert.equal(receipt.animation.id, "walk");
+    const listed = await call("xsxb_list_projects");
+    assert.equal(listed.activeProjectId, "b");
+    const selected = await call("xsxb_get_animation");
+    assert.equal(selected.project.id, "b");
+    assert.equal(selected.profile.id, "enemy");
+    assert.equal(selected.animation.id, "idle");
+    const followUp = await call("xsxb_get_project");
+    assert.equal(followUp.projectId, "b");
+    assert.equal(followUp.id, "b");
   });
 });
 
