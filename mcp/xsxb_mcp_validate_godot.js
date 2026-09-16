@@ -561,7 +561,7 @@ function hasGameplayStubGap(importResult) {
  * @param {{ok:boolean,issues:string[]}} scaleContract Feet/height contract.
  * @param {{path:string,width:number,height:number,cells?:Array<{id:string,frame:number}>,skipped?:Array<{id:string,reason?:string}>}} evidence
  *   Written PNG plus sheet-order `{id,frame}` for every decodable clip that contributed a cell.
- *   Clips with manifest frames but zero readable PNGs are listed in `skipped`.
+ *   Clips with empty manifest frames or with manifest frames but zero readable PNGs are listed in `skipped`.
  * @param {{strict?:boolean,godot?:object,summaryPath?:string}} [options] Strict and snapshot extras.
  * @returns {object} Public `data` payload for `xsxb_validate_for_godot`.
  */

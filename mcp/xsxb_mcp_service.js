@@ -2204,7 +2204,7 @@ function createXsxbMcpService(options = {}) {
    * When bound and standalone tuning/manifest diverge from game-local copies,
    * syncs through the same `synchronize` path as `xsxb_sync_godot` first.
    * Evidence `cells` lists each blit `{id, frame}` in sheet order for decodable clips.
-   * Clips with frames but zero decodable PNGs are listed in evidence `skipped`.
+   * Clips with empty frames or with frames but zero decodable PNGs are listed in evidence `skipped`.
    * @param {object} args Tool arguments.
    * @returns {object} Gate payload; `ok` is the domain pass.
    */
@@ -2263,7 +2263,12 @@ function createXsxbMcpService(options = {}) {
           evidenceSkipped.push({ id: animationId, reason: "zero_decodable_frames" });
           if (!Array.isArray(raw.warnings)) raw.warnings = [];
           raw.warnings.push(`${animationId}: zero decodable frames; omitted from evidence.cells`);
+        } else if (!(animation.frames || []).length) {
+          evidenceSkipped.push({ id: animationId, reason: "empty_manifest_frames" });
+          if (!Array.isArray(raw.warnings)) raw.warnings = [];
+          raw.warnings.push(`${animationId}: empty manifest frames; omitted from evidence.cells`);
         }
+        if (!(animation.frames || []).length) continue;
         clips.push({
           id: animationId,
           kind: profile.kind || animation.type || "actor",

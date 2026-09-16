@@ -1345,7 +1345,7 @@ function toolDefinitions() {
     {
       name: "xsxb_validate_for_godot",
       description:
-        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height; clips with animation_type vfx/prop or jump/airborne tokens skipped). require_gameplay defaults true. Scale drift is a warning unless strict. qa is clean|review|warn — warn means stop. ok is the gate, not a visual pass — open evidence.path (evidence.cells: one cell per decodable clip, clip id + picked frame index; zero-decodable clips are listed in evidence.skipped) and run_summary.path. Compose with an editor MCP; this tool does not drive Godot.",
+        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height; clips with animation_type vfx/prop or jump/airborne tokens skipped). require_gameplay defaults true. Scale drift is a warning unless strict. qa is clean|review|warn — warn means stop. ok is the gate, not a visual pass — open evidence.path (evidence.cells: one cell per decodable clip, clip id + picked frame index; zero-decodable and empty_manifest_frames clips are listed in evidence.skipped) and run_summary.path. Compose with an editor MCP; this tool does not drive Godot.",
       inputSchema: {
         type: "object",
         properties: {
