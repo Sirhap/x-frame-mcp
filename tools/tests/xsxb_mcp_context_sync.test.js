@@ -41,7 +41,7 @@ async function withProjects(operation) {
   }
 }
 
-for (const selector of ["xsxb_set_active_project", "xsxb_get_project", "xsxb_create_project"]) {
+for (const selector of ["xsxb_set_active_project", "xsxb_create_project"]) {
   test(`${selector} switching projects clears the previous animation selection`, async () => {
     await withProjects(async ({ call }) => {
       await call(
@@ -85,6 +85,34 @@ test("create_project_existing_omit_set_active_keeps_active_project", async () =>
     assert.equal(again.created, false);
     const listed = await call("xsxb_list_projects");
     assert.equal(listed.activeProjectId, "b");
+  });
+});
+
+test("get_project_existing_id_does_not_activate", async () => {
+  await withProjects(async ({ service, call }) => {
+    const response = await handleMessage(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "xsxb_get_project", arguments: { project_id: "a" } },
+      },
+      service,
+    );
+    const snapshot = response.result.structuredContent.data;
+    assert.equal(snapshot.projectId, "a");
+    assert.equal(snapshot.id, "a");
+    assert.equal(snapshot.active, false);
+    const listed = await call("xsxb_list_projects");
+    assert.equal(listed.activeProjectId, "b");
+    const selected = await call("xsxb_get_animation");
+    assert.equal(selected.project.id, "b");
+    assert.equal(selected.profile.id, "enemy");
+    assert.equal(selected.animation.id, "idle");
+    const followUp = await call("xsxb_get_project");
+    assert.equal(followUp.projectId, "b");
+    assert.equal(followUp.id, "b");
+    assert.equal(followUp.active, true);
   });
 });
 
