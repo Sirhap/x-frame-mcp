@@ -289,8 +289,43 @@ function packingFromSidecar(sidecar) {
 }
 
 /**
+ * Throws SLICE_PACKING_MISMATCH when a caller grid does not match sidecar packing.
+ * @param {string} detail What the caller passed (e.g. `grid_divs "8x8"`).
+ * @param {{columns:number,rows:number,cellW?:number,cellH?:number,pad:number}} packing Sidecar packing.
+ * @returns {never}
+ */
+function throwSlicePackingMismatch(detail, packing) {
+  const err = new Error(
+    `${detail} does not match contact-sheet packing ${packing.columns}x${packing.rows} (cell ${formatPackingCell(packing)}, pad ${packing.pad}). Pass columns/rows/cell/pad from the export_sheet receipt, not overlay grid_divs.`,
+  );
+  err.code = "SLICE_PACKING_MISMATCH";
+  throw err;
+}
+
+/**
+ * Resolves columns/rows from slice args without inferring cell size from the image.
+ * @param {object} args Tool arguments.
+ * @returns {{columns?:number,rows?:number}} Grid from columns/cols/rows/grid_divs.
+ */
+function resolveArgsGrid(args) {
+  const hasColumns = argumentPresent(args.columns);
+  const hasCols = argumentPresent(args.cols);
+  if (hasColumns && hasCols && Number(args.columns) !== Number(args.cols)) {
+    throw new Error("columns and cols disagree. Pass only one.");
+  }
+  let columns = optionalPositiveInt(args.columns ?? args.cols, "columns");
+  let rows = optionalPositiveInt(args.rows, "rows");
+  if (argumentPresent(args.grid_divs)) {
+    const parsed = parseSliceGridDivs(args.grid_divs);
+    if (columns === undefined) columns = parsed.columns;
+    if (rows === undefined) rows = parsed.rows;
+  }
+  return { columns, rows };
+}
+
+/**
  * Fills omitted slice packing from an export_sheet sidecar, or throws when
- * overlay `grid_divs` does not match the packed columns×rows.
+ * caller columns/rows (including overlay `grid_divs`) do not match the packed grid.
  * @param {object} args Tool arguments.
  * @param {string} pngPath Sheet PNG.
  * @returns {object} Args, possibly with sidecar columns/rows/cell/pad filled in.
@@ -302,21 +337,41 @@ function applyContactSheetSidecar(args, pngPath) {
   const hasColumns = argumentPresent(args.columns) || argumentPresent(args.cols);
   const hasRows = argumentPresent(args.rows);
   const hasCell = argumentPresent(args.cell) || argumentPresent(args.cell_w) || argumentPresent(args.cell_h);
+  const hasPad = argumentPresent(args.pad) || argumentPresent(args.padding);
   const hasGridDivs = argumentPresent(args.grid_divs);
-  if (hasGridDivs && !hasColumns && !hasRows && !hasCell) {
-    const parsed = parseSliceGridDivs(args.grid_divs);
-    if (parsed.columns !== packing.columns || parsed.rows !== packing.rows) {
-      const err = new Error(
-        `grid_divs "${args.grid_divs}" does not match contact-sheet packing ${packing.columns}x${packing.rows} (cell ${formatPackingCell(packing)}, pad ${packing.pad}). Pass columns/rows/cell/pad from the export_sheet receipt, not overlay grid_divs.`,
+  const grid = resolveArgsGrid(args);
+  if (grid.columns !== undefined && grid.columns !== packing.columns) {
+    const detail = hasGridDivs && !hasColumns ? `grid_divs "${args.grid_divs}"` : `columns ${grid.columns}`;
+    throwSlicePackingMismatch(detail, packing);
+  }
+  if (grid.rows !== undefined && grid.rows !== packing.rows) {
+    const detail = hasGridDivs && !hasRows ? `grid_divs "${args.grid_divs}"` : `rows ${grid.rows}`;
+    throwSlicePackingMismatch(detail, packing);
+  }
+  if (hasCell) {
+    const cellSize = resolveCellSize(args);
+    if (
+      cellSize &&
+      packing.cellW !== undefined &&
+      packing.cellH !== undefined &&
+      (cellSize.cellW !== packing.cellW || cellSize.cellH !== packing.cellH)
+    ) {
+      throw new Error(
+        `cell and sidecar.cell disagree (${cellSize.cellW}x${cellSize.cellH} vs ${formatPackingCell(packing)}).`,
       );
-      err.code = "SLICE_PACKING_MISMATCH";
-      throw err;
     }
   }
-  if (hasColumns || hasRows || hasCell || hasGridDivs) return args;
-  const merged = { ...args, columns: packing.columns, rows: packing.rows };
-  if (!argumentPresent(args.pad) && !argumentPresent(args.padding)) merged.pad = packing.pad;
-  if (packing.cellW !== undefined && packing.cellH !== undefined) {
+  if (hasPad) {
+    const pad = resolvePad(args);
+    if (pad !== packing.pad) {
+      throw new Error(`pad and sidecar.pad disagree (${pad} vs ${packing.pad}).`);
+    }
+  }
+  const merged = { ...args };
+  if (!hasColumns && !hasGridDivs) merged.columns = packing.columns;
+  if (!hasRows && !hasGridDivs) merged.rows = packing.rows;
+  if (!hasPad) merged.pad = packing.pad;
+  if (!hasCell && packing.cellW !== undefined && packing.cellH !== undefined) {
     if (packing.cellW === packing.cellH) merged.cell = packing.cellW;
     else {
       merged.cell_w = packing.cellW;
