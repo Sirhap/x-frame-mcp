@@ -364,6 +364,46 @@ test("plant_feet with idle reference plants walk soles on idle feetY, not padded
   }
 });
 
+test("plant_feet with idle reference plants onto median idle sole, not the first hang frame", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-span");
+    const walkDir = path.join(current.root, "walk-span");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idleHang = bodyOnCanvas(64, 72, 62);
+    const idleSole = bodyOnCanvas(64, 72, 63);
+    const walk = bodyOnCanvas(64, 64, 63);
+    assert.equal(measureSpriteGeometry(idleHang.data, 64, 72).feetY, 62);
+    assert.equal(measureSpriteGeometry(idleSole.data, 64, 72).feetY, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idleHang.data, 64, 72));
+    fs.writeFileSync(path.join(idleDir, "02.png"), encodePngRgba(idleSole.data, 64, 72));
+    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(walk.data, 64, 64));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await importWalk(current, walkDir);
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "walk",
+      reference_animation_id: "idle",
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.equal(
+      after.feetY,
+      63,
+      `walk must land on median idle sole 63, not first-frame hang sole 62 (got ${after.feetY})`,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("plant_feet with idle reference honors an explicit target_y after pad", async () => {
   const current = fixture();
   try {

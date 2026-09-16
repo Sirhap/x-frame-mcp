@@ -3324,9 +3324,9 @@ function createXsxbMcpService(options = {}) {
    * Plants opaque soles onto a target group-Y. Translate only.
    * When `reference_animation_id` is set, pads to at least that canvas first
    * (same origin-preserving pad as `xsxb_resize_canvas`). If `target_y` is
-   * omitted or -1, plants onto the reference clip's measured feetY (same
-   * group row as idle boots). An explicit `target_y` other than -1 is honored
-   * after the pad.
+   * omitted or -1, plants onto the reference clip's measured sole (median
+   * feetY of that clip, not the first hang-heavier frame). An explicit
+   * `target_y` other than -1 is honored after the pad.
    * @param {object} args Tool arguments.
    * @returns {object} Plant receipt.
    */
@@ -3359,17 +3359,21 @@ function createXsxbMcpService(options = {}) {
       );
       lockWidth = Math.max(0, ...referenceImages.map((image) => image.width));
       lockHeight = Math.max(0, ...referenceImages.map((image) => image.height));
-      const refImage =
-        referenceImages.find((image) => image.width === lockWidth && image.height === lockHeight) ||
-        referenceImages[0];
-      if (refImage) {
-        const geometry = measureSpriteGeometry(refImage.data, refImage.width, refImage.height);
-        const origin = canvasAnchor(
-          refImage.width,
-          refImage.height,
-          reference.anchorMode || animation.anchorMode || "canvas_bottom_center",
-        );
-        referenceSoleGroupY = Number(geometry.feetY) - origin.y;
+      const anchorMode = reference.anchorMode || animation.anchorMode || "canvas_bottom_center";
+      const soleRows = [];
+      for (const image of referenceImages) {
+        const aligned =
+          image.width === lockWidth && image.height === lockHeight
+            ? image
+            : padFramePreserveOrigin(image, lockWidth, lockHeight, anchorMode);
+        const geometry = measureSpriteGeometry(aligned.data, aligned.width, aligned.height);
+        if (Number.isFinite(Number(geometry.feetY))) soleRows.push(Number(geometry.feetY));
+      }
+      if (soleRows.length) {
+        const sorted = soleRows.slice().sort((left, right) => left - right);
+        const referenceSoleCanvasY = sorted[Math.floor(sorted.length / 2)];
+        const origin = canvasAnchor(lockWidth, lockHeight, anchorMode);
+        referenceSoleGroupY = referenceSoleCanvasY - origin.y;
       }
     }
     const rawTargetY = args.target_y;

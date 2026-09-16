@@ -12,8 +12,18 @@ const os = require("node:os");
 const path = require("node:path");
 const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
 const { decodePngRgba, encodePngRgba } = require("../mcp/xsxb_mcp_cutout");
+const {
+  flattenFrameBackground,
+  measureSpriteGeometry,
+  resolvePreviewBackground,
+} = require("../mcp/xsxb_mcp_lock");
+const { groupToCanvas } = require("../mcp/xsxb_mcp_visual_qa");
 const { callTool, writeGameplayScene } = require("./acceptance_playbooks");
 const { countPixels, isTrueMagenta } = require("./acceptance_sprites");
+
+const HURT_LIME = Object.freeze([0, 255, 80, 255]);
+const COLLISION_CYAN = Object.freeze([0, 255, 255, 255]);
+const HIT_RED = Object.freeze([255, 0, 0, 255]);
 
 const PREFERRED_ROOT = path.join(__dirname, "fixtures", "generated_hero");
 const ASSET_ROOT = "/opt/cursor/artifacts/assets";
@@ -585,6 +595,78 @@ function inspectIdleOccupancyDiff(previewPath, diffed) {
 }
 
 /**
+ * Reads a finite pixel count from a scale/measure receipt.
+ * `Number(dFeet) || 0` would hide a missing field as a perfect plant.
+ * @param {unknown} value Raw feetY or dFeet.
+ * @param {string} label Field name for the assertion.
+ * @returns {number} Finite pixel value.
+ */
+function requireFinitePixel(value, label) {
+  const pixel = Number(value);
+  assert.ok(Number.isFinite(pixel), `${label} must be a finite pixel count, got ${value}`);
+  return pixel;
+}
+
+/**
+ * Median of finite numbers. Same mid-index as the Godot scale contract.
+ * @param {number[]} values Samples.
+ * @returns {number} Median, or NaN when empty.
+ */
+function medianPixel(values) {
+  const sorted = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (!sorted.length) return Number.NaN;
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Measures each on-disk frame sole. Used so plant asserts against the clip
+ * sole, not measure_frames' default reference_frame=0 (the hang-heavier idle).
+ * @param {object} receipt get_animation receipt.
+ * @returns {{frames:Array<{index:number,feetY:number,maxY:number}>,median:number}}
+ */
+function measureClipSoles(receipt) {
+  const frames = (receipt.data.animation.frames || []).map((frame, index) => {
+    const image = decodePngRgba(frame.absolutePath);
+    const geometry = measureSpriteGeometry(image.data, image.width, image.height);
+    return {
+      index,
+      feetY: requireFinitePixel(
+        geometry.feetY,
+        `${receipt.data.animation.id || "clip"} frame ${index} feetY`,
+      ),
+      maxY: geometry.maxY,
+    };
+  });
+  return { frames, median: medianPixel(frames.map((frame) => frame.feetY)) };
+}
+
+/**
+ * Asserts idle/walk/attack sit on idle's measured sole after validate_for_godot.
+ * Prefer |dFeet|===0. A 1px AA fringe may use <=1 with a canvas comment; do
+ * not keep a silent <=2 (that hid walk/attack one row above the idle sole).
+ * @param {{idle:object,walk:object,attack:object}} scaleCanvases Scale rows.
+ * @returns {{feetY:{idle:number,walk:number,attack:number},dFeet:{idle:number,walk:number,attack:number}}}
+ */
+function assertScaleFeetOnIdleSole(scaleCanvases) {
+  const feetY = {};
+  const dFeet = {};
+  for (const id of ["idle", "walk", "attack"]) {
+    const clip = scaleCanvases[id];
+    feetY[id] = requireFinitePixel(clip.feetY, `${id} feetY`);
+    dFeet[id] = requireFinitePixel(clip.dFeet, `${id} dFeet`);
+    assert.equal(
+      dFeet[id],
+      0,
+      `${id} dFeet=${dFeet[id]} feetY=${feetY[id]} vs idle ${feetY.idle} (want idle sole, not hang pad)`,
+    );
+  }
+  return { feetY, dFeet };
+}
+
+/**
  * Asserts Godot scale clips share idle/walk/attack canvas height.
  * @param {object} receipt Validation receipt.
  * @returns {{idle:object,walk:object,attack:object}} Scale rows.
@@ -605,6 +687,210 @@ function assertScaleCanvasesMatch(receipt) {
     assert.equal(Number(attackScale.dCanvasW) || 0, 0, `attack dCanvasW=${attackScale.dCanvasW}`);
   }
   return { idle: idleScale, walk: walkScale, attack: attackScale };
+}
+
+/**
+ * True when a group-space box is present and enabled.
+ * @param {object|null|undefined} box Override.
+ * @returns {boolean} Usable box.
+ */
+function boxPresent(box) {
+  return Boolean(box && box.enabled !== false && Number(box.size?.x) > 0 && Number(box.size?.y) > 0);
+}
+
+/**
+ * Maps a group-space box (foot 0,0, body negative Y) onto canvas pixels.
+ * Offset is the box center, same as `estimateFrameBoxes`.
+ * @param {{offset?:{x?:number,y?:number},size?:{x?:number,y?:number}}} box Group box.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @returns {{minX:number,minY:number,maxX:number,maxY:number}} Inclusive-edge rect.
+ */
+function boxRectOnCanvas(box, width, height) {
+  const sizeX = Number(box?.size?.x || 0);
+  const sizeY = Number(box?.size?.y || 0);
+  const center = groupToCanvas(Number(box?.offset?.x || 0), Number(box?.offset?.y || 0), width, height);
+  return {
+    minX: center.x - sizeX / 2,
+    minY: center.y - sizeY / 2,
+    maxX: center.x + sizeX / 2,
+    maxY: center.y + sizeY / 2,
+  };
+}
+
+/**
+ * True when two group boxes share offset and size.
+ * @param {object} left First box.
+ * @param {object} right Second box.
+ * @returns {boolean} Identical geometry.
+ */
+function boxesIdentical(left, right) {
+  return (
+    Number(left?.offset?.x) === Number(right?.offset?.x) &&
+    Number(left?.offset?.y) === Number(right?.offset?.y) &&
+    Number(left?.size?.x) === Number(right?.size?.x) &&
+    Number(left?.size?.y) === Number(right?.size?.y)
+  );
+}
+
+/**
+ * Writes one opaque pixel.
+ * @param {Uint8ClampedArray} rgba Buffer.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @param {number} x Column.
+ * @param {number} y Row.
+ * @param {readonly number[]} color RGBA.
+ * @returns {void}
+ */
+function setCanvasPixel(rgba, width, height, x, y, color) {
+  if (x < 0 || y < 0 || x >= width || y >= height) return;
+  rgba.set(color, (y * width + x) * 4);
+}
+
+/**
+ * Strokes a canvas rect with a 1px outline.
+ * @param {Uint8ClampedArray} rgba Buffer.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @param {{minX:number,minY:number,maxX:number,maxY:number}} rect Canvas rect.
+ * @param {readonly number[]} color RGBA.
+ * @returns {void}
+ */
+function strokeCanvasRect(rgba, width, height, rect, color) {
+  const x0 = Math.round(rect.minX);
+  const x1 = Math.round(rect.maxX);
+  const y0 = Math.round(rect.minY);
+  const y1 = Math.round(rect.maxY);
+  for (let x = x0; x <= x1; x += 1) {
+    setCanvasPixel(rgba, width, height, x, y0, color);
+    setCanvasPixel(rgba, width, height, x, y1, color);
+  }
+  for (let y = y0; y <= y1; y += 1) {
+    setCanvasPixel(rgba, width, height, x0, y, color);
+    setCanvasPixel(rgba, width, height, x1, y, color);
+  }
+}
+
+/**
+ * Dark-cloth torso span, excluding gold slash/crescent. Used so attack reach
+ * is measured past the body, not past a weapon-inflated hurtbox.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame.
+ * @returns {{minX:number,minY:number,maxX:number,maxY:number}} Torso pixels.
+ */
+function measureDarkBodySpan(image) {
+  const { data, width, height } = image;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      const r = data[offset];
+      const g = data[offset + 1];
+      const b = data[offset + 2];
+      const a = data[offset + 3];
+      if (a <= 16) continue;
+      if (isGoldSlash(r, g, b, a) || isCrescentGold(r, g, b, a)) continue;
+      if (Math.max(r, g, b) > 160) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX) {
+    const geometry = measureSpriteGeometry(data, width, height);
+    return { minX: geometry.minX, minY: geometry.minY, maxX: geometry.maxX, maxY: geometry.maxY };
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Asserts idle/walk/attack boxes cover the torso and sit on the soles.
+ * Attack also needs a hitbox that is not a hurtbox clone and reaches past the body.
+ * @param {string} animationId Clip id.
+ * @param {number} frameIndex Frame index.
+ * @param {object} boxes Group-space overrides.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame.
+ * @returns {void}
+ */
+function assertFrameBoxes(animationId, frameIndex, boxes, image) {
+  const { width, height } = image;
+  const geometry = measureSpriteGeometry(image.data, width, height);
+  const label = `${animationId} frame ${frameIndex}`;
+  const grounded = animationId === "idle" || animationId === "walk" || animationId === "attack";
+  if (grounded) {
+    assert.ok(boxPresent(boxes?.hurtbox), `${label} missing hurtbox`);
+    assert.ok(boxPresent(boxes?.collisionbox), `${label} missing collisionbox`);
+    const hurtW = Number(boxes.hurtbox.size.x);
+    const hurtH = Number(boxes.hurtbox.size.y);
+    assert.ok(hurtW >= 8 && hurtH >= 8, `${label} hurtbox is a ${hurtW}x${hurtH} stamp, not a torso`);
+    assert.ok(
+      hurtW >= geometry.bodyW * 0.2 && hurtH >= geometry.bodyH * 0.25,
+      `${label} hurtbox ${hurtW}x${hurtH} is too small for torso ${geometry.bodyW}x${geometry.bodyH}`,
+    );
+    const hurt = boxRectOnCanvas(boxes.hurtbox, width, height);
+    const torsoY = Math.round((geometry.headY + geometry.feetY) / 2);
+    assert.ok(
+      hurt.minY <= torsoY && torsoY <= hurt.maxY,
+      `${label} hurtbox misses torso row ${torsoY} (rect ${hurt.minY}..${hurt.maxY})`,
+    );
+    const collision = boxRectOnCanvas(boxes.collisionbox, width, height);
+    assert.ok(
+      collision.maxY <= height,
+      `${label} collision extends past the canvas (maxY=${collision.maxY} height=${height})`,
+    );
+    const soleGap = Math.abs(collision.maxY - geometry.feetY);
+    assert.ok(
+      soleGap <= 16,
+      `${label} collision bottom ${collision.maxY} is ${soleGap}px from soles ${geometry.feetY} (mid-torso float)`,
+    );
+  }
+  if (animationId === "attack") {
+    assert.ok(boxPresent(boxes?.hitbox), `${label} missing hitbox`);
+    assert.ok(!boxesIdentical(boxes.hitbox, boxes.hurtbox), `${label} hitbox is identical to the hurtbox`);
+    const hit = boxRectOnCanvas(boxes.hitbox, width, height);
+    const hurt = boxRectOnCanvas(boxes.hurtbox, width, height);
+    const body = measureDarkBodySpan(image);
+    const pastHurt = hit.maxX > hurt.maxX + 4 || hit.minX < hurt.minX - 4;
+    const pastBody = hit.maxX > body.maxX + 4 || hit.minX < body.minX - 4;
+    assert.ok(
+      pastHurt || pastBody,
+      `${label} hitbox does not reach 4px past the body (hit=${JSON.stringify(hit)} hurt=${JSON.stringify(hurt)} body=${JSON.stringify(body)})`,
+    );
+  }
+}
+
+/**
+ * Flattens the subject onto magenta and strokes hurt/collision/hit outlines.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} frame Source.
+ * @param {object} boxes Group-space overrides.
+ * @param {string} dest Output PNG path.
+ * @returns {string} dest.
+ */
+function drawBoxesOnMagenta(frame, boxes, dest) {
+  const flat = flattenFrameBackground(frame, resolvePreviewBackground("magenta"));
+  const strokes = [
+    ["hurtbox", HURT_LIME],
+    ["collisionbox", COLLISION_CYAN],
+    ["hitbox", HIT_RED],
+  ];
+  for (const [name, color] of strokes) {
+    const box = boxes?.[name];
+    if (!boxPresent(box)) continue;
+    strokeCanvasRect(
+      flat.data,
+      flat.width,
+      flat.height,
+      boxRectOnCanvas(box, flat.width, flat.height),
+      color,
+    );
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, encodePngRgba(flat.data, flat.width, flat.height));
+  return dest;
 }
 
 /**
@@ -719,6 +1005,7 @@ async function runGeneratedAcceptance(options = {}) {
     qa: null,
     feetY: { idle: null, walk: null, attack: null },
     canvas: { idle: null, walk: null, attack: null },
+    boxes: { idle: [], walk: [], attack: [] },
     changedPixelCount: null,
     idleDiff: null,
     goldCrescent: null,
@@ -874,11 +1161,25 @@ async function runGeneratedAcceptance(options = {}) {
       reference_animation_id: "idle",
     });
     assert.equal(afterLock.ok, true);
-    const feetDrift = Math.max(...afterLock.data.frames.map((frame) => Math.abs(Number(frame.dFeet) || 0)));
-    assert.ok(feetDrift <= 2, `after plant, walk dFeet vs idle must stay tight, got ${feetDrift}`);
-    report.feetY.walk = afterLock.data.frames[0].feetY;
-    report.feetY.idle = afterLock.data.reference?.feetY;
-    log.push(`plant walk y=-1 dFeet<=${feetDrift}`);
+    const idleSoles = measureClipSoles(
+      await callTool(service, "xsxb_get_animation", { project_id: "generated", animation_id: "idle" }),
+    );
+    const walkSoles = measureClipSoles(
+      await callTool(service, "xsxb_get_animation", { project_id: "generated", animation_id: "walk" }),
+    );
+    const plantedIdleFeetY = requireFinitePixel(idleSoles.median, "idle clip sole");
+    const plantedWalkDeltas = walkSoles.frames.map((frame) => frame.feetY - plantedIdleFeetY);
+    const feetDrift = Math.max(...plantedWalkDeltas.map((delta) => Math.abs(delta)));
+    assert.equal(
+      feetDrift,
+      0,
+      `after plant, walk must sit on idle clip sole ${plantedIdleFeetY} (frames ${idleSoles.frames.map((frame) => frame.feetY).join(",")}), got walk ${walkSoles.frames.map((frame) => frame.feetY).join(",")} dFeet=${plantedWalkDeltas.join(",")}`,
+    );
+    report.feetY.walk = walkSoles.median;
+    report.feetY.idle = plantedIdleFeetY;
+    log.push(
+      `plant walk idleFeetY=${idleSoles.frames.map((frame) => frame.feetY).join(",")} sole=${plantedIdleFeetY} walkFeetY=${walkSoles.frames.map((frame) => frame.feetY).join(",")} dFeet=${plantedWalkDeltas.join(",")}`,
+    );
 
     const diffed = await callTool(service, "xsxb_diff_frames", {
       project_id: "generated",
@@ -1054,14 +1355,43 @@ async function runGeneratedAcceptance(options = {}) {
     }
 
     for (const animationId of ["idle", "walk", "attack"]) {
-      const boxes = await callTool(service, "xsxb_estimate_boxes", {
+      const estimated = await callTool(service, "xsxb_estimate_boxes", {
         project_id: "generated",
         animation_id: animationId,
         replace: true,
       });
-      assert.equal(boxes.ok, true, JSON.stringify(boxes.error || boxes));
+      assert.equal(estimated.ok, true, JSON.stringify(estimated.error || estimated));
+      const listed = await callTool(service, "xsxb_get_animation", {
+        project_id: "generated",
+        animation_id: animationId,
+        include: ["boxes"],
+      });
+      assert.equal(listed.ok, true, JSON.stringify(listed.error || listed));
+      const frames = listed.data.animation.frames || [];
+      const boxMap = listed.data.boxes || {};
+      report.boxes[animationId] = [];
+      for (let index = 0; index < frames.length; index += 1) {
+        const frameBoxes = boxMap[index] || boxMap[String(index)];
+        const image = decodePngRgba(frames[index].absolutePath);
+        assertFrameBoxes(animationId, index, frameBoxes, image);
+        const dest = path.join(root, `generated_boxes_${animationId}_${index}.png`);
+        drawBoxesOnMagenta(image, frameBoxes, dest);
+        kept[`generated_boxes_${animationId}_${index}.png`] = dest;
+        const hurt = boxRectOnCanvas(frameBoxes?.hurtbox || {}, image.width, image.height);
+        const collision = boxRectOnCanvas(frameBoxes?.collisionbox || {}, image.width, image.height);
+        const hit = frameBoxes?.hitbox ? boxRectOnCanvas(frameBoxes.hitbox, image.width, image.height) : null;
+        report.boxes[animationId].push({
+          index,
+          hurtbox: frameBoxes?.hurtbox?.size || null,
+          collisionbox: frameBoxes?.collisionbox?.size || null,
+          hitbox: frameBoxes?.hitbox?.size || null,
+          hurtRect: hurt,
+          collisionRect: collision,
+          hitRect: hit,
+        });
+      }
     }
-    log.push("estimate_boxes");
+    log.push("estimate_boxes + assert + overlays");
 
     writeGameplayScene(game);
     const synced = await callTool(service, "xsxb_sync_godot", { project_id: "generated" });
@@ -1104,7 +1434,10 @@ async function runGeneratedAcceptance(options = {}) {
     report.qa = gate.data.qa;
     kept["generated_godot_evidence.png"] = gate.data.evidence.path;
     kept["generated_run_summary.json"] = gate.data.run_summary.path;
-    log.push("validate_for_godot clean");
+    log.push(
+      `validate_for_godot clean idleFeetY=${report.feetY.idle} walkFeetY=${report.feetY.walk} attackFeetY=${report.feetY.attack} dFeet=${scaleCanvases.idle.dFeet}/${scaleCanvases.walk.dFeet}/${scaleCanvases.attack.dFeet}`,
+    );
+    assertScaleFeetOnIdleSole(scaleCanvases);
 
     return report;
   } catch (error) {
@@ -1122,6 +1455,7 @@ async function runGeneratedAcceptance(options = {}) {
             qa: report.qa,
             feetY: report.feetY,
             canvas: report.canvas,
+            boxes: report.boxes,
             changedPixelCount: report.changedPixelCount,
             idleDiff: report.idleDiff,
             goldCrescent: report.goldCrescent,
@@ -1140,7 +1474,13 @@ async function runGeneratedAcceptance(options = {}) {
   }
 }
 
-module.exports = { resolveGeneratedHeroDirs, runGeneratedAcceptance };
+module.exports = {
+  assertFrameBoxes,
+  boxRectOnCanvas,
+  drawBoxesOnMagenta,
+  resolveGeneratedHeroDirs,
+  runGeneratedAcceptance,
+};
 
 if (require.main === module) {
   runGeneratedAcceptance()
