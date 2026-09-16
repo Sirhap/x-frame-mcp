@@ -7,11 +7,11 @@ const path = require("node:path");
 const test = require("node:test");
 const { createProjectStore } = require("../project_store");
 const { MCP_TOOL_NAMES, createXsxbMcpService, toolDefinitions } = require("../xsxb_mcp_service");
-const { INSTRUCTIONS } = require("../xsxb_mcp_server");
+const { handleMessage, INSTRUCTIONS } = require("../xsxb_mcp_server");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { measureSpriteGeometry } = require("../xsxb_mcp_lock");
 const { resolveOverlayCell } = require("../xsxb_mcp_plant");
-const { canvasToGroup } = require("../xsxb_mcp_visual_qa");
+const { canvasAnchor, canvasToGroup } = require("../xsxb_mcp_visual_qa");
 
 const ICE = Object.freeze([84, 190, 251, 255]);
 const BOOT = Object.freeze([210, 36, 42, 255]);
@@ -199,6 +199,60 @@ test("apply plants opaque soles onto the last pixel row (±1)", async () => {
       Math.abs(after.feetY - (image.height - 1)) <= 1,
       `feetY ${after.feetY} should land on last pixel row ${image.height - 1}`,
     );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("plant_feet translates hurtbox offset by the planted group delta", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "seq");
+    fs.mkdirSync(directory);
+    const frame = bodyFrame(32, 8, 12);
+    fs.writeFileSync(path.join(directory, "01.png"), encodePngRgba(frame.data, frame.width, frame.height));
+    await importWalk(current, directory);
+    const hurtboxOffset = { x: 2, y: -8 };
+    await current.service.call("xsxb_update_frame_boxes", {
+      animation_id: "walk",
+      frame: 0,
+      hurtbox: { offset: hurtboxOffset, size: { x: 8, y: 10 } },
+    });
+    const before = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const beforeFrame = before.animation.frames[0];
+    const plantedResponse = await handleMessage(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "xsxb_plant_feet",
+          arguments: { animation_id: "walk", apply: true },
+        },
+      },
+      current.service,
+    );
+    const planted = plantedResponse.result.structuredContent.data;
+    assert.equal(planted.applied, true);
+    assert.ok(planted.frames[0].dy !== 0, "fixture must actually translate soles");
+    const oldAnchor = canvasAnchor(beforeFrame.width, beforeFrame.height, before.animation.anchorMode);
+    const newAnchor = canvasAnchor(
+      planted.frames[0].width,
+      planted.frames[0].height,
+      before.animation.anchorMode,
+    );
+    const delta = {
+      x: oldAnchor.x - newAnchor.x,
+      y: oldAnchor.y + planted.frames[0].dy - newAnchor.y,
+    };
+    const readBack = await current.service.call("xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["boxes"],
+    });
+    assert.deepEqual(readBack.boxes["0"].hurtbox.offset, {
+      x: hurtboxOffset.x + delta.x,
+      y: hurtboxOffset.y + delta.y,
+    });
   } finally {
     current.cleanup();
   }

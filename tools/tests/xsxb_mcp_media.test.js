@@ -10,7 +10,8 @@ const { createXsxbMcpService } = require("../xsxb_mcp_service");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { parseGroupPoint, requireFps } = require("../xsxb_mcp_arguments");
 const { encodeGifWithFfmpeg } = require("../xsxb_mcp_processes");
-const { measureLongAxis } = require("../xsxb_mcp_visual_qa");
+const { handleMessage } = require("../xsxb_mcp_server");
+const { canvasAnchor, measureLongAxis } = require("../xsxb_mcp_visual_qa");
 
 const TRAIL_PRESET = path.join(
   __dirname,
@@ -1252,6 +1253,124 @@ test("shift_frames pads height so hanging ice is not clipped", async () => {
     assert.equal(image.data[destOffset], ice[0]);
     assert.equal(image.data[destOffset + 1], ice[1]);
     assert.equal(image.data[destOffset + 2], ice[2]);
+  } finally {
+    current.cleanup();
+  }
+});
+
+/**
+ * Group-space delta matching `xsxb_resize_canvas`: origin plus pixel shift minus new origin.
+ * @param {{width:number,height:number}} before Source canvas.
+ * @param {{width:number,height:number}} after Destination canvas.
+ * @param {number} pixelDx Canvas/group X pixels applied to the PNG.
+ * @param {number} pixelDy Canvas/group Y pixels applied to the PNG (positive down).
+ * @param {string} [anchorMode] Animation anchor.
+ * @returns {{x:number,y:number}} Annotation delta.
+ */
+function annotationGroupDelta(before, after, pixelDx, pixelDy, anchorMode) {
+  const oldAnchor = canvasAnchor(before.width, before.height, anchorMode);
+  const newAnchor = canvasAnchor(after.width, after.height, anchorMode);
+  return {
+    x: oldAnchor.x + pixelDx - newAnchor.x,
+    y: oldAnchor.y + pixelDy - newAnchor.y,
+  };
+}
+
+/**
+ * Calls one MCP tool through JSON-RPC `tools/call` and returns receipt data.
+ * @param {object} service XSXB service.
+ * @param {string|number} id JSON-RPC id.
+ * @param {string} name Tool name.
+ * @param {object} [args] Tool arguments.
+ * @returns {Promise<object>} `structuredContent.data`.
+ */
+async function callTool(service, id, name, args = {}) {
+  const response = await handleMessage(
+    {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name, arguments: args },
+    },
+    service,
+  );
+  const receipt = response.result.structuredContent;
+  assert.equal(receipt.ok, true, receipt.error?.message || JSON.stringify(receipt));
+  return receipt.data;
+}
+
+test("shift_frames translates boxes, attachments, and trail sticks by the group delta", async () => {
+  const current = fixture();
+  try {
+    const size = 16;
+    fs.writeFileSync(path.join(current.sequenceDir, "a.png"), solidPng(size));
+    fs.writeFileSync(path.join(current.sequenceDir, "b.png"), solidPng(size, [40, 200, 40, 255]));
+    await importWalk(current);
+
+    const hurtboxOffset = { x: 1, y: -6 };
+    const attachmentOffset = { x: 3, y: -4 };
+    const trailTop = { x: -2, y: -10 };
+    const trailBottom = { x: -2, y: -2 };
+    const pixelDx = 2;
+    const pixelDy = -3;
+
+    await current.service.call("xsxb_update_frame_boxes", {
+      animation_id: "walk",
+      frame: 0,
+      hurtbox: { offset: hurtboxOffset, size: { x: 8, y: 8 } },
+    });
+    const sparkPath = path.join(current.root, "spark.png");
+    fs.writeFileSync(sparkPath, solidPng(8, [40, 180, 80, 255]));
+    await current.service.call("xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: sparkPath,
+      id: "spark",
+      frame: 0,
+      offset_x: attachmentOffset.x,
+      offset_y: attachmentOffset.y,
+      sync: false,
+    });
+    await current.service.call("xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "shift-trail",
+      sticks: [{ frame: 0, top: trailTop, bottom: trailBottom, layer: "front" }],
+      sync: false,
+    });
+
+    const before = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const beforeFrame = before.animation.frames[0];
+    const shifted = await callTool(current.service, 1, "xsxb_shift_frames", {
+      animation_id: "walk",
+      frames: [{ frame: 0, dx: pixelDx, dy: pixelDy }],
+    });
+    assert.equal(shifted.shifted[0].dx, pixelDx);
+    assert.equal(shifted.shifted[0].dy, pixelDy);
+    const afterFrame = shifted.shifted[0];
+    const delta = annotationGroupDelta(
+      beforeFrame,
+      afterFrame,
+      pixelDx,
+      pixelDy,
+      before.animation.anchorMode,
+    );
+
+    const readBack = await callTool(current.service, 2, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["boxes", "attachments", "trails"],
+    });
+    assert.deepEqual(readBack.boxes["0"].hurtbox.offset, {
+      x: hurtboxOffset.x + delta.x,
+      y: hurtboxOffset.y + delta.y,
+    });
+    assert.deepEqual(readBack.attachments[0].transform.offset, {
+      x: attachmentOffset.x + delta.x,
+      y: attachmentOffset.y + delta.y,
+    });
+    assert.deepEqual(readBack.trails[0].sticks[0].top, { x: trailTop.x + delta.x, y: trailTop.y + delta.y });
+    assert.deepEqual(readBack.trails[0].sticks[0].bottom, {
+      x: trailBottom.x + delta.x,
+      y: trailBottom.y + delta.y,
+    });
   } finally {
     current.cleanup();
   }
