@@ -190,6 +190,17 @@ test("reorganization previews by default and commits locally only when requested
     assert.equal((await call("xsxb_get_animation")).animation.frames.length, 2);
   }));
 
+test("reorganize_frames dry_run:false without order still previews", async () =>
+  fixture(async ({ service, call, paths }) => {
+    const before = fs.readFileSync(paths.manifest);
+    const revisions = (await call("xsxb_list_revisions")).revisions.length;
+    const result = await service.callMcp("xsxb_reorganize_frames", { dry_run: false });
+    assert.equal(result.data.dryRun, true);
+    assert.equal(result.data.applied, false);
+    assert.deepEqual(fs.readFileSync(paths.manifest), before);
+    assert.equal((await call("xsxb_list_revisions")).revisions.length, revisions);
+  }));
+
 test("attachment creation and removal do not synchronize unless requested", async () =>
   fixture(async ({ call, png }) => {
     const added = await call("xsxb_add_attachment", { file_path: png, id: "tag", frame: 0 });
