@@ -431,7 +431,12 @@ function createXsxbMcpService(options = {}) {
     return reslash(path.relative(root, destPath));
   }
 
-  function registryProject(projectId, syncRequested = false) {
+  /**
+   * Resolves a registry project without changing the in-memory selection.
+   * @param {string} [projectId] Requested id, or the current context / active project.
+   * @returns {object} Registry project.
+   */
+  function lookupProject(projectId) {
     const registry = projectStore.readRegistry();
     const requested = String(projectId || context.projectId || "").trim();
     const project = requested
@@ -439,6 +444,11 @@ function createXsxbMcpService(options = {}) {
       : projectStore.resolveProject(registry);
     if (!project && requested) throw new Error(`XSXB project not found: ${requested}`);
     if (!project) throw new Error("No XSXB project is available.");
+    return project;
+  }
+
+  function registryProject(projectId, syncRequested = false) {
+    const project = lookupProject(projectId);
     if (syncRequested && !validGodotProjectRoot(project)) {
       const boundPath = project.projectRoot || "(empty)";
       throw new Error(
@@ -1023,7 +1033,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   function projectSnapshot(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+    const project = lookupProject(args.project_id || args.project);
     const registry = projectStore.readRegistry();
     const manifest = manifestFor(project);
     const profiles = Array.isArray(manifest.profiles) ? manifest.profiles : [];

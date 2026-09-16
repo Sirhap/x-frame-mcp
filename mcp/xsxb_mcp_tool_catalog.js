@@ -136,7 +136,7 @@ function toolDefinitions() {
     {
       name: "xsxb_get_project",
       description:
-        "Return one project's registry record, Godot binding, animation list, frame counts, and last sync receipt.",
+        "Return one project's registry record, Godot binding, animation list, frame counts, and last sync receipt. Inspecting another id does not change active.",
       inputSchema: {
         type: "object",
         properties: { project_id: projectProperty },

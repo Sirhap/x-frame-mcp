@@ -257,6 +257,7 @@ test("create_project and import_video window fields stay optional and lenient", 
   const animation = toolDefinitions().find((entry) => entry.name === "xsxb_import_animation");
   assert.ok(!list.inputSchema.required || list.inputSchema.required.length === 0);
   assert.ok(!get.inputSchema.required || !get.inputSchema.required.includes("project_id"));
+  assert.match(get.description, /does not change active/i);
   assert.deepEqual(setActive.inputSchema.required, ["project_id"]);
   assert.ok(create, "xsxb_create_project is catalogued");
   assert.ok(!create.inputSchema.required || create.inputSchema.required.length === 0);
