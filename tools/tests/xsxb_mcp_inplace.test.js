@@ -505,6 +505,48 @@ test("replace_frame in_place forgets stale Godot imported ctex on kept pack png"
   }
 });
 
+test("shift_frames in_place forgets stale Godot imported ctex on kept pack png", async () => {
+  const current = fixture();
+  const pack = path.join(current.godotRoot, "sprites", "run");
+  try {
+    const sources = writeSequence(pack, 2);
+    fs.writeFileSync(path.join(pack, "notes.txt"), "keep me\n");
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "run",
+      in_place: true,
+    });
+
+    const png = sources[0];
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${png}.import`, 'path="res://.godot/imported/01.ctex"\n');
+    fs.writeFileSync(path.join(importedDir, "01.ctex"), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, "01.md5"), "stale-ctex");
+
+    await current.service.call("xsxb_shift_frames", {
+      frames: [{ frame: 0, dy: 4 }],
+    });
+
+    assert.ok(fs.existsSync(sources[0]), "01.png must stay as the kept source");
+    assert.ok(fs.existsSync(path.join(pack, "notes.txt")), "non-owned files in the pack dir must survive");
+    assert.ok(fs.existsSync(`${png}.import`), "01.png.import sidecar must stay");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "01.ctex")),
+      false,
+      "01.ctex must be forgotten from .godot/imported",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, "01.md5")),
+      false,
+      "01.md5 must be forgotten from .godot/imported",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 /**
  * Decodes a PNG header by requiring the file to exist and start with PNG magic.
  * @param {string} filePath Absolute PNG path.
