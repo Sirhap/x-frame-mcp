@@ -911,9 +911,23 @@ function createXsxbMcpService(options = {}) {
       const syncRequested = booleanFlag(args.sync);
       const project = registryProject(args.project_id || args.project, syncRequested);
       const projectRoot = validGodotProjectRoot(project) || path.dirname(filePath);
-      const animations = parseSpriteFrames(filePath, projectRoot);
-      if (!animations.length) throw new Error(`No PNG animations found in ${filePath}`);
+      const parsed = parseSpriteFrames(filePath, projectRoot);
+      if (!parsed.length) throw new Error(`No PNG animations found in ${filePath}`);
+      const requestedId = args.animation_id || args.animation;
+      let animations = parsed;
+      if (requestedId && parsed.length > 1) {
+        const want = slug(requestedId);
+        animations = parsed.filter(
+          (animation) => slug(animation.id) === want || slug(animation.name) === want,
+        );
+        if (!animations.length) {
+          const available = parsed.map((animation) => animation.id).join(", ");
+          throw new Error(`No SpriteFrames clip matches "${requestedId}". Available: ${available}`);
+        }
+      }
+      const singleClipRename = Boolean(requestedId) && parsed.length === 1;
       const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+      const fpsOmitted = args.fps === undefined || args.fps === null || args.fps === "";
       const imported = [];
       for (const animation of animations) {
         const sliced = sliceExtractedFrames(
@@ -921,14 +935,20 @@ function createXsxbMcpService(options = {}) {
           args,
         );
         const items = sliced.paths;
+        const animationId = singleClipRename ? requestedId : animation.id;
+        const existingId = slug(animationId, animation.id);
+        const existingAnimation = (manifestFor(project).profiles || [])
+          .find((entry) => entry.id === profileId)
+          ?.animations?.find((entry) => String(entry.id || entry.name) === existingId);
+        const replacing = booleanFlag(args.replace) && Boolean(existingAnimation);
         imported.push(
           importPngItems(
             {
               ...args,
               profile_id: profileId,
-              animation_id: args.animation_id || animation.id,
+              animation_id: animationId,
               animation_name: args.animation_name || animation.name,
-              fps: args.fps || animation.fps,
+              fps: fpsOmitted ? (replacing ? undefined : animation.fps) : args.fps,
               sync: false,
               validate: false,
             },
