@@ -2140,6 +2140,7 @@ function createXsxbMcpService(options = {}) {
           transaction.writeFile(filePaths[index], encodePngRgba(placed.data, placed.width, placed.height));
         });
       });
+      for (const filePath of filePaths) forgetImportCacheIfInsideGodot(filePath);
     }
     const after = apply
       ? filePaths.map((filePath, index) => {
@@ -3618,6 +3619,7 @@ function createXsxbMcpService(options = {}) {
     let annotationsChanged = false;
     const { paths, documents } = loadDocuments(projectStore, project);
     const annotationKey = (index) => `${profile.id}/${animation.id || animation.name}:${index}`;
+    const writtenTargets = [];
     withFileTransaction((transaction) => {
       for (const entry of rawShifts) {
         if (!entry || typeof entry !== "object") continue;
@@ -3651,6 +3653,7 @@ function createXsxbMcpService(options = {}) {
         const outHeight = Math.max(image.height, destMaxY + 1);
         const next = shiftPlantedRgba(image.data, image.width, image.height, dx, dy, outHeight);
         transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
+        writtenTargets.push(target);
         const oldAnchor = canvasAnchor(image.width, image.height, animation.anchorMode);
         const newAnchor = canvasAnchor(image.width, outHeight, animation.anchorMode);
         const shiftX = oldAnchor.x + dx - newAnchor.x;
@@ -3675,6 +3678,7 @@ function createXsxbMcpService(options = {}) {
       }
       if (annotationsChanged) persistAnnotationDocuments(transaction, paths, documents);
     });
+    for (const target of writtenTargets) forgetImportCacheIfInsideGodot(target);
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3778,6 +3782,7 @@ function createXsxbMcpService(options = {}) {
     let annotationsChanged = false;
     const { paths, documents } = loadDocuments(projectStore, project);
     const annotationKey = (index) => `${profile.id}/${animation.id || animation.name}:${index}`;
+    const writtenTargets = [];
     withFileTransaction((transaction) => {
       for (const index of indexes) {
         const target = resolveAnimationFramePath(project, frames[index].path, animation);
@@ -3807,6 +3812,7 @@ function createXsxbMcpService(options = {}) {
         if (apply && grew) {
           const next = shiftPlantedRgba(padded.data, padded.width, padded.height, 0, planned.dy, outHeight);
           transaction.writeFile(target, encodePngRgba(next, outWidth, outHeight));
+          writtenTargets.push(target);
         }
         if (apply) {
           const oldAnchor = canvasAnchor(padded.width, padded.height, animation.anchorMode);
@@ -3858,6 +3864,7 @@ function createXsxbMcpService(options = {}) {
           const padded = padFramePreserveOrigin(entry.image, destWidth, destHeight, animation.anchorMode);
           if (padded.width !== entry.image.width || padded.height !== entry.image.height) {
             transaction.writeFile(entry.target, encodePngRgba(padded.data, padded.width, padded.height));
+            writtenTargets.push(entry.target);
           }
           if (
             Number(frames[entry.index].width || 0) !== destWidth ||
@@ -3878,6 +3885,7 @@ function createXsxbMcpService(options = {}) {
       }
       if (apply && annotationsChanged) persistAnnotationDocuments(transaction, paths, documents);
     });
+    for (const target of writtenTargets) forgetImportCacheIfInsideGodot(target);
     return {
       projectId: project.id,
       profileId: profile.id,
