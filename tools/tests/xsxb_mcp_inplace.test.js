@@ -250,6 +250,59 @@ test("replacing a copied animation with in_place drops the stale workspace folde
   }
 });
 
+test("restore_in_place_revision_unlinks_ghost_pack_pngs", async () => {
+  const current = fixture();
+  const pack = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-restore-pack-"));
+  try {
+    const sources = writeSequence(pack, 2);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "walk",
+      in_place: true,
+    });
+    const saved = await current.service.call("xsxb_save_revision");
+    const extras = ["03.png", "04.png"].map((name) => {
+      const filePath = path.join(pack, name);
+      fs.writeFileSync(filePath, ONE_PIXEL_PNG);
+      return filePath;
+    });
+    const replaced = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: pack,
+      animation_id: "walk",
+      replace: true,
+      in_place: true,
+    });
+    assert.ok(replaced.importedFrameCount >= 3);
+    assert.ok(fs.existsSync(extras[0]), "03.png must exist after in_place replace grows the clip");
+    assert.ok(fs.existsSync(extras[1]), "04.png must exist after in_place replace grows the clip");
+    await current.service.call("xsxb_restore_revision", {
+      revision_id: saved.revisionId,
+      dry_run: false,
+      restore_external: true,
+    });
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    assert.equal(animation.frameCount, 2);
+    assert.equal(animation.animation.frames.length, 2);
+    assert.ok(fs.existsSync(sources[0]), "01.png must remain after restore");
+    assert.ok(fs.existsSync(sources[1]), "02.png must remain after restore");
+    assert.equal(
+      fs.existsSync(extras[0]),
+      false,
+      "03.png must be unlinked after restore to the 2-frame in_place checkpoint",
+    );
+    assert.equal(
+      fs.existsSync(extras[1]),
+      false,
+      "04.png must be unlinked after restore to the 2-frame in_place checkpoint",
+    );
+  } finally {
+    current.cleanup();
+    fs.rmSync(pack, { recursive: true, force: true });
+  }
+});
+
 test("import_in_place_replace_drops_stale_pack_pngs", async () => {
   const current = fixture();
   const pack = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-game-pack-"));
