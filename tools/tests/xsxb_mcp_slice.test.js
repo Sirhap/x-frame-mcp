@@ -134,6 +134,37 @@ test("slice_sheet pad schema has no injected default so padding alias works", as
   }
 });
 
+test("slice_sheet cols alias validates and slices same as columns", async () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(tool.inputSchema.properties.cols.type, "integer");
+
+  const current = fixture();
+  try {
+    const sheetPath = path.join(current.root, "sheet.png");
+    writeColorSheet(sheetPath, [RED, GREEN, BLUE, YELLOW]);
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      cols: 2,
+      rows: 2,
+    });
+    assert.equal(sliced.frameCount, 4);
+    assert.deepEqual(pixelAt(sliced.paths[0], 1, 1), RED);
+    assert.deepEqual(pixelAt(sliced.paths[1], 1, 1), GREEN);
+    await assert.rejects(
+      () =>
+        current.service.call("xsxb_slice_sheet", {
+          file_path: sheetPath,
+          columns: 2,
+          cols: 4,
+          rows: 2,
+        }),
+      /disagree|do not pass both/i,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("a 2×2 sheet of known-color cells slices to 4 PNGs with correct colors", async () => {
   const current = fixture();
   try {
