@@ -526,3 +526,73 @@ test("delete_animation unlinks unreferenced workspace sfx and attachment copies"
     current.cleanup();
   }
 });
+
+test("add_attachment rebind unlinks leftover workspace hash png", async () => {
+  const current = await importedFixture();
+  try {
+    const glowA = path.join(current.root, "glow-a.png");
+    fs.writeFileSync(glowA, bodyFrame(1));
+    const walkFirst = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: glowA,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    const oldRel = walkFirst.binding.path;
+    const oldAbs = path.resolve(current.root, oldRel);
+    assert.equal(fs.existsSync(oldAbs), true, "first glow hash png exists");
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleFirst = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: glowA,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    assert.equal(path.basename(idleFirst.binding.path), path.basename(oldRel), "shared hash must stay");
+    assert.equal(fs.existsSync(oldAbs), true, "walk hash png stays after idle bind");
+
+    const glowB = path.join(current.root, "glow-b.png");
+    fs.writeFileSync(glowB, bodyFrame(3));
+    const walkRebound = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: glowB,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    assert.notEqual(walkRebound.binding.path, oldRel, "walk binding.path must change");
+    const walkNewAbs = path.resolve(current.root, walkRebound.binding.path);
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file exists");
+    assert.equal(fs.existsSync(oldAbs), true, "old hash stays while idle still references it");
+
+    const idleRebound = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: glowB,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    assert.equal(fs.existsSync(oldAbs), false, "old hash unlinks after last rebind");
+    assert.equal(
+      path.basename(idleRebound.binding.path),
+      path.basename(walkRebound.binding.path),
+      "idle and walk now point at the new hash",
+    );
+    assert.equal(
+      fs.existsSync(path.resolve(current.root, idleRebound.binding.path)),
+      true,
+      "new idle hash file exists",
+    );
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file still exists");
+  } finally {
+    current.cleanup();
+  }
+});
