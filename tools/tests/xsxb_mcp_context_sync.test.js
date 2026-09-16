@@ -126,6 +126,50 @@ test("get_animation_inspect_does_not_steal_context", async () => {
   });
 });
 
+test("measure_and_find_inspect_does_not_steal_context", async () => {
+  await withProjects(async ({ service, call, png }) => {
+    await call("xsxb_import_animation", {
+      project_id: "a",
+      source: "items",
+      items: [{ path: png }, { path: png }, { path: png }, { path: png }],
+      profile_id: "hero",
+      animation_id: "walk",
+      replace: true,
+    });
+    await call("xsxb_set_active_project", { project_id: "b" });
+    let rpcId = 1;
+    for (const [name, extra] of [
+      ["xsxb_measure_frames", {}],
+      ["xsxb_find_loop", { sample_size: 8 }],
+      ["xsxb_find_duplicates", { sample_size: 8 }],
+      ["xsxb_find_motion", {}],
+    ]) {
+      const response = await handleMessage(
+        {
+          jsonrpc: "2.0",
+          id: rpcId,
+          method: "tools/call",
+          params: {
+            name,
+            arguments: { project_id: "a", animation_id: "walk", ...extra },
+          },
+        },
+        service,
+      );
+      rpcId += 1;
+      const receipt = response.result.structuredContent;
+      assert.equal(response.result.isError, false, name);
+      assert.equal(receipt.ok, true, name);
+    }
+    const listed = await call("xsxb_list_projects");
+    assert.equal(listed.activeProjectId, "b");
+    const selected = await call("xsxb_get_animation");
+    assert.equal(selected.project.id, "b");
+    assert.equal(selected.profile.id, "enemy");
+    assert.equal(selected.animation.id, "idle");
+  });
+});
+
 test("get_project_existing_id_does_not_activate", async () => {
   await withProjects(async ({ service, call }) => {
     const response = await handleMessage(
