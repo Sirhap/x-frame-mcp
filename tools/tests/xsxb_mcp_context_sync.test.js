@@ -225,6 +225,60 @@ test("analyze_diff_validate_inspect_does_not_steal_context", async () => {
   });
 });
 
+test("export_overlay_check_inspect_does_not_steal_context", async () => {
+  await withProjects(async ({ root, service, call, png }) => {
+    await call("xsxb_import_animation", {
+      project_id: "a",
+      source: "items",
+      items: [{ path: png }, { path: png }, { path: png }, { path: png }],
+      profile_id: "hero",
+      animation_id: "walk",
+      replace: true,
+    });
+    const saved = await call("xsxb_save_revision", { project_id: "a", label: "peek-a" });
+    await call("xsxb_set_active_project", { project_id: "b" });
+    const dest = path.join(root, "pack-a-walk");
+    let rpcId = 1;
+    for (const [name, extra] of [
+      ["xsxb_export_overlay", { project_id: "a", animation_id: "walk" }],
+      ["xsxb_export_gif", { project_id: "a", animation_id: "walk" }],
+      ["xsxb_export_sheet", { project_id: "a", animation_id: "walk", grid: false }],
+      ["xsxb_export_pack_slot", { project_id: "a", animation_id: "walk", dest, slot: "walk" }],
+      ["xsxb_overlay_grid", { project_id: "a", file_path: png }],
+      ["xsxb_check_animation", { project_id: "a", animation_id: "walk" }],
+      ["xsxb_compare_revisions", { project_id: "a", revision_id: saved.revisionId }],
+    ]) {
+      const response = await handleMessage(
+        {
+          jsonrpc: "2.0",
+          id: rpcId,
+          method: "tools/call",
+          params: { name, arguments: extra },
+        },
+        service,
+      );
+      rpcId += 1;
+      if (name === "xsxb_export_gif" && response.result?.isError) {
+        const message = String(response.result.structuredContent?.error?.message || "");
+        assert.match(message, /ffmpeg/i, `${name}: unexpected error ${message}`);
+        const listedAfterGif = await call("xsxb_list_projects");
+        assert.equal(listedAfterGif.activeProjectId, "b");
+        continue;
+      }
+      assert.equal(response.error, undefined, name);
+      assert.ok(response.result, name);
+      assert.equal(response.result.isError, false, name);
+      assert.equal(response.result.structuredContent.ok, true, name);
+    }
+    const listed = await call("xsxb_list_projects");
+    assert.equal(listed.activeProjectId, "b");
+    const selected = await call("xsxb_get_animation");
+    assert.equal(selected.project.id, "b");
+    assert.equal(selected.profile.id, "enemy");
+    assert.equal(selected.animation.id, "idle");
+  });
+});
+
 test("get_project_existing_id_does_not_activate", async () => {
   await withProjects(async ({ service, call }) => {
     const response = await handleMessage(
