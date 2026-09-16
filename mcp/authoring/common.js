@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { withFileTransaction } = require("../lib/file_transaction");
+const { findGodotProjectRoot, forgetGodotImportCache } = require("../lib/godot_sync");
 
 /** Clones persisted JSON data. */
 function clone(value) {
@@ -69,6 +70,11 @@ function commitDocuments(paths, documents, files = [], removed = []) {
     for (const target of removed) transaction.removeFile(target);
     for (const [key, value] of Object.entries(documents)) transaction.writeJson(paths[key], value);
   });
+  for (const { target } of files) {
+    if (!target || !/\.png$/i.test(target)) continue;
+    const godotRoot = findGodotProjectRoot(path.dirname(target));
+    if (godotRoot) forgetGodotImportCache(godotRoot, target);
+  }
 }
 /** Moves persisted point coordinates by the same origin delta as their frame pixels. */
 function translateAnnotations(documents, key, dx, dy) {
