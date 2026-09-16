@@ -148,17 +148,26 @@ function forgetGodotImportCache(projectRoot, pngPath) {
 
 /**
  * Removes unreferenced files from one generated asset directory and prunes empty folders.
+ * Forgets Godot .ctex/.md5 for unretained PNGs before deleting, while .import sidecars still exist.
  * @param {string} directory Generated directory to prune.
  * @param {Set<string>} retainedPaths Absolute file paths that must remain available.
  * @returns {void}
  */
 function pruneGeneratedDirectory(directory, retainedPaths) {
   if (!fs.existsSync(directory)) return;
+  const unretained = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) pruneGeneratedDirectory(fullPath, retainedPaths);
-    else if (!retainedPaths.has(path.resolve(fullPath))) fs.rmSync(fullPath, { force: true });
+    else if (!retainedPaths.has(path.resolve(fullPath))) unretained.push(fullPath);
   }
+  for (const fullPath of unretained) {
+    if (!/\.png(?:\.import)?$/i.test(fullPath)) continue;
+    const pngPath = /\.png\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
+    const godotRoot = findGodotProjectRoot(path.dirname(pngPath));
+    if (godotRoot) forgetGodotImportCache(godotRoot, pngPath);
+  }
+  for (const fullPath of unretained) fs.rmSync(fullPath, { force: true });
   if (!fs.readdirSync(directory).length) fs.rmSync(directory, { recursive: true, force: true });
 }
 
