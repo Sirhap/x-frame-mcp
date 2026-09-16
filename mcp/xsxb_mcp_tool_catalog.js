@@ -242,8 +242,7 @@ function toolDefinitions() {
             type: "integer",
             minimum: 1,
             maximum: 256,
-            description:
-              "Alias of columns. Matches overlay_grid vocabulary. No separate default; omit means use columns.",
+            description: "Alias of columns (overlay_grid cols).",
           },
           rows: {
             type: "integer",
@@ -278,14 +277,13 @@ function toolDefinitions() {
             type: "integer",
             minimum: 0,
             maximum: 64,
-            description:
-              "Pixels between cells. Omit means 0. padding is an alias with no separate default; hosts must not inject pad:0.",
+            description: "Pixels between cells. Omit means 0. Do not inject 0.",
           },
           padding: {
             type: "integer",
             minimum: 0,
             maximum: 64,
-            description: "Alias of pad. No separate default; omit means 0.",
+            description: "Alias of pad.",
           },
           dest: {
             type: "string",
