@@ -363,6 +363,7 @@ async function runVideoAcceptance(options = {}) {
     assert.equal(imported.data.suggestedFps, expectedFps, JSON.stringify(imported.data));
     assert.equal(imported.data.suggestedFps, encoded.fps, JSON.stringify(imported.data));
     assert.equal(imported.data.fps, imported.data.suggestedFps, JSON.stringify(imported.data));
+    assert.equal(imported.data.suggestedGameFps, 8, JSON.stringify(imported.data));
     commands.push("xsxb_import_video");
 
     const got = await callTool(service, "xsxb_get_animation", {
@@ -455,6 +456,7 @@ async function runVideoAcceptance(options = {}) {
       encodedFrameCount: encoded.frameCount,
       videoPath,
       suggestedFps: imported.data.suggestedFps,
+      suggestedGameFps: imported.data.suggestedGameFps,
       storedFps: Number(after.data.animation.fps),
       importedFrameCount: imported.data.importedFrameCount,
       sourceFrameCount: imported.data.sourceFrameCount,
@@ -500,7 +502,7 @@ if (require.main === module) {
   runVideoAcceptance()
     .then((report) => {
       process.stdout.write(
-        `Video acceptance passed. fps=${report.encodedFps} suggestedFps=${report.suggestedFps} imported=${report.importedFrameCount} after=${report.reorganizedFrameCount} gif=${report.gifPath} blocks=${report.gifImageBlocks}\n`,
+        `Video acceptance passed. fps=${report.encodedFps} suggestedFps=${report.suggestedFps} suggestedGameFps=${report.suggestedGameFps} imported=${report.importedFrameCount} after=${report.reorganizedFrameCount} gif=${report.gifPath} blocks=${report.gifImageBlocks}\n`,
       );
     })
     .catch((error) => {

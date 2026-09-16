@@ -9,11 +9,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { GODOT_SYNC_ROOT } = require("./lib/godot_sync");
 const { ALPHA_VISIBLE } = require("./xsxb_mcp_cutout");
-const { borderFloodKey, measureSpriteGeometry } = require("./xsxb_mcp_lock");
+const { borderFloodKey, isYellowGoldFamily, measureSpriteGeometry } = require("./xsxb_mcp_lock");
 
 const FX_TYPES = new Set(["vfx", "prop", "scene_prop_attachment", "overlay", "fx", "effect"]);
 const FX_TOKENS = new Set(["vfx", "fx", "effect", "overlay", "prop", "airborne", "jump"]);
 const ACTION_HEIGHT_TOKENS = new Set(["attack", "slash", "hurt"]);
+const ATTACK_EVIDENCE_TOKENS = new Set(["attack", "slash"]);
+const CRESCENT_MIN_PIXELS = 80;
+const CRESCENT_MIN_WIDTH = 20;
+const CRESCENT_MIN_HEIGHT = 8;
 const DEFAULT_FEET_TOLERANCE = 2;
 const DEFAULT_HEIGHT_TOLERANCE = 2;
 const ACTION_HEIGHT_TOLERANCE = 6;
@@ -55,6 +59,153 @@ function isActionHeightClip(clip) {
   return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) =>
     ACTION_HEIGHT_TOKENS.has(token),
   );
+}
+
+/**
+ * True when a clip is an attack or slash and its evidence cell should show the hit.
+ * Hurt stays on frame 0; only whole attack/slash tokens qualify.
+ * @param {{id?:string,name?:string}} clip Animation fields.
+ * @returns {boolean} True for attack/slash clips.
+ */
+function isAttackEvidenceClip(clip) {
+  return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) =>
+    ATTACK_EVIDENCE_TOKENS.has(token),
+  );
+}
+
+/**
+ * Finds 8-connected yellow/gold blobs large enough to be a slash crescent.
+ * Thresholds match `collectCrescentBlobs` in the box estimator; color uses lock
+ * `isYellowGoldFamily` so pale glow next to a white plate still counts.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image RGBA frame.
+ * @returns {Array<{count:number,minX:number,minY:number,maxX:number,maxY:number,width:number,height:number}>}
+ */
+function collectGoldCrescentBlobs(image) {
+  const { data, width, height } = image;
+  const goldAt = (x, y) => {
+    const offset = (y * width + x) * 4;
+    return (
+      data[offset + 3] > ALPHA_VISIBLE && isYellowGoldFamily(data[offset], data[offset + 1], data[offset + 2])
+    );
+  };
+  const seen = new Uint8Array(width * height);
+  const blobs = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const start = y * width + x;
+      if (seen[start] || !goldAt(x, y)) continue;
+      const stack = [start];
+      seen[start] = 1;
+      let count = 0;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      while (stack.length) {
+        const index = stack.pop();
+        const px = index % width;
+        const py = Math.floor(index / width);
+        count += 1;
+        minX = Math.min(minX, px);
+        minY = Math.min(minY, py);
+        maxX = Math.max(maxX, px);
+        maxY = Math.max(maxY, py);
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (!dx && !dy) continue;
+            const nx = px + dx;
+            const ny = py + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const next = ny * width + nx;
+            if (seen[next] || !goldAt(nx, ny)) continue;
+            seen[next] = 1;
+            stack.push(next);
+          }
+        }
+      }
+      if (
+        count >= CRESCENT_MIN_PIXELS &&
+        maxX - minX + 1 >= CRESCENT_MIN_WIDTH &&
+        maxY - minY + 1 >= CRESCENT_MIN_HEIGHT
+      ) {
+        blobs.push({
+          count,
+          minX,
+          minY,
+          maxX,
+          maxY,
+          width: maxX - minX + 1,
+          height: maxY - minY + 1,
+        });
+      }
+    }
+  }
+  return blobs;
+}
+
+/**
+ * Bounding box of visible non-gold pixels after the studio plate is keyed.
+ * Used so a hair spark on the torso is not treated as a reaching slash arc.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Keyed RGBA frame.
+ * @returns {{x:number,y:number,width:number,height:number}|null} Body span, or null.
+ */
+function nonGoldBodyBounds(image) {
+  let minX = image.width;
+  let minY = image.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      const offset = (y * image.width + x) * 4;
+      if (image.data[offset + 3] <= ALPHA_VISIBLE) continue;
+      if (isYellowGoldFamily(image.data[offset], image.data[offset + 1], image.data[offset + 2])) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX || maxY < minY) return null;
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+/**
+ * True when a decoded frame has a gold crescent that reaches past the body.
+ * Hair or belt sparks on the torso do not count. Reuses lock `isYellowGoldFamily`.
+ * @param {{data?:Uint8ClampedArray|Uint8Array,width?:number,height?:number}|null|undefined} image
+ *   RGBA frame.
+ * @returns {boolean} True when a reaching crescent blob is present.
+ */
+function frameHasGoldCrescent(image) {
+  const width = Number(image?.width);
+  const height = Number(image?.height);
+  if (!image?.data || !width || !height) return false;
+  const frame = { data: image.data, width, height };
+  const blobs = collectGoldCrescentBlobs(frame);
+  if (!blobs.length) return false;
+  const keyed = borderFloodKey(frame.data, width, height, { mode: "any" });
+  const body = nonGoldBodyBounds({ data: keyed.data, width, height });
+  if (!body) return true;
+  return blobs.some((blob) => blob.maxX >= body.x + body.width || blob.minX <= body.x);
+}
+
+/**
+ * Picks the representative evidence frame index for one clip.
+ * Attack/slash clips prefer the first stored/estimated hitbox with `enabled: true`,
+ * else the first gold-crescent frame, else 0. Idle/walk/jump/hurt/vfx stay on 0.
+ * @param {{id?:string,name?:string}} clip Animation fields.
+ * @param {Array<{image?:{data:Uint8ClampedArray|Uint8Array},hitbox?:{enabled?:boolean}|null}>} frames
+ *   Decoded frames plus stored or estimated hitboxes, in clip order.
+ * @returns {number} Index into `frames`, or 0 when empty.
+ */
+function pickValidationEvidenceFrameIndex(clip, frames) {
+  if (!Array.isArray(frames) || !frames.length) return 0;
+  if (!isAttackEvidenceClip(clip)) return 0;
+  const hitIndex = frames.findIndex((frame) => frame?.hitbox?.enabled === true);
+  if (hitIndex >= 0) return hitIndex;
+  const goldIndex = frames.findIndex((frame) => frameHasGoldCrescent(frame?.image));
+  if (goldIndex >= 0) return goldIndex;
+  return 0;
 }
 
 /**
@@ -378,5 +529,6 @@ module.exports = {
   evaluateScaleContract,
   isFxOrAirborne,
   measureKeyedSubject,
+  pickValidationEvidenceFrameIndex,
   resolveGodotSyncRoot,
 };

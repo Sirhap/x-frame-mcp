@@ -92,6 +92,7 @@ test(
     });
     assert.equal(report.suggestedFps, expectedFps, JSON.stringify(report));
     assert.equal(report.suggestedFps, report.encodedFps, "suggestedFps must match the encoded rate");
+    assert.equal(report.suggestedGameFps, 8, "suggestedGameFps must be the 8-12 game-loop rate");
     assert.ok(report.importedFrameCount >= 4, `importedFrameCount=${report.importedFrameCount}`);
     assert.ok(report.gifPath, "video session must export a gif after reorganize");
     assert.ok(fs.existsSync(report.gifPath), `gif missing: ${report.gifPath}`);

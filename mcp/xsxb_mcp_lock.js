@@ -508,6 +508,7 @@ module.exports = {
   composeRbOverlay,
   flattenFrameBackground,
   geometryDeltas,
+  isYellowGoldFamily,
   measureSpriteGeometry,
   metricHeight,
   planRegisterClip,

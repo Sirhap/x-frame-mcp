@@ -7,7 +7,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { createProjectStore } = require("../project_store");
 const { createXsxbMcpService } = require("../xsxb_mcp_service");
-const { encodePngRgba } = require("../xsxb_mcp_cutout");
+const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const {
   assembleGodotValidation,
   classifyInspectQa,
@@ -15,6 +15,7 @@ const {
   evaluateScaleContract,
   isFxOrAirborne,
   measureKeyedSubject,
+  pickValidationEvidenceFrameIndex,
 } = require("../../mcp/xsxb_mcp_validate_godot");
 const { composeFrameDiff } = require("../../mcp/xsxb_mcp_diff_frames");
 const { paintGroundedActor } = require("../acceptance_playbooks");
@@ -431,6 +432,201 @@ test("validate_for_godot evidence is one cell per clip, not a 4-frame strip", as
     assert.equal(gate.evidence.width, cellW * clips.length);
     assert.ok(gate.evidence.width >= cellW * 5);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const STEEL = Object.freeze([200, 204, 214, 255]);
+const CRESCENT_GOLD = Object.freeze([255, 214, 56, 255]);
+const NAVY = Object.freeze([36, 58, 118, 255]);
+
+/**
+ * Tiny grounded actor: optional left-hand steel sword or right-hand gold crescent.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @param {{sword?:boolean,crescent?:boolean}} [options] Windup blade vs slash arc.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} RGBA frame.
+ */
+function attackPoseFrame(width, height, options = {}) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  const bodyW = 8;
+  const bodyH = 16;
+  const left = Math.floor((width - bodyW) / 2);
+  const feetY = height - 3;
+  const top = feetY - bodyH + 1;
+  for (let y = top; y <= feetY; y += 1) {
+    for (let x = left; x < left + bodyW; x += 1) {
+      data.set(NAVY, (y * width + x) * 4);
+    }
+  }
+  if (options.sword) {
+    for (let y = top + 2; y < top + 12; y += 1) {
+      for (let x = left - 3; x < left; x += 1) {
+        if (x >= 0) data.set(STEEL, (y * width + x) * 4);
+      }
+    }
+  }
+  if (options.crescent) {
+    for (let y = top + 3; y < top + 11; y += 1) {
+      for (let x = left + bodyW - 2; x < left + bodyW + 18; x += 1) {
+        if (x < width) data.set(CRESCENT_GOLD, (y * width + x) * 4);
+      }
+    }
+  }
+  return { data, width, height };
+}
+
+/**
+ * Counts saturated gold/yellow slash pixels (same family as lock crescent gold).
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Frame or cell.
+ * @returns {number} Gold pixel count.
+ */
+function countCrescentGold(image) {
+  let count = 0;
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const r = image.data[offset];
+    const g = image.data[offset + 1];
+    const b = image.data[offset + 2];
+    const a = image.data[offset + 3];
+    if (a <= 16) continue;
+    const sat = Math.max(r, g, b) - Math.min(r, g, b);
+    if (r >= 220 && g >= 180 && b <= 180 && r - b >= 50 && g - b >= 20 && sat >= 40) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Copies one evidence cell into its own bitmap.
+ * @param {{data:Uint8ClampedArray,width:number,height:number}} sheet Magenta strip.
+ * @param {number} index Cell index.
+ * @param {number} cellW Cell width.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} Cell.
+ */
+function evidenceCell(sheet, index, cellW) {
+  const cellH = sheet.height;
+  const data = new Uint8ClampedArray(cellW * cellH * 4);
+  const originX = index * cellW;
+  for (let y = 0; y < cellH; y += 1) {
+    for (let x = 0; x < cellW; x += 1) {
+      const source = (y * sheet.width + originX + x) * 4;
+      data.set(sheet.data.subarray(source, source + 4), (y * cellW + x) * 4);
+    }
+  }
+  return { data, width: cellW, height: cellH };
+}
+
+test("pickValidationEvidenceFrameIndex skips plated windup gold and takes the slash crescent", () => {
+  const windup = decodePngRgba(path.join(__dirname, "../fixtures/generated_hero/attack/00.png"));
+  const slash = decodePngRgba(path.join(__dirname, "../fixtures/generated_hero/attack/01.png"));
+  assert.ok(countCrescentGold(slash) > countCrescentGold(windup));
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "attack" }, [
+      { image: windup, hitbox: { enabled: false } },
+      { image: slash, hitbox: { enabled: false } },
+    ]),
+    1,
+    "hair/belt gold on windup must not beat a reaching slash crescent",
+  );
+});
+
+test("pickValidationEvidenceFrameIndex prefers enabled hit, else gold, else 0", () => {
+  const windup = attackPoseFrame(64, 40, { sword: true });
+  const slash = attackPoseFrame(64, 40, { crescent: true });
+  const recover = attackPoseFrame(64, 40, { sword: true });
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "attack" }, [
+      { image: windup, hitbox: { enabled: false } },
+      { image: slash, hitbox: { enabled: true } },
+      { image: recover, hitbox: { enabled: false } },
+    ]),
+    1,
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "slash", name: "sword slash" }, [
+      { image: windup, hitbox: { enabled: false } },
+      { image: slash, hitbox: { enabled: false } },
+    ]),
+    1,
+    "gold crescent is the fallback when every hitbox is disabled",
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "walk" }, [
+      { image: windup, hitbox: { enabled: false } },
+      { image: slash, hitbox: { enabled: true } },
+    ]),
+    0,
+    "non-attack clips stay on frame 0",
+  );
+  assert.equal(
+    pickValidationEvidenceFrameIndex({ id: "hurt" }, [
+      { image: windup, hitbox: { enabled: true } },
+      { image: slash, hitbox: { enabled: true } },
+    ]),
+    0,
+  );
+  assert.equal(pickValidationEvidenceFrameIndex({ id: "attack" }, []), 0);
+});
+
+test("validate_for_godot attack evidence cell is the slash, not windup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-slash-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(path.join(godotRoot, "project.godot"), '[application]\nconfig/name="EvidenceSlash"\n');
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  const cellW = 64;
+  const cellH = 40;
+  const idle = attackPoseFrame(cellW, cellH);
+  const windup = attackPoseFrame(cellW, cellH, { sword: true });
+  const slash = attackPoseFrame(cellW, cellH, { crescent: true });
+  try {
+    const idleDir = path.join(root, "idle-seq");
+    const attackDir = path.join(root, "attack-seq");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(attackDir);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(attackDir, "00.png"), encodePngRgba(windup.data, windup.width, windup.height));
+    fs.writeFileSync(path.join(attackDir, "01.png"), encodePngRgba(slash.data, slash.width, slash.height));
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: attackDir,
+      animation_id: "attack",
+    });
+    await service.call("xsxb_estimate_boxes", { animation_id: "attack", replace: true });
+    await service.call("xsxb_update_frame_boxes", {
+      animation_id: "attack",
+      frames: [
+        { frame: 0, hitbox: { enabled: false, offset: { x: 0, y: -8 }, size: { x: 8, y: 8 } } },
+        { frame: 1, hitbox: { enabled: true, offset: { x: 12, y: -14 }, size: { x: 20, y: 10 } } },
+      ],
+    });
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.equal(gate.evidence.width, cellW * 2, "still one cell per clip (idle + attack)");
+    assert.equal(gate.evidence.height, cellH);
+    const sheet = decodePngRgba(gate.evidence.path);
+    const attackCell = evidenceCell(sheet, 1, cellW);
+    const slashGold = countCrescentGold(slash);
+    const cellGold = countCrescentGold(attackCell);
+    assert.ok(slashGold > 0, "slash fixture must contain a gold crescent");
+    assert.equal(countCrescentGold(windup), 0, "windup must stay sword-only");
+    assert.equal(countCrescentGold(evidenceCell(sheet, 0, cellW)), 0, "idle cell stays pose 0");
+    assert.ok(cellGold > 0, "attack evidence cell must show the gold crescent, not windup");
+    assert.equal(cellGold, slashGold, "attack cell occupancy must match the slash frame");
+  } finally {
+    service.close?.();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -14,7 +14,7 @@ const {
   validateAttackTrails,
 } = require("./lib/attack_trails");
 const { deleteAnimation } = require("./lib/animation_mutations");
-const { frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
+const { estimateFrameBoxes, frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
 const { importAnimation, reorganizeAnimation, resolveAnimationType } = require("./lib/frame_organizer");
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
@@ -84,6 +84,7 @@ const {
   evaluateScaleContract,
   isFxOrAirborne,
   measureKeyedSubject,
+  pickValidationEvidenceFrameIndex,
 } = require("./xsxb_mcp_validate_godot");
 const {
   borderFloodKey,
@@ -134,6 +135,7 @@ const {
   extractVideoFrames,
   probeVideoTiming,
   resolveSourceDurationSec,
+  suggestGameFps,
   suggestImportFps,
 } = require("./xsxb_mcp_processes");
 
@@ -712,6 +714,7 @@ function createXsxbMcpService(options = {}) {
         sourceFrameCount,
         sourceDurationSec,
         suggestedFps,
+        suggestedGameFps: suggestedFps === undefined ? undefined : suggestGameFps(suggestedFps),
         extractedFrameCount: extracted.extractedCount,
         importedFrameCount: imported.frameCount,
         startFrame: extracted.startFrame,
@@ -2213,19 +2216,38 @@ function createXsxbMcpService(options = {}) {
       { root, projectStore },
     );
     const manifest = manifestFor(project);
+    const paths = projectStore.projectPaths(project);
+    const overrides = projectStore.readJson(paths.tuning, EMPTY_TUNING).frame_box_overrides || {};
     const evidenceFrames = [];
     const clips = [];
     for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
       for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
         const animationId = String(animation.id || animation.name);
         const geos = [];
-        for (const frame of animation.frames || []) {
+        const clipFrames = [];
+        for (const [index, frame] of (animation.frames || []).entries()) {
           const filePath = resolveAnimationFramePath(project, frame.path, animation);
           if (!filePath || !fs.existsSync(filePath)) continue;
           const image = decodePngRgba(filePath);
-          // Frame 0 of every clip; a 4-frame cap hid jump/attack/vfx.
-          if (!geos.length) evidenceFrames.push(image);
+          const stored = overrides[frameBoxKey(profile.id, animationId, index)];
+          let hitbox = stored && typeof stored === "object" ? stored.hitbox || null : null;
+          if (!hitbox) {
+            hitbox =
+              estimateFrameBoxes(filePath, {
+                animationId,
+                animationName: animation.name,
+                type: animation.type,
+              }).hitbox || null;
+          }
+          clipFrames.push({ image, hitbox });
           geos.push(measureKeyedSubject(image));
+        }
+        if (clipFrames.length) {
+          const picked = pickValidationEvidenceFrameIndex(
+            { id: animationId, name: animation.name },
+            clipFrames,
+          );
+          evidenceFrames.push(clipFrames[picked].image);
         }
         clips.push({
           id: animationId,

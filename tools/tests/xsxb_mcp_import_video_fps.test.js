@@ -8,7 +8,8 @@ const path = require("node:path");
 const test = require("node:test");
 const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
 const { encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
-const { probeVideoTiming, suggestImportFps } = require("../../mcp/xsxb_mcp_processes");
+const { probeVideoTiming, suggestGameFps, suggestImportFps } = require("../../mcp/xsxb_mcp_processes");
+const { toolDefinitions } = require("../../mcp/xsxb_mcp_tool_catalog");
 
 /**
  * Whether ffmpeg can be spawned.
@@ -102,6 +103,23 @@ test("suggestImportFps falls back to a probed container rate", () => {
   assert.equal(suggestImportFps({ probedFps: 120 }), undefined);
 });
 
+test("suggestGameFps maps source rate onto the 8-12 game-loop band", () => {
+  assert.equal(suggestGameFps(24), 8);
+  assert.equal(suggestGameFps(30), 8);
+  assert.equal(suggestGameFps(10), 10);
+  assert.equal(suggestGameFps(8), 8);
+  assert.equal(suggestGameFps(12), 12);
+  assert.equal(suggestGameFps(6), 8);
+  assert.equal(suggestGameFps(1), 8);
+});
+
+test("xsxb_import_video catalog names source and game fps on the receipt", () => {
+  const video = toolDefinitions().find((entry) => entry.name === "xsxb_import_video");
+  assert.match(video.description, /suggestedFps \(source\)/);
+  assert.match(video.description, /suggestedGameFps \(8–12 for GIF\/Godot loops\)/);
+  assert.match(video.description, /Pass fps=suggestedGameFps/);
+});
+
 test("import_video without fps stays 12 when source timing cannot be probed", async () => {
   await withImportProject(
     async ({ call, video }) => {
@@ -109,9 +127,40 @@ test("import_video without fps stays 12 when source timing cannot be probed", as
       assert.equal(imported.sourceFrameCount, 3);
       assert.equal(imported.fps, 12);
       assert.equal(imported.suggestedFps, undefined);
+      assert.equal(imported.suggestedGameFps, undefined);
       assert.equal(imported.sourceDurationSec, undefined);
       const stored = await call("xsxb_get_animation", { animation_id: "walk" });
       assert.equal(Number(stored.animation.fps), 12);
+    },
+    {
+      videoBytes: "not a real video",
+      extractVideoFramesImpl: async (_video, directory) => {
+        return [0, 1, 2].map((index) => {
+          const file = path.join(directory, `frame_${String(index + 1).padStart(6, "0")}.png`);
+          const rgba = new Uint8ClampedArray(4);
+          rgba.set([10 + index, 20, 30, 255]);
+          fs.writeFileSync(file, encodePngRgba(rgba, 1, 1));
+          return file;
+        });
+      },
+    },
+  );
+});
+
+test("import_video receipt includes suggestedFps and suggestedGameFps", async () => {
+  await withImportProject(
+    async ({ call, video }) => {
+      const imported = await call("xsxb_import_video", {
+        file_path: video,
+        animation_id: "walk",
+        duration: 0.125,
+      });
+      assert.equal(imported.sourceFrameCount, 3);
+      assert.equal(imported.suggestedFps, 24);
+      assert.equal(imported.suggestedGameFps, 8);
+      assert.equal(imported.fps, imported.suggestedFps);
+      const stored = await call("xsxb_get_animation", { animation_id: "walk" });
+      assert.equal(Number(stored.animation.fps), 24);
     },
     {
       videoBytes: "not a real video",
@@ -152,6 +201,7 @@ test("import_video without fps uses the probed 30fps source rate", { skip: FFMPE
     assert.ok(imported.sourceFrameCount >= 28 && imported.sourceFrameCount <= 32, imported);
     assert.ok(imported.sourceDurationSec > 0.8 && imported.sourceDurationSec < 1.2, imported);
     assert.ok(imported.suggestedFps >= 28 && imported.suggestedFps <= 32, imported);
+    assert.equal(imported.suggestedGameFps, 8, imported);
     assert.equal(imported.fps, imported.suggestedFps);
     assert.notEqual(imported.fps, 12);
     const stored = await call("xsxb_get_animation", { animation_id: "clip" });
@@ -169,6 +219,7 @@ test("import_video keeps an explicit fps and still reports suggestedFps", { skip
     });
     assert.equal(imported.fps, 12);
     assert.ok(imported.suggestedFps >= 28 && imported.suggestedFps <= 32, imported);
+    assert.equal(imported.suggestedGameFps, 8, imported);
     assert.ok(imported.sourceFrameCount >= 28, imported);
     const stored = await call("xsxb_get_animation", { animation_id: "clip" });
     assert.equal(Number(stored.animation.fps), 12);

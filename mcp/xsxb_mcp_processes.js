@@ -81,6 +81,20 @@ function suggestImportFps(timing = {}) {
 }
 
 /**
+ * Maps a probed source fps onto the 8–12 band used for GIF/Godot loops.
+ * Camera rates above 12 (24/30) and rates below 8 become 8; values already
+ * in 8–12 stay as-is.
+ * @param {unknown} sourceFps Probed or suggested source fps.
+ * @returns {number|undefined} Integer fps in 8–12, or undefined when unusable.
+ */
+function suggestGameFps(sourceFps) {
+  const fps = Number(sourceFps);
+  if (!Number.isFinite(fps) || fps < 1) return undefined;
+  if (fps >= 8 && fps <= 12) return Math.round(fps);
+  return 8;
+}
+
+/**
  * Resolves the imported clip duration from an explicit window or a probe.
  * @param {{start_time?:unknown,duration?:unknown}} [options] Extract window.
  * @param {{sourceDurationSec?:unknown}} [probed] File-level probe.
@@ -338,6 +352,7 @@ module.exports = {
   extractVideoFrames,
   probeVideoTiming,
   resolveSourceDurationSec,
+  suggestGameFps,
   suggestImportFps,
   videoExtractFfmpegArgs,
 };

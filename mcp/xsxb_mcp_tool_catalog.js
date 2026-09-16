@@ -172,7 +172,7 @@ function toolDefinitions() {
     {
       name: "xsxb_import_video",
       description:
-        "Video alias of xsxb_import_animation: extract every native frame from a local video, import it as an XSXB animation, optionally sync to Godot, and validate the result. Omitting fps stores the probed source rate when it is between 1 and 60; otherwise 12. Receipt includes sourceFrameCount, sourceDurationSec when known, and suggestedFps.",
+        "Video alias of xsxb_import_animation: extract every native frame from a local video, import it as an XSXB animation, optionally sync to Godot, and validate the result. Omitting fps stores the probed source rate when it is between 1 and 60; otherwise 12. Receipt includes sourceFrameCount, sourceDurationSec when known, suggestedFps (source), and suggestedGameFps (8–12 for GIF/Godot loops). Pass fps=suggestedGameFps when you want game playback, not the camera rate.",
       inputSchema: {
         type: "object",
         required: ["file_path"],
@@ -183,7 +183,8 @@ function toolDefinitions() {
             minimum: 1,
             maximum: 120,
             default: 12,
-            description: "Playback fps. Omit to use the probed source rate (1–60) when known; otherwise 12.",
+            description:
+              "Playback fps. Omit to store the probed source rate (1–60) when known; otherwise 12. Pass fps=suggestedGameFps for GIF/Godot loops instead of the camera rate.",
           },
           start_time: {
             type: "number",
