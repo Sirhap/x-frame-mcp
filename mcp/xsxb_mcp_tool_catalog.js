@@ -160,8 +160,7 @@ function toolDefinitions() {
           },
           set_active: {
             type: "boolean",
-            default: true,
-            description: "Make this the active project. Default true.",
+            description: "Activate on create; omit on existing id does not change active.",
           },
         },
         additionalProperties: false,

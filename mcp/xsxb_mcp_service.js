@@ -603,7 +603,7 @@ function createXsxbMcpService(options = {}) {
     const registry = projectStore.readRegistry();
     const requestedId = String(args.project_id || args.project || "").trim();
     const existing = requestedId ? registry.projects.find((entry) => entry.id === requestedId) : null;
-    const setActive = booleanFlag(args.set_active, true);
+    const setActive = existing ? booleanFlag(args.set_active, false) : booleanFlag(args.set_active, true);
     if (existing) {
       if (setActive) {
         projectStore.setActiveProject(existing.id);
