@@ -3329,12 +3329,14 @@ function createXsxbMcpService(options = {}) {
   /**
    * Plants opaque soles onto a target group-Y. Translate only.
    * When `reference_animation_id` is set, pads to at least that canvas first
-   * (same origin-preserving pad as `xsxb_resize_canvas`). If `target_y` is
-   * omitted or -1, plants onto the reference clip's measured sole (median
-   * feetY of that clip, not the first hang-heavier frame). An explicit
-   * `target_y` other than -1 is honored after the pad. After apply plans
-   * every selected frame, pads all frames in this animation to the clip's
-   * on-disk max(width)×max(height) so canvases match for diff_frames.
+   * (same origin-preserving pad as `xsxb_resize_canvas`). If omitted on a
+   * grounded non-idle actor and the profile has an idle clip, that idle is
+   * the reference (pad + median sole). Idle itself stays y=-1 of its canvas.
+   * If `target_y` is omitted or -1, plants onto the reference clip's measured
+   * sole (median feetY of that clip, not the first hang-heavier frame). An
+   * explicit `target_y` other than -1 is honored after the pad. After apply
+   * plans every selected frame, pads all frames in this animation to the
+   * clip's on-disk max(width)×max(height) so canvases match for diff_frames.
    * @param {object} args Tool arguments.
    * @returns {object} Plant receipt.
    */
@@ -3353,7 +3355,28 @@ function createXsxbMcpService(options = {}) {
       indexes = args.frames.map((value) => requireFrameIndex(value, lastIndex));
     }
     const apply = shouldCommit(args);
-    const referenceAnimationId = String(args.reference_animation_id || "").trim();
+    const clipLooksIdle = (clip) =>
+      [clip?.id, clip?.name].some((value) =>
+        String(value || "")
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .includes("idle"),
+      );
+    let referenceAnimationId = "";
+    if (args.reference_animation_id !== undefined) {
+      referenceAnimationId = String(args.reference_animation_id || "").trim();
+    } else if (
+      !isFxOrAirborne({
+        id: animation.id,
+        name: animation.name,
+        type: animation.type,
+        kind: animation.kind || profile.kind,
+      }) &&
+      !clipLooksIdle(animation)
+    ) {
+      const idle = (profile.animations || []).find((entry) => clipLooksIdle(entry));
+      if (idle) referenceAnimationId = String(idle.id || idle.name);
+    }
     let lockWidth = 0;
     let lockHeight = 0;
     let referenceSoleGroupY = Number.NaN;

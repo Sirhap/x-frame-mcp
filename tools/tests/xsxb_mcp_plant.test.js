@@ -315,6 +315,10 @@ test("catalog plant_feet accepts reference_animation_id", () => {
   const plant = toolDefinitions().find((entry) => entry.name === "xsxb_plant_feet");
   assert.ok(plant.inputSchema.properties.reference_animation_id);
   assert.match(plant.inputSchema.properties.reference_animation_id.description, /idle|canvas/i);
+  assert.match(
+    `${plant.description} ${plant.inputSchema.properties.reference_animation_id.description}`,
+    /omitted reference on walk defaults to idle/i,
+  );
 });
 
 test("plant_feet pads to reference idle canvas then plants onto idle soles", async () => {
@@ -448,6 +452,189 @@ test("plant_feet with idle reference plants onto median idle sole, not the first
       63,
       `walk must land on median idle sole 63, not first-frame hang sole 62 (got ${after.feetY})`,
     );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("plant_feet without reference_animation_id defaults walk to idle canvas and median sole", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-omit");
+    const walkDir = path.join(current.root, "walk-omit");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idleHang = bodyOnCanvas(64, 72, 62);
+    const idleSole = bodyOnCanvas(64, 72, 63);
+    const walk = bodyOnCanvas(64, 64, 63);
+    assert.equal(measureSpriteGeometry(idleHang.data, 64, 72).feetY, 62);
+    assert.equal(measureSpriteGeometry(idleSole.data, 64, 72).feetY, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idleHang.data, 64, 72));
+    fs.writeFileSync(path.join(idleDir, "02.png"), encodePngRgba(idleSole.data, 64, 72));
+    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(walk.data, 64, 64));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await importWalk(current, walkDir);
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "walk",
+      target_y: -1,
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.referenceAnimationId, "idle");
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    assert.equal(image.width, 64);
+    assert.equal(image.height, 72);
+    assert.equal(animation.animation.frames[0].width, 64);
+    assert.equal(animation.animation.frames[0].height, 72);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.equal(
+      after.feetY,
+      63,
+      `walk must land on median idle sole 63, not padded last row 71 (got ${after.feetY})`,
+    );
+    assert.notEqual(after.feetY, image.height - 1, "must not plant onto canvasH-1 of the padded walk canvas");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("plant_feet idle apply without reference stays on its own canvas y=-1", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-self");
+    fs.mkdirSync(idleDir);
+    const idle = bodyOnCanvas(64, 72, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "idle",
+      target_y: -1,
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.referenceAnimationId, undefined);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "idle" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    assert.equal(image.width, 64);
+    assert.equal(image.height, 72);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.equal(after.feetY, 71, "idle must plant onto its own last pixel row, not its authored sole");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("plant_feet empty reference_animation_id does not default walk to idle", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-empty-ref");
+    const walkDir = path.join(current.root, "walk-empty-ref");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idle = bodyOnCanvas(64, 72, 63);
+    const walk = bodyOnCanvas(64, 64, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(walk.data, walk.width, walk.height));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await importWalk(current, walkDir);
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "walk",
+      reference_animation_id: "",
+      target_y: -1,
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.referenceAnimationId, undefined);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    assert.equal(image.width, 64);
+    assert.equal(image.height, 64);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.equal(after.feetY, 63, "empty reference must keep walk on its own last row");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("plant_feet missing reference_animation_id still errors", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-missing-ref");
+    const walkDir = path.join(current.root, "walk-missing-ref");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idle = bodyOnCanvas(64, 72, 63);
+    const walk = bodyOnCanvas(64, 64, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(walk.data, walk.width, walk.height));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await importWalk(current, walkDir);
+    await assert.rejects(
+      () =>
+        current.service.call("xsxb_plant_feet", {
+          animation_id: "walk",
+          reference_animation_id: "no-such-clip",
+          target_y: -1,
+          apply: true,
+        }),
+      /Reference animation not found: no-such-clip/,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("plant_feet omits reference on jump and does not default to idle", async () => {
+  const current = fixture();
+  try {
+    const idleDir = path.join(current.root, "idle-jump");
+    const jumpDir = path.join(current.root, "jump-seq");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(jumpDir);
+    const idle = bodyOnCanvas(64, 72, 63);
+    const jump = bodyOnCanvas(64, 64, 63);
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(jumpDir, "01.png"), encodePngRgba(jump.data, jump.width, jump.height));
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: jumpDir,
+      animation_id: "jump",
+    });
+    const planted = await current.service.call("xsxb_plant_feet", {
+      animation_id: "jump",
+      target_y: -1,
+      apply: true,
+    });
+    assert.equal(planted.applied, true);
+    assert.equal(planted.referenceAnimationId, undefined);
+    const animation = await current.service.call("xsxb_get_animation", { animation_id: "jump" });
+    const image = decodePngRgba(animation.animation.frames[0].absolutePath);
+    assert.equal(image.width, 64);
+    assert.equal(image.height, 64);
+    const after = measureSpriteGeometry(image.data, image.width, image.height);
+    assert.equal(after.feetY, 63, "jump must keep its own canvas and last-row plant");
   } finally {
     current.cleanup();
   }

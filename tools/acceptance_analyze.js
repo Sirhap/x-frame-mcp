@@ -1,0 +1,209 @@
+#!/usr/bin/env node
+"use strict";
+
+/**
+ * Public tools/call session for the video-to-loop path: import a PNG
+ * sequence, get_animation, optional plate cutout, xsxb_analyze, then
+ * xsxb_reorganize_frames with the recommended loop or motion order.
+ */
+
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { createXsxbMcpService } = require("../mcp/xsxb_mcp_service");
+const { decodePngRgba } = require("../mcp/xsxb_mcp_cutout");
+const { callTool } = require("./acceptance_playbooks");
+const { heroFrame, writePngSequence } = require("./acceptance_sprites");
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * SHA-256 of decoded RGBA so PNG re-encode does not hide identity.
+ * @param {string} filePath Absolute PNG path.
+ * @returns {string} Hex digest.
+ */
+function rgbaDigest(filePath) {
+  const image = decodePngRgba(filePath);
+  return crypto.createHash("sha256").update(Buffer.from(image.data)).digest("hex");
+}
+
+/**
+ * True when ffmpeg is on PATH. The session still prefers a PNG sequence.
+ * @returns {boolean} Whether `which ffmpeg` succeeds.
+ */
+function ffmpegPresent() {
+  return spawnSync("which", ["ffmpeg"], { encoding: "utf8" }).status === 0;
+}
+
+/**
+ * Runs one agent-shaped analyze → reorganize session against public tools/call.
+ * @returns {Promise<object>} Order, preview, and which window was applied.
+ */
+async function runAnalyzeAcceptance() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-analyze-"));
+  const service = createXsxbMcpService({ root, florenceDetectImpl: null });
+  const commands = [];
+  try {
+    const rest = heroFrame({ stride: 0, arm: 0 });
+    const walkA = heroFrame({ stride: 3, arm: 2, lift: 8 });
+    const walkB = heroFrame({ stride: 5, arm: -2, lift: 12 });
+    const sequence = writePngSequence(path.join(root, "incoming", "walk"), [
+      rest,
+      rest,
+      walkA,
+      walkB,
+      rest,
+      rest,
+    ]);
+    assert.equal(fs.readdirSync(sequence).filter((name) => /\.png$/i.test(name)).length, 6);
+
+    const created = await callTool(service, "xsxb_create_project", {
+      project_id: "hero",
+      label: "Analyze",
+    });
+    assert.equal(created.ok, true, JSON.stringify(created.error || created));
+    commands.push("xsxb_create_project");
+
+    const imported = await callTool(service, "xsxb_import_animation", {
+      project_id: "hero",
+      source: "png_sequence",
+      directory: sequence,
+      profile_id: "hero",
+      animation_id: "walk",
+      fps: 8,
+    });
+    assert.equal(imported.ok, true, JSON.stringify(imported.error || imported));
+    assert.equal(imported.data.importedFrameCount, 6);
+    commands.push("xsxb_import_animation");
+
+    const got = await callTool(service, "xsxb_get_animation", {
+      project_id: "hero",
+      animation_id: "walk",
+    });
+    assert.equal(got.ok, true, JSON.stringify(got.error || got));
+    assert.ok(got.observation?.snapshotId, "get_animation must mint basis_snapshot_id");
+    assert.equal(got.data.frameCount, 6);
+    const orderBefore = (got.data.animation.frames || []).map((frame) => frame.index);
+    commands.push("xsxb_get_animation");
+
+    const cut = await callTool(service, "xsxb_cutout", {
+      project_id: "hero",
+      animation_id: "walk",
+      key_mode: "border_flood",
+      key_color: "#f8f8f8",
+      basis_snapshot_id: got.observation.snapshotId,
+    });
+    assert.equal(cut.ok, true, JSON.stringify(cut.error || cut));
+    commands.push("xsxb_cutout");
+
+    const basis = await callTool(service, "xsxb_get_animation", {
+      project_id: "hero",
+      animation_id: "walk",
+    });
+    assert.equal(basis.ok, true, JSON.stringify(basis.error || basis));
+    const beforeFrames = basis.data.animation.frames || [];
+    assert.equal(beforeFrames.length, 6);
+    const beforeDigests = beforeFrames.map((frame) => rgbaDigest(frame.absolutePath));
+    assert.equal(beforeDigests[0], beforeDigests[1], "leading holds must match");
+    assert.equal(beforeDigests[0], beforeDigests[4], "trailing holds must match rest");
+    assert.equal(beforeDigests[0], beforeDigests[5], "trailing holds must match rest");
+    assert.notEqual(beforeDigests[2], beforeDigests[0], "first walk must differ from rest");
+    assert.notEqual(beforeDigests[3], beforeDigests[0], "second walk must differ from rest");
+    assert.notEqual(beforeDigests[2], beforeDigests[3], "walk frames must be distinct");
+    commands.push("xsxb_get_animation");
+
+    const analyzed = await callTool(service, "xsxb_analyze", {
+      project_id: "hero",
+      animation_id: "walk",
+    });
+    assert.equal(analyzed.ok, true, JSON.stringify(analyzed.error || analyzed));
+    const previewPath = analyzed.data.preview?.path;
+    assert.ok(previewPath, "analyze must write preview.path");
+    assert.ok(fs.existsSync(previewPath), `analyze preview missing: ${previewPath}`);
+    const header = fs.readFileSync(previewPath).subarray(0, 8);
+    assert.deepEqual([...header], [...PNG_SIGNATURE], "analyze preview must be a PNG");
+    const preview = decodePngRgba(previewPath);
+    assert.ok(preview.width > 0 && preview.height > 0, "analyze preview must have a positive size");
+    assert.ok(analyzed.observation?.snapshotId, "analyze must mint basis_snapshot_id");
+    commands.push("xsxb_analyze");
+
+    const useLoop = Boolean(analyzed.data.loop?.recommended) && analyzed.data.loop.oneShotLikely !== true;
+    const used = useLoop ? "loop" : "motion";
+    const recommendedOrder = useLoop ? analyzed.data.loop.recommended.order : analyzed.data.motion.order;
+    assert.ok(Array.isArray(recommendedOrder) && recommendedOrder.length >= 2, JSON.stringify(analyzed.data));
+
+    const applied = await callTool(service, "xsxb_reorganize_frames", {
+      project_id: "hero",
+      animation_id: "walk",
+      order: recommendedOrder,
+      dry_run: false,
+      basis_snapshot_id: analyzed.observation.snapshotId,
+    });
+    assert.equal(applied.ok, true, JSON.stringify(applied.error || applied));
+    assert.equal(applied.data.dryRun, false, JSON.stringify(applied.data));
+    commands.push("xsxb_reorganize_frames");
+
+    const after = await callTool(service, "xsxb_get_animation", {
+      project_id: "hero",
+      animation_id: "walk",
+    });
+    assert.equal(after.ok, true, JSON.stringify(after.error || after));
+    const afterFrames = after.data.animation.frames || [];
+    const orderAfter = afterFrames.map((frame) => frame.index);
+    assert.equal(
+      afterFrames.length,
+      recommendedOrder.length,
+      "frame count must match the applied recommended order",
+    );
+    assert.ok(afterFrames.length < orderBefore.length, "apply must drop the rest holds");
+    const afterDigests = afterFrames.map((frame) => rgbaDigest(frame.absolutePath));
+    const expectedDigests = recommendedOrder.map((sourceIndex) => beforeDigests[sourceIndex]);
+    assert.deepEqual(afterDigests, expectedDigests, "kept frames must follow the recommended source order");
+    const restDigest = beforeDigests[0];
+    const motionDigests = new Set([beforeDigests[2], beforeDigests[3]]);
+    assert.ok(
+      afterDigests.every((digest) => digest !== restDigest),
+      "kept frames must not be the rest hold",
+    );
+    assert.ok(
+      afterDigests.every((digest) => motionDigests.has(digest)),
+      "kept frames must be the motion pair",
+    );
+    assert.equal(new Set(afterDigests).size, afterDigests.length, "kept motion frames must stay distinct");
+    commands.push("xsxb_get_animation");
+
+    return {
+      orderBefore,
+      orderAfter,
+      recommendedOrder,
+      previewPath,
+      used,
+      keptMotion: true,
+      commands,
+      ffmpeg: ffmpegPresent(),
+      snapshotId: analyzed.observation.snapshotId,
+      preview: { width: preview.width, height: preview.height, kind: analyzed.data.preview?.kind },
+    };
+  } finally {
+    service.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+module.exports = { runAnalyzeAcceptance };
+
+if (require.main === module) {
+  runAnalyzeAcceptance()
+    .then((report) => {
+      process.stdout.write(
+        `Analyze acceptance passed. used=${report.used} before=${report.orderBefore.join(",")} after=${report.orderAfter.join(",")} preview=${report.previewPath}\n`,
+      );
+    })
+    .catch((error) => {
+      process.stderr.write(`${error.stack || error.message}\n`);
+      process.exitCode = 1;
+    });
+}
