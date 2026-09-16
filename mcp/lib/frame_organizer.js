@@ -308,6 +308,7 @@ function normalizedTrailFramePhase(value) {
 
 /**
  * Remaps attack-trail sticks to the replacement frame order.
+ * Drops segments whose sticks all lived on omitted frames, except empty presetOnly placeholders.
  * @param {object} source Attack-trail document.
  * @param {string} animationKey Stable profile/animation key.
  * @param {Array<{sourceIndex:number|null}>} items New frame plan.
@@ -323,28 +324,30 @@ function remapAttackTrails(source, animationKey, items) {
     if (!frameMap.has(item.sourceIndex)) frameMap.set(item.sourceIndex, []);
     frameMap.get(item.sourceIndex).push(nextIndex);
   });
-  result.bindings[animationKey] = result.bindings[animationKey].map((segment) => {
-    const sticks = Array.from(segment?.sticks || [])
-      .flatMap((stick, sourceIndex) => {
-        const savedOrder = Number(stick?.order);
-        const stableOrder = Number.isFinite(savedOrder) ? savedOrder : sourceIndex;
-        return Array.from(frameMap.get(Number(stick?.frame)) || []).map((frame) => ({
-          stick: { ...stick, frame },
-          sourceIndex,
-          stableOrder,
-        }));
-      })
-      .sort(
-        (left, right) =>
-          left.stick.frame - right.stick.frame ||
-          normalizedTrailFramePhase(left.stick.framePhase) -
-            normalizedTrailFramePhase(right.stick.framePhase) ||
-          left.stableOrder - right.stableOrder ||
-          left.sourceIndex - right.sourceIndex,
-      )
-      .map(({ stick }, order) => ({ ...stick, order }));
-    return { ...segment, sticks };
-  });
+  result.bindings[animationKey] = result.bindings[animationKey]
+    .map((segment) => {
+      const sticks = Array.from(segment?.sticks || [])
+        .flatMap((stick, sourceIndex) => {
+          const savedOrder = Number(stick?.order);
+          const stableOrder = Number.isFinite(savedOrder) ? savedOrder : sourceIndex;
+          return Array.from(frameMap.get(Number(stick?.frame)) || []).map((frame) => ({
+            stick: { ...stick, frame },
+            sourceIndex,
+            stableOrder,
+          }));
+        })
+        .sort(
+          (left, right) =>
+            left.stick.frame - right.stick.frame ||
+            normalizedTrailFramePhase(left.stick.framePhase) -
+              normalizedTrailFramePhase(right.stick.framePhase) ||
+            left.stableOrder - right.stableOrder ||
+            left.sourceIndex - right.sourceIndex,
+        )
+        .map(({ stick }, order) => ({ ...stick, order }));
+      return { ...segment, sticks };
+    })
+    .filter((segment) => segment.sticks.length > 0 || segment.presetOnly === true);
   return result;
 }
 
