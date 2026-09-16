@@ -586,6 +586,72 @@ test("validate_for_godot lists empty manifest clips in evidence.skipped and excl
   }
 });
 
+test("validate_for_godot skips fully transparent decodable clips from scale and evidence.cells", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-mcp-evidence-unmeasurable-"));
+  const godotRoot = path.join(root, "godot");
+  fs.mkdirSync(godotRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(godotRoot, "project.godot"),
+    '[application]\nconfig/name="EvidenceUnmeasurable"\n',
+  );
+  createProjectStore(root).addProject({ id: "hero", label: "Hero", projectRoot: godotRoot });
+  const service = createXsxbMcpService({
+    root,
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  try {
+    const idleDir = path.join(root, "idle-seq");
+    const walkDir = path.join(root, "walk-seq");
+    fs.mkdirSync(idleDir);
+    fs.mkdirSync(walkDir);
+    const idle = bodyOnCanvas(256, 264, 256);
+    const walk = { data: new Uint8ClampedArray(256 * 264 * 4), width: 256, height: 264 };
+    fs.writeFileSync(path.join(idleDir, "01.png"), encodePngRgba(idle.data, idle.width, idle.height));
+    fs.writeFileSync(path.join(walkDir, "01.png"), encodePngRgba(walk.data, walk.width, walk.height));
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+    });
+    await service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: walkDir,
+      animation_id: "walk",
+    });
+    const gate = await service.call("xsxb_validate_for_godot", {
+      project_id: "hero",
+      require_gameplay: false,
+    });
+    assert.deepEqual(
+      (gate.evidence.cells || []).map((cell) => cell.id),
+      ["idle"],
+      "evidence.cells ids must be only idle",
+    );
+    assert.ok(
+      (gate.evidence.skipped || []).some(
+        (entry) => entry && entry.id === "walk" && entry.reason === "unmeasurable_subject",
+      ),
+      `evidence.skipped must contain { id: "walk", reason: "unmeasurable_subject" }: ${JSON.stringify(gate.evidence.skipped)}`,
+    );
+    assert.ok(
+      (gate.warnings || []).some(
+        (warning) => /walk/i.test(warning) && /unmeasurable|transparent|subject/i.test(warning),
+      ),
+      `warnings must mention walk + unmeasurable/transparent/subject: ${(gate.warnings || []).join("; ")}`,
+    );
+    const scaleIssues = gate.scale_contract?.issues || [];
+    assert.ok(
+      !scaleIssues.some((issue) => /walk/i.test(issue)),
+      `scale_contract.issues must not mention walk: ${JSON.stringify(scaleIssues)}`,
+    );
+  } finally {
+    service.close?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 const STEEL = Object.freeze([200, 204, 214, 255]);
 const CRESCENT_GOLD = Object.freeze([255, 214, 56, 255]);
 const NAVY = Object.freeze([36, 58, 118, 255]);
