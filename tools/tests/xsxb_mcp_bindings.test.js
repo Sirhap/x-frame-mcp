@@ -596,3 +596,73 @@ test("add_attachment rebind unlinks leftover workspace hash png", async () => {
     current.cleanup();
   }
 });
+
+test("add_sfx rebind unlinks leftover workspace hash wav", async () => {
+  const current = await importedFixture();
+  try {
+    const hitA = path.join(current.root, "hit-a.wav");
+    fs.writeFileSync(hitA, createTestWav());
+    const walkFirst = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: hitA,
+      frame: 1,
+      id: "hit-sound",
+      sync: false,
+    });
+    const oldRel = walkFirst.binding.path;
+    const oldAbs = path.resolve(current.root, oldRel);
+    assert.equal(fs.existsSync(oldAbs), true, "first hit hash wav exists");
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleFirst = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hitA,
+      frame: 0,
+      id: "hit-sound",
+      sync: false,
+    });
+    assert.equal(idleFirst.binding.path, oldRel, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(oldAbs), true, "walk hash wav stays after idle bind");
+
+    const hitB = path.join(current.root, "hit-b.wav");
+    fs.writeFileSync(hitB, createTestWav({ frequency: 880 }));
+    const walkRebound = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: hitB,
+      frame: 1,
+      id: "hit-sound",
+      sync: false,
+    });
+    assert.notEqual(walkRebound.binding.path, oldRel, "walk binding.path must change");
+    const walkNewAbs = path.resolve(current.root, walkRebound.binding.path);
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file exists");
+    assert.equal(fs.existsSync(oldAbs), true, "old hash stays while idle still references it");
+
+    const idleRebound = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hitB,
+      frame: 0,
+      id: "hit-sound",
+      sync: false,
+    });
+    assert.equal(fs.existsSync(oldAbs), false, "old hash unlinks after last rebind");
+    assert.equal(
+      idleRebound.binding.path,
+      walkRebound.binding.path,
+      "idle and walk now point at the new hash",
+    );
+    assert.equal(
+      fs.existsSync(path.resolve(current.root, idleRebound.binding.path)),
+      true,
+      "new idle hash file exists",
+    );
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file still exists");
+  } finally {
+    current.cleanup();
+  }
+});
