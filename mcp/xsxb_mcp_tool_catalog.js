@@ -1722,15 +1722,14 @@ function toolDefinitions() {
             type: "integer",
             minimum: 2,
             maximum: 26,
-            default: 8,
-            description: "Grid rows. Default 8. Wins over grid_divs when set.",
+            description: "Grid rows. Omit to honor grid_divs, or handler 8. Wins over grid_divs when set.",
           },
           cols: {
             type: "integer",
             minimum: 2,
             maximum: 26,
-            default: 8,
-            description: "Grid columns A–Z. Default 8. Wins over grid_divs when set.",
+            description:
+              "Grid columns A–Z. Omit to honor grid_divs, or handler 8. Wins over grid_divs when set.",
           },
           grid_divs: {
             type: "string",
