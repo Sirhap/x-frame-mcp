@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { walkFiles, requireId } = require("./common");
 const { withFileTransaction } = require("../lib/file_transaction");
+const { unlinkUnreferencedInPlaceFrames } = require("../lib/frame_organizer");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { renderContactSheet } = require("../xsxb_mcp_visual_qa");
 const { pruneRevisions } = require("./revision_retention");
@@ -239,10 +240,9 @@ function createRevisionStore(context) {
       target: targetFor(project, entry, args.restore_external === true),
       bytes: bytesFor(project, snapshot, entry),
     }));
+    const previousFiles = currentFiles(project, true);
     const retained = new Set(jobs.map((job) => job.target));
-    const removed = currentFiles(project, true).filter(
-      (entry) => !entry.external && !retained.has(entry.target),
-    );
+    const removed = previousFiles.filter((entry) => !entry.external && !retained.has(entry.target));
     const result = {
       projectId: project.id,
       revisionId: snapshot.id,
@@ -265,6 +265,11 @@ function createRevisionStore(context) {
       }
       for (const entry of removed) transaction.removeFile(entry.target);
     });
+    if (args.restore_external === true) {
+      const previousExternal = previousFiles.filter((entry) => entry.external).map((entry) => entry.target);
+      const keptExternal = snapshot.files.filter((entry) => entry.external).map((entry) => entry.target);
+      unlinkUnreferencedInPlaceFrames(previousExternal, keptExternal, store.projectWorkspaceDir(project));
+    }
     return { ...result, restored: true, retention: prune(project, { protectedRevisionIds: [snapshot.id] }) };
   }
   /** Removes an automatic checkpoint only when the attempted operation changed no file. */

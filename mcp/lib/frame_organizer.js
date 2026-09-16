@@ -859,4 +859,5 @@ module.exports = {
   reorganizeAnimation,
   resolveAnimationType,
   resolveImportedAnimationType,
+  unlinkUnreferencedInPlaceFrames,
 };
