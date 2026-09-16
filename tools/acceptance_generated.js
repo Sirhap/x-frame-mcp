@@ -980,45 +980,6 @@ function scaleClip(receipt, id) {
 }
 
 /**
- * Pads every frame of a clip to the same canvas so diff_frames can run.
- * Plant can add different overhang rows per frame (AA under the sole).
- * @param {object} service MCP service.
- * @param {object} args Animation selection.
- * @param {{replant?:boolean}} [options] Re-plant soles after pad.
- * @returns {Promise<object>} Size receipt.
- */
-async function equalizeClipCanvas(service, args, options = {}) {
-  const got = await callTool(service, "xsxb_get_animation", args);
-  assert.equal(got.ok, true, JSON.stringify(got.error || got));
-  const images = (got.data.animation.frames || []).map((frame) => decodePngRgba(frame.absolutePath));
-  assert.ok(images.length >= 2, `${args.animation_id} needs two frames to equalize`);
-  const width = Math.max(...images.map((image) => image.width));
-  const height = Math.max(...images.map((image) => image.height));
-  if (images.every((image) => image.width === width && image.height === height)) {
-    return { skipped: true, width, height };
-  }
-  const resized = await callTool(service, "xsxb_resize_canvas", {
-    project_id: args.project_id,
-    animation_id: args.animation_id,
-    mode: "pad",
-    width,
-    height,
-    dry_run: false,
-  });
-  assert.equal(resized.ok, true, JSON.stringify(resized.error || resized));
-  if (options.replant) {
-    const planted = await callTool(service, "xsxb_plant_feet", {
-      project_id: args.project_id,
-      animation_id: args.animation_id,
-      target_y: -1,
-      apply: true,
-    });
-    assert.equal(planted.ok, true, JSON.stringify(planted.error || planted));
-  }
-  return { skipped: false, width, height };
-}
-
-/**
  * Re-plants idle first, then locks grounded clips, after a scale review.
  * @param {object} service MCP service.
  * @param {string} projectId Project id.
@@ -1140,16 +1101,7 @@ async function runGeneratedAcceptance(options = {}) {
       apply: true,
     });
     assert.equal(idlePlant.ok, true, JSON.stringify(idlePlant.error || idlePlant));
-    const idlePad = await equalizeClipCanvas(
-      service,
-      { project_id: "generated", animation_id: "idle" },
-      { replant: true },
-    );
-    log.push(
-      idlePad.skipped
-        ? "cutout+plant idle y=-1"
-        : `cutout+plant idle y=-1; pad ${idlePad.width}x${idlePad.height}`,
-    );
+    log.push("cutout+plant idle y=-1");
 
     const walkImport = await callTool(service, "xsxb_import_animation", {
       project_id: "generated",
@@ -1208,12 +1160,6 @@ async function runGeneratedAcceptance(options = {}) {
     });
     assert.equal(plantPreview.ok, true);
     const plantApply = await plantToIdleCanvas(service, "generated", "walk");
-    const walkPad = await equalizeClipCanvas(
-      service,
-      { project_id: "generated", animation_id: "walk" },
-      { replant: false },
-    );
-    if (!walkPad.skipped) log.push(`pad walk ${walkPad.width}x${walkPad.height}`);
     const groundedAfterWalk = await assertGroundedCanvasesMatchIdle(service, "generated", ["walk"]);
     report.canvas.idle = groundedAfterWalk.idle;
     report.canvas.walk = groundedAfterWalk.walk;
@@ -1363,11 +1309,6 @@ async function runGeneratedAcceptance(options = {}) {
     assert.equal(attackLock.ok, true, JSON.stringify(attackLock.error || attackLock));
     const attackPlant = await plantToIdleCanvas(service, "generated", "attack");
     assert.equal(attackPlant.ok, true, JSON.stringify(attackPlant.error || attackPlant));
-    await equalizeClipCanvas(
-      service,
-      { project_id: "generated", animation_id: "attack" },
-      { replant: false },
-    );
     const groundedAfterAttack = await assertGroundedCanvasesMatchIdle(service, "generated", [
       "walk",
       "attack",
@@ -1392,19 +1333,24 @@ async function runGeneratedAcceptance(options = {}) {
     log.push("cutout hit_vfx");
 
     if (resolved.clips.ink_idle) {
+      const inkProject = await callTool(service, "xsxb_create_project", {
+        project_id: "generated_ink",
+        label: "Generated ink plate",
+      });
+      assert.equal(inkProject.ok, true, JSON.stringify(inkProject.error || inkProject));
       const inkImport = await callTool(service, "xsxb_import_animation", {
-        project_id: "generated",
+        project_id: "generated_ink",
         source: "png_sequence",
         directory: clipDir("ink_idle"),
         profile_id: "generated",
         animation_id: "ink_idle",
-        animation_type: "vfx",
         fps: 8,
       });
       assert.equal(inkImport.ok, true, JSON.stringify(inkImport.error || inkImport));
-      const inkSnap = await observe(service, { project_id: "generated", animation_id: "ink_idle" });
+      assert.equal(inkImport.data.animationType, "actor", "ink_idle is a black-plate idle, not vfx");
+      const inkSnap = await observe(service, { project_id: "generated_ink", animation_id: "ink_idle" });
       const inkCut = await callTool(service, "xsxb_cutout", {
-        project_id: "generated",
+        project_id: "generated_ink",
         animation_id: "ink_idle",
         key_mode: "border_flood",
         key_color: "#000000",
@@ -1413,7 +1359,7 @@ async function runGeneratedAcceptance(options = {}) {
       assert.equal(inkCut.ok, true, JSON.stringify(inkCut.error || inkCut));
       inspectMagentaPreview(inkCut.data.preview.path, "ink_idle cutout");
       kept["generated_cutout_ink_idle_preview.png"] = inkCut.data.preview.path;
-      log.push("cutout ink_idle (vfx, not planted into Godot gate)");
+      log.push("cutout ink_idle in throwaway project (black-plate actor, not in Godot gate)");
     }
 
     for (const animationId of ["idle", "walk", "attack"]) {
@@ -1476,7 +1422,7 @@ async function runGeneratedAcceptance(options = {}) {
     assert.equal(gate.ok, true, JSON.stringify(gate.data?.errors || gate.error || gate));
     assert.equal(gate.data.qa, "clean", JSON.stringify(gate.data?.scale_contract || gate.data));
     assert.equal(gate.data.scale_contract.ok, true);
-    assert.ok(!(gate.data.scale_contract.issues || []).some((issue) => /hit_vfx|ink_idle/.test(issue)));
+    assert.ok(!(gate.data.scale_contract.issues || []).some((issue) => /hit_vfx/.test(issue)));
     const scaleCanvases = assertScaleCanvasesMatch(gate);
     report.feetY.idle = scaleCanvases.idle.feetY;
     report.feetY.walk = scaleCanvases.walk.feetY;
@@ -1496,7 +1442,7 @@ async function runGeneratedAcceptance(options = {}) {
     report.qa = gate.data.qa;
     kept["generated_godot_evidence.png"] = gate.data.evidence.path;
     kept["generated_run_summary.json"] = gate.data.run_summary.path;
-    const evidenceClipCount = REQUIRED_CLIPS.length + (resolved.clips.ink_idle ? 1 : 0);
+    const evidenceClipCount = REQUIRED_CLIPS.length;
     const evidenceCellW = Number(scaleCanvases.idle.canvasW) || Number(report.canvas.idle?.width);
     assert.ok(Number.isFinite(evidenceCellW) && evidenceCellW > 0, "idle canvasW for evidence cells");
     assert.notEqual(
