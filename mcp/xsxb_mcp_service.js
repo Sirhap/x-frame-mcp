@@ -15,7 +15,11 @@ const {
 } = require("./lib/attack_trails");
 const { deleteAnimation } = require("./lib/animation_mutations");
 const { estimateFrameBoxes, frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
-const { importAnimation, reorganizeAnimation, resolveAnimationType } = require("./lib/frame_organizer");
+const {
+  importAnimation,
+  reorganizeAnimation,
+  resolveImportedAnimationType,
+} = require("./lib/frame_organizer");
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
 const { shouldCommit } = require("./xsxb_mcp_commit");
@@ -653,6 +657,9 @@ function createXsxbMcpService(options = {}) {
       "video_import",
     );
     const used = new Set((profile?.animations || []).map((entry) => String(entry.id || entry.name)));
+    const existingAnimation = (profile?.animations || []).find(
+      (entry) => String(entry.id || entry.name) === baseAnimationId,
+    );
     const replaced = booleanFlag(args.replace) && used.has(baseAnimationId);
     let animationId = baseAnimationId;
     if (!replaced) {
@@ -688,6 +695,10 @@ function createXsxbMcpService(options = {}) {
         name: path.basename(framePath),
         sourcePath: framePath,
       }));
+      const animationType = resolveImportedAnimationType(
+        args.animation_type ?? args.animationType,
+        replaced ? existingAnimation?.type : undefined,
+      );
       const imported = importAnimation({
         root,
         projectStore,
@@ -696,7 +707,7 @@ function createXsxbMcpService(options = {}) {
         profileLabel: profileId,
         animationId,
         animationName: animationId,
-        animationType: resolveAnimationType(args.animation_type || args.animationType),
+        animationType,
         fps,
         replace: replaced,
         items,
@@ -713,7 +724,7 @@ function createXsxbMcpService(options = {}) {
         projectId: project.id,
         profileId,
         animationId,
-        animationType: resolveAnimationType(args.animation_type || args.animationType),
+        animationType,
         sourceVideo: videoPath,
         fps,
         sourceFrameCount,
@@ -788,6 +799,10 @@ function createXsxbMcpService(options = {}) {
       }
     }
     const fps = requireFps(args.fps, replaced ? existingAnimation.fps : 12);
+    const animationType = resolveImportedAnimationType(
+      args.animation_type ?? args.animationType,
+      replaced ? existingAnimation.type : undefined,
+    );
     const imported = importAnimation({
       root,
       projectStore,
@@ -796,7 +811,7 @@ function createXsxbMcpService(options = {}) {
       profileLabel: profileId,
       animationId,
       animationName: String(args.animation_name || animationId),
-      animationType: resolveAnimationType(args.animation_type || args.animationType),
+      animationType,
       fps,
       replace: replaced,
       inPlace,
@@ -829,7 +844,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       profileId,
       animationId,
-      animationType: resolveAnimationType(args.animation_type || args.animationType),
+      animationType,
       fps,
       importedFrameCount: imported.frameCount,
       replaced: Boolean(replaced),

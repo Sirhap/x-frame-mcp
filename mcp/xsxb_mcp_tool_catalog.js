@@ -17,9 +17,8 @@ const DEFAULT_PROFILE_ID = "mcp_imports";
 const ANIMATION_TYPE_PROPERTY = Object.freeze({
   type: "string",
   enum: ["actor", "boss", "vfx", "prop", "scene_prop_attachment"],
-  default: "actor",
   description:
-    "Stored clip type. vfx and prop skip the idle feet contract. Default actor. Do not rely on naming the id *_vfx.",
+    "Stored clip type. vfx and prop skip the idle feet contract. First-import omit is actor. Do not rely on naming the id *_vfx.",
 });
 const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_list_projects",

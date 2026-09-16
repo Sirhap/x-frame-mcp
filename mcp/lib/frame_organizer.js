@@ -21,6 +21,18 @@ function resolveAnimationType(value) {
 }
 
 /**
+ * Resolves clip type for import. Replace omit keeps the stored type; first-import omit is actor.
+ * Empty string counts as omitted so it does not wipe a stored vfx/prop type.
+ * @param {unknown} requested Raw animation_type / animationType.
+ * @param {unknown} [existingType] Stored type used when requested is omitted on replace.
+ * @returns {string} One of ANIMATION_TYPES.
+ */
+function resolveImportedAnimationType(requested, existingType) {
+  const omitted = requested === undefined || requested === null || requested === "";
+  return resolveAnimationType(omitted ? (existingType ?? requested) : requested);
+}
+
+/**
  * Deep-clones JSON-compatible project data.
  * @param {unknown} value JSON-compatible value.
  * @returns {any}
@@ -846,4 +858,5 @@ module.exports = {
   remapReferenceFrame,
   reorganizeAnimation,
   resolveAnimationType,
+  resolveImportedAnimationType,
 };
