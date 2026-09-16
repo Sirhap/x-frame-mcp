@@ -113,6 +113,11 @@ function countCells(span, cell, pad) {
  */
 function resolveSliceGrid(args, width, height) {
   const pad = resolvePad(args);
+  const hasColumns = argumentPresent(args.columns);
+  const hasCols = argumentPresent(args.cols);
+  if (hasColumns && hasCols && Number(args.columns) !== Number(args.cols)) {
+    throw new Error("columns and cols disagree. Pass only one.");
+  }
   let columns = optionalPositiveInt(args.columns ?? args.cols, "columns");
   let rows = optionalPositiveInt(args.rows, "rows");
   if (args.grid_divs !== undefined && args.grid_divs !== null && args.grid_divs !== "") {

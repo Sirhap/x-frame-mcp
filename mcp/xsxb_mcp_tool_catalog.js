@@ -238,6 +238,13 @@ function toolDefinitions() {
             maximum: 256,
             description: "Grid columns. Pair with rows, or omit and pass cell / grid_divs.",
           },
+          cols: {
+            type: "integer",
+            minimum: 1,
+            maximum: 256,
+            description:
+              "Alias of columns. Matches overlay_grid vocabulary. No separate default; omit means use columns.",
+          },
           rows: {
             type: "integer",
             minimum: 1,
