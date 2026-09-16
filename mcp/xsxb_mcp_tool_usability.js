@@ -322,8 +322,25 @@ animations = [{
       fps: 12,
       in_place: true,
     });
-    if (png.importedFrameCount !== 2 || sprite.importedFrameCount < 1 || inplace.importedFrameCount !== 2) {
-      return verdict("xsxb_import_animation", "fail", JSON.stringify({ png, sprite, inplace }));
+    const vfxDir = path.join(fixture.root, "spark-seq");
+    fs.mkdirSync(vfxDir, { recursive: true });
+    fs.writeFileSync(path.join(vfxDir, "01.png"), ONE_PIXEL_PNG);
+    fs.writeFileSync(path.join(vfxDir, "02.png"), ONE_PIXEL_PNG);
+    const typed = await fixture.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: vfxDir,
+      animation_id: "spark",
+      animation_type: "vfx",
+    });
+    const typedAnim = await fixture.call("xsxb_get_animation", { animation_id: "spark" });
+    if (
+      png.importedFrameCount !== 2 ||
+      sprite.importedFrameCount < 1 ||
+      inplace.importedFrameCount !== 2 ||
+      typed.animationType !== "vfx" ||
+      typedAnim.animation?.type !== "vfx"
+    ) {
+      return verdict("xsxb_import_animation", "fail", JSON.stringify({ png, sprite, inplace, typed, typedAnim }));
     }
     return verdict(
       "xsxb_import_animation",
@@ -943,7 +960,12 @@ animations = [{
   async xsxb_sync_godot(fixture) {
     await importSequence(fixture, "walk");
     const synced = await fixture.call("xsxb_sync_godot", { project_id: "usable" });
-    if (synced.ok !== true || synced.requested !== true) {
+    if (
+      synced.ok !== true ||
+      synced.requested !== true ||
+      synced.godot?.runtime?.actorScript !== true ||
+      !Array.isArray(synced.godot?.animations)
+    ) {
       return verdict("xsxb_sync_godot", "fail", JSON.stringify(synced));
     }
     return verdict("xsxb_sync_godot", "ready", "syncs a bound Godot root");

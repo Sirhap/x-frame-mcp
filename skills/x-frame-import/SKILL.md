@@ -11,7 +11,7 @@ description: >-
 State the user goal in one sentence. `xsxb_list_projects` or `xsxb_get_project`. Create or bind only when the registry has no matching project.
 
 1. `xsxb_create_project` when needed. `xsxb_bind_godot` before any sync.
-2. `xsxb_import_animation` (PNG folder, `in_place` if sources stay put) or `xsxb_import_video` / `xsxb_slice_sheet`.
+2. `xsxb_import_animation` (PNG folder, `in_place` if sources stay put) or `xsxb_import_video` / `xsxb_slice_sheet`. Pass `animation_type=vfx` or `prop` for FX; do not rely on naming the id `*_vfx`.
 3. `xsxb_get_animation` and open a frame or sheet. Frame count matching the folder is not “the character looks right.”
 4. Prefer `xsxb_analyze` after import. Do not `xsxb_export_sheet` every candidate.
 5. Reorder with `xsxb_reorganize_frames` and the analyze `basis_snapshot_id`.

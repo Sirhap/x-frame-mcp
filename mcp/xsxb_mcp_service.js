@@ -15,7 +15,7 @@ const {
 } = require("./lib/attack_trails");
 const { deleteAnimation } = require("./lib/animation_mutations");
 const { frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
-const { importAnimation, reorganizeAnimation } = require("./lib/frame_organizer");
+const { importAnimation, reorganizeAnimation, resolveAnimationType } = require("./lib/frame_organizer");
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
 const { shouldCommit } = require("./xsxb_mcp_commit");
@@ -631,7 +631,7 @@ function createXsxbMcpService(options = {}) {
         profileLabel: profileId,
         animationId,
         animationName: animationId,
-        animationType: "actor",
+        animationType: resolveAnimationType(args.animation_type || args.animationType),
         fps: requireFps(args.fps),
         replace: replaced,
         items,
@@ -647,6 +647,7 @@ function createXsxbMcpService(options = {}) {
         projectId: project.id,
         profileId,
         animationId,
+        animationType: resolveAnimationType(args.animation_type || args.animationType),
         sourceVideo: videoPath,
         fps: requireFps(args.fps),
         extractedFrameCount: extracted.extractedCount,
@@ -721,7 +722,7 @@ function createXsxbMcpService(options = {}) {
       profileLabel: profileId,
       animationId,
       animationName: String(args.animation_name || animationId),
-      animationType: "actor",
+      animationType: resolveAnimationType(args.animation_type || args.animationType),
       fps: requireFps(args.fps),
       replace: replaced,
       inPlace,
@@ -754,6 +755,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       profileId,
       animationId,
+      animationType: resolveAnimationType(args.animation_type || args.animationType),
       fps: requireFps(args.fps),
       importedFrameCount: imported.frameCount,
       replaced: Boolean(replaced),
@@ -895,6 +897,7 @@ function createXsxbMcpService(options = {}) {
       loop_endpoint: args.loop_endpoint,
     };
     if (args.in_place !== undefined) importArgs.in_place = args.in_place;
+    if (args.animation_type !== undefined) importArgs.animation_type = args.animation_type;
     return { ...receipt, imported: await importUnified(importArgs) };
   }
 
@@ -1320,6 +1323,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       force: booleanFlag(args.force),
       ...synchronize(project, true, { force: booleanFlag(args.force) }),
+      godot: describeGodotHandoff(project.projectRoot || "", project.id),
     };
   }
 

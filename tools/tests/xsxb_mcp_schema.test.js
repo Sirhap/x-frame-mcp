@@ -252,6 +252,24 @@ test("create_project and import_video window fields stay optional and lenient", 
   assert.ok(video.inputSchema.properties.start_time);
   assert.ok(video.inputSchema.properties.duration);
   assert.ok(animation.inputSchema.properties.start_time);
+  assert.deepEqual(animation.inputSchema.properties.animation_type.enum, [
+    "actor",
+    "boss",
+    "vfx",
+    "prop",
+    "scene_prop_attachment",
+  ]);
+  assert.equal(animation.inputSchema.properties.animation_type.default, "actor");
+  assert.ok(video.inputSchema.properties.animation_type);
+  assert.throws(
+    () =>
+      validateToolArguments("xsxb_import_animation", animation.inputSchema, {
+        source: "png_sequence",
+        directory: "/tmp/seq",
+        animation_type: "jumper",
+      }),
+    /animation_type/,
+  );
   validateToolArguments("xsxb_import_video", video.inputSchema, {
     file_path: "/tmp/a.mp4",
     fps: "12",

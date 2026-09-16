@@ -18,7 +18,7 @@ const BOOT = Object.freeze([12, 20, 40, 255]);
  * Paints a navy body and darker boots on a light plate.
  * @param {number} width Canvas width.
  * @param {number} height Canvas height.
- * @param {{originX:number,originY:number,bodyW?:number,bodyH?:number}} pose Body top-left and size.
+ * @param {{originX:number,originY:number,bodyW?:number,bodyH?:number,plate?:number[]}} pose Body top-left and size.
  * @returns {Uint8ClampedArray} RGBA pixels.
  */
 function paintGroundedActor(width, height, pose) {
@@ -132,6 +132,12 @@ async function runPlaybookAcceptance() {
     });
     assert.equal(imported.ok, true);
     assert.equal(imported.data.importedFrameCount, 2);
+    assert.equal(imported.data.animationType, "actor");
+    const synced = await callTool(service, "xsxb_sync_godot", { project_id: "hero" });
+    assert.equal(synced.ok, true);
+    assert.equal(synced.data.godot?.runtime?.actorScript, true);
+    assert.ok(Array.isArray(synced.data.godot?.runtime?.files));
+    assert.ok((synced.data.godot?.animations || []).some((clip) => clip.id === "idle"));
     await callTool(service, "xsxb_estimate_boxes", {
       project_id: "hero",
       profile_id: "hero",
@@ -304,6 +310,117 @@ async function runPlaybookAcceptance() {
     });
     assert.equal(mismatched.ok, false);
     assert.match(String(mismatched.error?.message || ""), /same width and height/);
+
+    const badType = await callTool(service, "xsxb_import_animation", {
+      project_id: "hero",
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "bad_type",
+      animation_type: "jumper",
+    });
+    assert.equal(badType.ok, false);
+    assert.match(String(badType.error?.message || ""), /animation_type/);
+
+    const inkGame = path.join(root, "game-ink");
+    fs.mkdirSync(inkGame);
+    fs.writeFileSync(path.join(inkGame, "project.godot"), '[application]\nconfig/name="Ink"\n');
+    const blackIdle = paintGroundedActor(32, 32, { originX: 8, originY: 10, plate: [0, 0, 0, 255] });
+    const blackDrift = paintGroundedActor(32, 32, { originX: 10, originY: 4, plate: [0, 0, 0, 255] });
+    const blackIdleDir = path.join(root, "ink-idle");
+    const sparkDir = path.join(root, "ink-spark");
+    const jumperDir = path.join(root, "ink-jumper");
+    fs.mkdirSync(blackIdleDir);
+    fs.mkdirSync(sparkDir);
+    fs.mkdirSync(jumperDir);
+    fs.writeFileSync(path.join(blackIdleDir, "00.png"), encodePngRgba(blackIdle, 32, 32));
+    fs.writeFileSync(path.join(blackIdleDir, "01.png"), encodePngRgba(blackIdle, 32, 32));
+    fs.writeFileSync(path.join(sparkDir, "00.png"), encodePngRgba(blackDrift, 32, 32));
+    fs.writeFileSync(path.join(sparkDir, "01.png"), encodePngRgba(blackDrift, 32, 32));
+    fs.writeFileSync(path.join(jumperDir, "00.png"), encodePngRgba(blackDrift, 32, 32));
+    fs.writeFileSync(path.join(jumperDir, "01.png"), encodePngRgba(blackDrift, 32, 32));
+
+    await callTool(service, "xsxb_create_project", { project_id: "ink", label: "Ink" });
+    await callTool(service, "xsxb_bind_godot", { project_id: "ink", project_root: inkGame });
+    const inkIdle = await callTool(service, "xsxb_import_animation", {
+      project_id: "ink",
+      source: "png_sequence",
+      directory: blackIdleDir,
+      profile_id: "ink",
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(inkIdle.ok, true);
+    await callTool(service, "xsxb_estimate_boxes", {
+      project_id: "ink",
+      profile_id: "ink",
+      animation_id: "idle",
+      sync: true,
+    });
+    writeGameplayScene(inkGame);
+    const blackReady = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "ink",
+      require_gameplay: true,
+    });
+    assert.equal(blackReady.ok, true, JSON.stringify(blackReady.data?.errors || blackReady.error || blackReady));
+    assert.equal(blackReady.data.qa, "clean");
+
+    const spark = await callTool(service, "xsxb_import_animation", {
+      project_id: "ink",
+      source: "png_sequence",
+      directory: sparkDir,
+      profile_id: "ink",
+      animation_id: "spark",
+      animation_type: "vfx",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(spark.ok, true);
+    assert.equal(spark.data.animationType, "vfx");
+    const sparkAnim = await callTool(service, "xsxb_get_animation", {
+      project_id: "ink",
+      animation_id: "spark",
+    });
+    assert.equal(sparkAnim.data.animation?.type, "vfx");
+    await callTool(service, "xsxb_estimate_boxes", {
+      project_id: "ink",
+      animation_id: "spark",
+      sync: true,
+    });
+    const withTypedFx = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "ink",
+      require_gameplay: true,
+    });
+    assert.equal(withTypedFx.ok, true, JSON.stringify(withTypedFx.data?.errors || withTypedFx.error || withTypedFx));
+    assert.equal(withTypedFx.data.scale_contract.ok, true);
+    assert.ok(!(withTypedFx.data.scale_contract.issues || []).some((issue) => /spark/.test(issue)));
+
+    await callTool(service, "xsxb_import_animation", {
+      project_id: "ink",
+      source: "png_sequence",
+      directory: jumperDir,
+      profile_id: "ink",
+      animation_id: "jumper",
+      fps: 8,
+      sync: true,
+    });
+    await callTool(service, "xsxb_estimate_boxes", {
+      project_id: "ink",
+      animation_id: "jumper",
+      sync: true,
+    });
+    const jumperDrift = await callTool(service, "xsxb_validate_for_godot", {
+      project_id: "ink",
+      require_gameplay: true,
+      strict: true,
+    });
+    assert.equal(jumperDrift.ok, false);
+    assert.equal(jumperDrift.data.qa, "warn");
+    assert.equal(jumperDrift.data.scale_contract.ok, false);
+    assert.ok(
+      jumperDrift.data.scale_contract.issues.some((issue) => /jumper/.test(issue) && /feet/i.test(issue)),
+      "jumper is a grounded actor name and must fail the scale contract when soles drift",
+    );
 
     return {
       root,

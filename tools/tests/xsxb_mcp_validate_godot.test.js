@@ -31,10 +31,15 @@ test("evaluateScaleContract flags intra-clip sole bounce", () => {
   assert.ok(contract.issues.some((issue) => /spans/.test(issue)));
 });
 
-test("isFxOrAirborne matches vfx ids and jump", () => {
+test("isFxOrAirborne matches type and whole tokens, not substrings", () => {
   assert.equal(isFxOrAirborne({ id: "hit_vfx" }), true);
   assert.equal(isFxOrAirborne({ id: "jump" }), true);
   assert.equal(isFxOrAirborne({ id: "walk" }), false);
+  assert.equal(isFxOrAirborne({ id: "jumper" }), false);
+  assert.equal(isFxOrAirborne({ id: "proposition" }), false);
+  assert.equal(isFxOrAirborne({ id: "effective" }), false);
+  assert.equal(isFxOrAirborne({ id: "spark", type: "vfx" }), true);
+  assert.equal(isFxOrAirborne({ id: "spark", type: "actor" }), false);
 });
 
 test("classifyInspectQa is warn on errors and review on a real diff", () => {

@@ -5,6 +5,21 @@ const { estimateFrameBoxes, upsertEstimatedFrameBoxes } = require("./box_estimat
 const { ensureInitialCharacterScale } = require("./import_scale");
 const { stripAnimationOwnedData } = require("./animation_mutations");
 
+const ANIMATION_TYPES = Object.freeze(["actor", "boss", "vfx", "prop", "scene_prop_attachment"]);
+
+/**
+ * Normalizes a stored clip type. Invalid values fail instead of becoming actor.
+ * @param {unknown} value Requested type.
+ * @returns {string} One of ANIMATION_TYPES.
+ */
+function resolveAnimationType(value) {
+  const requested = String(value || "actor");
+  if (!ANIMATION_TYPES.includes(requested)) {
+    throw new Error(`animation_type must be one of: ${ANIMATION_TYPES.join(", ")}`);
+  }
+  return requested;
+}
+
 /**
  * Deep-clones JSON-compatible project data.
  * @param {unknown} value JSON-compatible value.
@@ -519,11 +534,7 @@ function importAnimation(options) {
         ...dimensions,
       };
     });
-    const animationType = ["actor", "boss", "vfx", "prop", "scene_prop_attachment"].includes(
-      String(options.animationType || "actor"),
-    )
-      ? String(options.animationType || "actor")
-      : "actor";
+    const animationType = resolveAnimationType(options.animationType);
     animation = {
       id: animationId,
       name: String(options.animationName || animationId),
@@ -775,6 +786,7 @@ function reorganizeAnimation(options) {
 }
 
 module.exports = {
+  ANIMATION_TYPES,
   importAnimation,
   mirrorBoxes,
   remapBindings,
@@ -782,4 +794,5 @@ module.exports = {
   remapIndexedDictionary,
   remapReferenceFrame,
   reorganizeAnimation,
+  resolveAnimationType,
 };

@@ -77,7 +77,7 @@ npm run mcp:start
 - **工程流程：** 开工先用一句话写下用户目标，再 `list`/`get` 选 playbook；多步用有序 todo；每步改盘后打开图（`preview.path` / overlay / gif）再勾掉，`confirmed` 不算完成；眼睛不过就停，不要接着走 playbook
 - 改数据前先 `xsxb_list_projects` 或 `xsxb_get_project`。没有项目时用 `xsxb_create_project`（`project_id` / `label` / `project_root` 均可选；已存在的 id 不重复建）。默认落在当前目录 `.x-frame/`；带 `project_root` 时落在那个目录的 `.x-frame/`
 - 同步前先 `xsxb_bind_godot`
-- 导入用 `xsxb_import_animation`（支持 `start_frame` / `end_frame` / `replace` / `in_place`）；`xsxb_import_video` 只是视频别名，可另传 `start_time` / `duration`（ffmpeg `-ss`/`-t` 放在 `-i` 后；省略则抽整段）。`in_place: true` 让 PNG 序列继续用源文件，不拷进 `workspace/assets`
+- 导入用 `xsxb_import_animation`（支持 `start_frame` / `end_frame` / `replace` / `in_place` / `animation_type`）；`xsxb_import_video` 只是视频别名，可另传 `start_time` / `duration`（ffmpeg `-ss`/`-t` 放在 `-i` 后；省略则抽整段）。`animation_type=vfx|prop` 会跳过待机脚底合同。`in_place: true` 让 PNG 序列继续用源文件，不拷进 `workspace/assets`
 - 切表用 `xsxb_slice_sheet`（packed sprite/contact sheet → PNG 序列）。走循环锁高锁脚仍用 `xsxb_measure_frames` / `xsxb_register_clip`，不要用切表当锁尺
 - 走循环锁尺：`xsxb_measure_frames`（相对待机看 `dBbox` / `dCx` / `dFx`）→ `xsxb_register_clip`（绕脚锁高锁脚锁左右，`equalize` 抹镜头远近，`shared_scale` 留姿势起伏）→ `xsxb_export_sheet normalize=feet|none` 和 `xsxb_export_overlay`（红/青叠）验收 → `xsxb_export_gif`（默认品红底，`output_path` 可出 XSXB 根）或 `xsxb_export_pack_slot` 拷进游戏仓。走循环不要用刀光 / `place_image`
 - 抠图用 `xsxb_cutout`（默认 `fit=none`、`receipt=short`；生成白底或黑底用 `key_mode=border_flood`；看回执 `preview.path` 洋红扁平成图，不要用默认种脚小格子表当「人还在」；网页同一套智能抠图和滑块；可传 `tolerance` / `feather` / `protected_colors` 等，省略则用共用智能档；已抠帧默认跳过，除非 `force`；回执带 `bodyHeight` / `nearWhite`，`metrics=false` 可关）

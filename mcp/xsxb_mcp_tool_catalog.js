@@ -14,6 +14,13 @@ const { workbenchSliderSchemaProperties } = require("./xsxb_mcp_cutout");
 const { receiptEnvelopeSchema } = require("./xsxb_mcp_receipt");
 
 const DEFAULT_PROFILE_ID = "mcp_imports";
+const ANIMATION_TYPE_PROPERTY = Object.freeze({
+  type: "string",
+  enum: ["actor", "boss", "vfx", "prop", "scene_prop_attachment"],
+  default: "actor",
+  description:
+    "Stored clip type. vfx and prop skip the idle feet contract. Default actor. Do not rely on naming the id *_vfx.",
+});
 const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_list_projects",
   "xsxb_get_project",
@@ -198,6 +205,7 @@ function toolDefinitions() {
           project_id: projectProperty,
           profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
           animation_id: { type: "string", description: "Defaults to a sanitized video filename." },
+          animation_type: ANIMATION_TYPE_PROPERTY,
           in_place: {
             type: "boolean",
             default: false,
@@ -287,6 +295,7 @@ function toolDefinitions() {
             description: "When set, import the kept PNG sequence after slicing.",
           },
           animation_name: { type: "string" },
+          animation_type: ANIMATION_TYPE_PROPERTY,
           project_id: projectProperty,
           profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
           fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
@@ -312,7 +321,7 @@ function toolDefinitions() {
     {
       name: "xsxb_import_animation",
       description:
-        "Import a video, PNG sequence, SpriteFrames file, or PNG data items as an XSXB animation. xsxb_import_video is this tool's video alias.",
+        "Import a video, PNG sequence, SpriteFrames file, or PNG data items as an XSXB animation. xsxb_import_video is this tool's video alias. Pass animation_type=vfx|prop for FX so Godot scale skips idle feet; default actor.",
       inputSchema: {
         type: "object",
         properties: {
@@ -348,6 +357,7 @@ function toolDefinitions() {
           profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
           animation_id: { type: "string" },
           animation_name: { type: "string" },
+          animation_type: ANIMATION_TYPE_PROPERTY,
           loop_endpoint: {
             type: "string",
             enum: ["none", "duplicate_first"],
@@ -1282,7 +1292,7 @@ function toolDefinitions() {
     {
       name: "xsxb_sync_godot",
       description:
-        "Synchronize the current project to its bound Godot root without changing animation data. Drops stale .godot/imported .ctex files when synced PNG bytes no longer match the cached source_md5.",
+        "Synchronize the current project to its bound Godot root without changing animation data. Drops stale .godot/imported .ctex files when synced PNG bytes no longer match the cached source_md5. Receipt.godot is a disk snapshot (runtime files, animation counts) an editor MCP can describe against.",
       inputSchema: {
         type: "object",
         properties: { project_id: projectProperty, force: { type: "boolean", default: false } },
@@ -1314,7 +1324,7 @@ function toolDefinitions() {
     {
       name: "xsxb_validate_for_godot",
       description:
-        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height; VFX/airborne skipped). require_gameplay defaults true. Scale drift is a warning unless strict. qa is clean|review|warn — warn means stop. ok is the gate, not a visual pass — open evidence.path and run_summary.path. Compose with an editor MCP; this tool does not drive Godot.",
+        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height; clips with animation_type vfx/prop or jump/airborne tokens skipped). require_gameplay defaults true. Scale drift is a warning unless strict. qa is clean|review|warn — warn means stop. ok is the gate, not a visual pass — open evidence.path and run_summary.path. Compose with an editor MCP; this tool does not drive Godot.",
       inputSchema: {
         type: "object",
         properties: {

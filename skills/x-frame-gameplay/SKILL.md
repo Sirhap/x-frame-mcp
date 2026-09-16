@@ -8,7 +8,7 @@ description: >-
 
 # x-frame gameplay
 
-Grounded actors share idle feet and body height. FX, overlay, jump, and airborne clips are exempt.
+Grounded actors share idle feet and body height. Clips imported with `animation_type=vfx` or `prop`, plus jump/airborne tokens in the id, are exempt. Names like jumper or proposition stay grounded.
 
 1. Pick idle (or the first grounded clip) as the reference.
 2. `xsxb_measure_frames` against that idle. Walk-lock: `xsxb_register_clip` (apply bakes about the feet) then `xsxb_plant_feet` at `y=-1`, not `0,0`.

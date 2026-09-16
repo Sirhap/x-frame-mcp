@@ -10,18 +10,35 @@ const path = require("node:path");
 const { GODOT_SYNC_ROOT } = require("./lib/godot_sync");
 const { borderFloodKey, measureSpriteGeometry } = require("./xsxb_mcp_lock");
 
-const FX_KIND = /vfx|effect|overlay|prop|\bfx\b|airborne|jump/i;
+const FX_TYPES = new Set(["vfx", "prop", "scene_prop_attachment", "overlay", "fx", "effect"]);
+const FX_TOKENS = new Set(["vfx", "fx", "effect", "overlay", "prop", "airborne", "jump"]);
 const DEFAULT_FEET_TOLERANCE = 2;
 const DEFAULT_HEIGHT_TOLERANCE = 2;
 const SYNC_ROOT_ALIASES = Object.freeze(["xsxb_frame_tuner", "x_frame"]);
 
 /**
+ * Splits an id or display name into lowercase alphanumeric tokens.
+ * @param {unknown} value Raw label.
+ * @returns {string[]} Tokens. "hit_vfx" → ["hit","vfx"]; "jumper" stays one token.
+ */
+function labelTokens(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
  * True when a clip is VFX, overlay, or airborne and must not lock to idle soles.
+ * Type/kind match stored kinds. Id/name match whole tokens so jumper and
+ * proposition stay grounded.
  * @param {{id?:string,name?:string,type?:string,kind?:string}} clip Animation or profile fields.
  * @returns {boolean} True for non-grounded clips.
  */
 function isFxOrAirborne(clip) {
-  return FX_KIND.test(`${clip?.type || ""} ${clip?.kind || ""} ${clip?.id || ""} ${clip?.name || ""}`);
+  const typeKind = [clip?.type, clip?.kind].map((value) => String(value || "").toLowerCase());
+  if (typeKind.some((value) => FX_TYPES.has(value))) return true;
+  return [...labelTokens(clip?.id), ...labelTokens(clip?.name)].some((token) => FX_TOKENS.has(token));
 }
 
 /**
