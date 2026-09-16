@@ -11,6 +11,7 @@ const { booleanFlag, PNG_NAME, requireExistingFile } = require("./xsxb_mcp_argum
 const { decodePngRgba, encodePngRgba } = require("./xsxb_mcp_cutout");
 
 const NUMBERED_PNG = /^\d+\.png$/i;
+const NUMBERED_PNG_SIDECAR = /^\d+\.png\.(import|uid)$/i;
 
 /**
  * Parses a positive integer argument or throws a named error.
@@ -198,16 +199,31 @@ function cellIsEmpty(rgba) {
 }
 
 /**
- * Removes previous numbered slice outputs so a re-run cannot poison a sequence import.
+ * Removes previous numbered slice outputs and Godot sidecars so a re-run cannot poison a sequence import.
  * @param {string} dest Output directory.
  * @returns {void}
  */
 function clearNumberedPngs(dest) {
   if (!fs.existsSync(dest)) return;
   for (const name of fs.readdirSync(dest)) {
-    if (!NUMBERED_PNG.test(name)) continue;
     const filePath = path.join(dest, name);
-    if (fs.statSync(filePath).isFile()) fs.unlinkSync(filePath);
+    if (NUMBERED_PNG.test(name)) {
+      if (fs.statSync(filePath).isFile()) fs.unlinkSync(filePath);
+      for (const extra of [`${name}.import`, `${name}.uid`]) {
+        const sidecarPath = path.join(dest, extra);
+        if (fs.existsSync(sidecarPath) && fs.statSync(sidecarPath).isFile()) {
+          fs.unlinkSync(sidecarPath);
+        }
+      }
+      continue;
+    }
+    if (
+      NUMBERED_PNG_SIDECAR.test(name) &&
+      fs.existsSync(filePath) &&
+      fs.statSync(filePath).isFile()
+    ) {
+      fs.unlinkSync(filePath);
+    }
   }
 }
 
