@@ -42,13 +42,19 @@ function parseSliceGridDivs(value) {
 }
 
 /**
- * Reads pad / padding (pixels between cells). Default 0.
+ * Reads pad / padding (pixels between cells). Omit means 0.
+ * If both are present and Number() values differ, throws. Matching values are accepted.
  * @param {object} args Tool arguments.
  * @returns {number} Pad in pixels.
  */
 function resolvePad(args) {
-  const raw = args.pad !== undefined && args.pad !== null && args.pad !== "" ? args.pad : args.padding;
-  if (raw === undefined || raw === null || raw === "") return 0;
+  const hasPad = argumentPresent(args.pad);
+  const hasPadding = argumentPresent(args.padding);
+  if (hasPad && hasPadding && Number(args.pad) !== Number(args.padding)) {
+    throw new Error("pad and padding disagree. Pass only one.");
+  }
+  const raw = hasPad ? args.pad : args.padding;
+  if (!argumentPresent(raw)) return 0;
   const pad = Number(raw);
   if (!Number.isInteger(pad) || pad < 0) {
     throw new Error(`pad must be an integer >= 0. Received: ${raw}`);

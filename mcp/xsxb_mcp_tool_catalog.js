@@ -271,14 +271,14 @@ function toolDefinitions() {
             type: "integer",
             minimum: 0,
             maximum: 64,
-            default: 0,
-            description: "Pixels between cells. Default 0.",
+            description:
+              "Pixels between cells. Omit means 0. padding is an alias with no separate default; hosts must not inject pad:0.",
           },
           padding: {
             type: "integer",
             minimum: 0,
             maximum: 64,
-            description: "Alias of pad.",
+            description: "Alias of pad. No separate default; omit means 0.",
           },
           dest: {
             type: "string",
