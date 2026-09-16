@@ -39,3 +39,18 @@ test("godot skill names evidence as one cell per clip, not always frame 0", () =
   assert.match(godot, /apex/);
   assert.match(godot, /qa=review/);
 });
+
+test("gameplay skill plants hurt and enables hit only on a gold crescent", () => {
+  const gameplay = fs.readFileSync(path.join(repoRoot, "skills/x-frame-gameplay/SKILL.md"), "utf8");
+  assert.match(gameplay, /crescent|gold/);
+  assert.match(gameplay, /hitbox\.enabled/);
+  assert.match(gameplay, /walk\/attack\/hurt/);
+  assert.doesNotMatch(gameplay, /Attacks need a hitbox\./);
+});
+
+test("cutout skill keeps gold crescents and re-keys from raw", () => {
+  const cutout = fs.readFileSync(path.join(repoRoot, "skills/x-frame-cutout/SKILL.md"), "utf8");
+  assert.match(cutout, /gold|yellow/);
+  assert.match(cutout, /force/);
+  assert.match(cutout, /key_color/);
+});

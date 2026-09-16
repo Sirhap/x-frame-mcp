@@ -10,7 +10,7 @@ description: >-
 
 Need `basis_snapshot_id` from `xsxb_get_animation` or `xsxb_analyze` before a write.
 
-1. `xsxb_cutout` with `border_flood` on generated white or black plates. Inspect `preview.path` (magenta flatten). Navy cloth on a black plate can be nearly invisible on the source; the magenta preview is the eye check.
+1. `xsxb_cutout` with `border_flood` on generated white or black plates. Inspect `preview.path` (magenta flatten). Navy cloth on a black plate can be nearly invisible on the source; the magenta preview is the eye check. Pale gold/yellow slash (`isYellowGoldFamily`) stays — do not key the crescent away.
 2. Already-keyed frames skip unless `force` plus `key_color`. Re-key from raw, not from a previous cutout.
 3. `grid=false` sheets for humans. Do not use a default planted contact sheet as “legs remain.”
 4. A standing figure that already holds a weapon: `xsxb_place_image` stacks a second blade.

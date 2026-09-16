@@ -663,7 +663,11 @@ function toolDefinitions() {
             default: false,
             description: "Recompute frames that already have box overrides.",
           },
-          dry_run: { type: "boolean", default: false },
+          dry_run: {
+            type: "boolean",
+            default: false,
+            description: "Omitting dry_run writes overrides; dry_run:true previews.",
+          },
           sync: { type: "boolean", default: false },
         },
         additionalProperties: false,

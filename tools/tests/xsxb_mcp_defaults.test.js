@@ -164,6 +164,10 @@ test("catalog preview and sync flags match runtime and avoid conflicting injecte
     assert.equal(properties.apply.default, undefined);
   }
   assert.equal(definitions.get("xsxb_compress_frames").inputSchema.properties.dry_run.default, true);
+  const estimateDryRun = definitions.get("xsxb_estimate_boxes").inputSchema.properties.dry_run;
+  assert.equal(estimateDryRun.default, false);
+  assert.match(estimateDryRun.description, /omitting dry_run writes/i);
+  assert.match(estimateDryRun.description, /dry_run:\s*true preview/i);
   const reorganizeDryRun = definitions.get("xsxb_reorganize_frames").inputSchema.properties.dry_run;
   assert.equal(reorganizeDryRun.default, undefined);
   assert.match(reorganizeDryRun.description, /omit.*preview.*order is omitted|omitted.*preview/i);

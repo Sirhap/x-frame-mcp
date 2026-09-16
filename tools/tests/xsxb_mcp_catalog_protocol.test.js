@@ -40,6 +40,12 @@ test("initialize instructions are self-contained and do not advertise missing me
   const initialized = await handleMessage(request(1, "initialize"), service);
   assert.deepEqual(initialized.result.capabilities, { tools: { listChanged: false } });
   assert.ok(INSTRUCTIONS.length < 2000, "initialize must not embed full playbooks");
+  assert.doesNotMatch(
+    INSTRUCTIONS,
+    /Register\/plant\/estimate\/compress preview/,
+    "estimate_boxes commits when dry_run is omitted; do not list it with preview-until-apply tools",
+  );
+  assert.match(INSTRUCTIONS, /Register\/plant\/compress preview until apply or dry_run:false/);
   assert.match(INSTRUCTIONS, /suggestedGameFps/);
   assert.doesNotMatch(INSTRUCTIONS, /prompts\/(list|get)|resources\/(list|read)/);
   assert.match(INSTRUCTIONS, /xsxb_measure_frames/);
