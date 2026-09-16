@@ -1321,6 +1321,87 @@ test("sync_godot_prunes_stale_synced_frame_pngs_after_clip_shrink_or_delete", as
   }
 });
 
+test("sync_godot_prunes_stale_synced_attachment_pngs_after_remove_binding", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const hashName = pngs[0];
+    const hashPath = path.join(attachmentDir, hashName);
+
+    const godotAttachmentsPath = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "data",
+      "projects",
+      "mcp-test",
+      "frame_image_attachments.json",
+    );
+    const beforeJson = JSON.parse(fs.readFileSync(godotAttachmentsPath, "utf8"));
+    assert.ok(
+      beforeJson.some((entry) => String(entry.path || "").includes(hashName)),
+      "Godot attachments JSON must list the synced hash PNG",
+    );
+
+    const removed = await current.service.call("xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "attachment",
+      id: "spark",
+      sync: true,
+    });
+    assert.equal(removed.removedCount, 1);
+    assert.equal(removed.sync.ok, true);
+
+    const afterJson = JSON.parse(fs.readFileSync(godotAttachmentsPath, "utf8"));
+    assert.equal(
+      afterJson.some((entry) => String(entry.path || "").includes(hashName)),
+      false,
+      "Godot attachments JSON must drop the removed binding",
+    );
+    assert.equal(
+      fs.existsSync(hashPath),
+      false,
+      "stale Godot attachment hash PNG must be pruned after remove_binding+sync",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("import can slice frames, replace the same id, and cutout updates the files", async () => {
   const current = fixture();
   try {
