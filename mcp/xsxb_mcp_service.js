@@ -487,6 +487,18 @@ function createXsxbMcpService(options = {}) {
   }
 
   /**
+   * Resolves the import profile: explicit args, then last context profile, else mcp_imports.
+   * @param {object} [args] Tool arguments.
+   * @returns {string} Slug profile id.
+   */
+  function resolveImportProfileId(args = {}) {
+    return slug(
+      args.profile_id || args.profile || context.profileId || DEFAULT_PROFILE_ID,
+      DEFAULT_PROFILE_ID,
+    );
+  }
+
+  /**
    * Resolves a manifest frame path only when it stays inside the project workspace
    * or the bound Godot root. When the animation was imported with in_place, also
    * allows the XSXB root and absolute game-pack PNG paths.
@@ -649,7 +661,7 @@ function createXsxbMcpService(options = {}) {
     }
     const syncRequested = booleanFlag(args.sync);
     const project = registryProject(args.project_id || args.project, syncRequested);
-    const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+    const profileId = resolveImportProfileId(args);
     const manifest = manifestFor(project);
     const profile = (manifest.profiles || []).find((entry) => entry.id === profileId);
     const baseAnimationId = slug(
@@ -768,7 +780,7 @@ function createXsxbMcpService(options = {}) {
     if (!items.length) throw new Error(`No PNG frames provided for ${sourceLabel} import.`);
     const syncRequested = booleanFlag(args.sync);
     const project = registryProject(args.project_id || args.project, syncRequested);
-    const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+    const profileId = resolveImportProfileId(args);
     const requestedId = slug(
       args.animation_id || args.animation,
       sourceLabel === "png_sequence" ? "png_sequence" : "imported",
@@ -926,7 +938,7 @@ function createXsxbMcpService(options = {}) {
         }
       }
       const singleClipRename = Boolean(requestedId) && parsed.length === 1;
-      const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+      const profileId = resolveImportProfileId(args);
       const fpsOmitted = args.fps === undefined || args.fps === null || args.fps === "";
       const imported = [];
       for (const animation of animations) {
