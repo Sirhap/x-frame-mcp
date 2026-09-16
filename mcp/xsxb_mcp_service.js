@@ -3069,6 +3069,7 @@ function createXsxbMcpService(options = {}) {
         : Number(requestedOrder);
     if (!Number.isFinite(layerOrder)) throw new Error("layer_order must be a finite number.");
     const attachmentImage = decodePngRgba(absolute);
+    const previousPaths = new Set();
     const added = [];
     let next = Array.isArray(bindings) ? bindings.slice() : [];
     for (const request of requests) {
@@ -3163,17 +3164,43 @@ function createXsxbMcpService(options = {}) {
             : {}),
         },
       };
+      for (const entry of next) {
+        const entryKey = String(entry?.key || entry?.frameKey || "");
+        if (entry && String(entry.id) === id && entryKey === key && entry.path) {
+          previousPaths.add(entry.path);
+        }
+      }
       next = next.filter((entry) => entry.id !== id || entry.key !== key);
       next.push(attachment);
       added.push(attachment);
     }
-    const relativePath = copyIntoWorkspace(
-      project,
-      path.join("attachments", profile.id, String(animation.id || animation.name)),
-      absolute,
-    );
+    const hashFile = `${crypto.createHash("sha256").update(fs.readFileSync(absolute)).digest("hex").slice(0, 16)}${path.extname(absolute) || ""}`;
+    const sharedPath = normalizeBindings(bindings).find((entry) => {
+      if (!entry?.path || path.basename(String(entry.path)) !== hashFile) return false;
+      const resolved = safeResolve(root, entry.path);
+      return Boolean(resolved && fs.existsSync(resolved));
+    })?.path;
+    const relativePath =
+      sharedPath ||
+      copyIntoWorkspace(
+        project,
+        path.join("attachments", profile.id, String(animation.id || animation.name)),
+        absolute,
+      );
     for (const attachment of added) attachment.path = relativePath;
     projectStore.writeJson(paths.frameImageAttachments, next);
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const remainingAttachments = normalizeBindings(projectStore.readJson(paths.frameImageAttachments, []));
+    const remainingAssets = normalizeBindings(projectStore.readJson(paths.attachmentAssets, []));
+    const retained = new Set(
+      [...remainingAttachments, ...remainingAssets]
+        .map((entry) => safeResolve(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const allowedRoot = path.join(workspaceDir, "attachments");
+    for (const oldPath of previousPaths) {
+      unlinkUnreferencedWorkspaceCopy(oldPath, allowedRoot, retained, root, workspaceDir);
+    }
     const base = {
       projectId: project.id,
       bindingCount: next.length,
