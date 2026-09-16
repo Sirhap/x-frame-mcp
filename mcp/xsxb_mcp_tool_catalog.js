@@ -182,7 +182,6 @@ function toolDefinitions() {
             type: "number",
             minimum: 1,
             maximum: 120,
-            default: 12,
             description:
               "Playback fps. Omit to store the probed source rate (1–60) when known; otherwise 12. Pass fps=suggestedGameFps for GIF/Godot loops instead of the camera rate.",
           },

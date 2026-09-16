@@ -120,6 +120,17 @@ test("xsxb_import_video catalog names source and game fps on the receipt", () =>
   assert.match(video.description, /Pass fps=suggestedGameFps/);
 });
 
+test("import_video fps schema has no injected default so omit stores the probed source rate", () => {
+  const video = toolDefinitions().find((entry) => entry.name === "xsxb_import_video");
+  const fps = video.inputSchema.properties.fps;
+  assert.equal(
+    fps.default,
+    undefined,
+    "schema default 12 is injected as an explicit fps and skips the probe-on-omit path",
+  );
+  assert.match(fps.description, /Omit to store the probed source rate/);
+});
+
 test("xsxb_export_gif catalog tells video imports to pass suggestedGameFps", () => {
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   assert.match(gif.description, /imported from video at camera rate/);
