@@ -491,15 +491,15 @@ function toolDefinitions() {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates.",
+            description:
+              "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           duplicate_ratio: {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
             description:
-              "Alias of threshold. Same organizer 重复比例 slider. No separate default; omit means use threshold.",
+              "Alias of threshold. Same organizer 重复比例 slider. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           auto_adjust: {
             type: "boolean",
@@ -564,15 +564,15 @@ function toolDefinitions() {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates.",
+            description:
+              "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           duplicate_ratio: {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
             description:
-              "Alias of threshold. Same organizer 重复比例 slider. No separate default; omit means use threshold.",
+              "Alias of threshold. Same organizer 重复比例 slider. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           auto_adjust: {
             type: "boolean",
