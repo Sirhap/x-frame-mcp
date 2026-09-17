@@ -211,7 +211,7 @@ test("concise tools retain routing constraints and workflow docs retain the cres
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.ok(trail && place && cutout && gif && sheet);
   assert.match(trail.description, /smooth_arc only for truly curved motion/);
-  assert.match(trail.description, /pixel-layer crescents belong to place_image/);
+  assert.match(trail.description, /pixel-layer crescents belong to xsxb_plan_smear/);
   assert.match(place.description, /require overlay_id/);
   assert.match(place.description, /xsxb_plan_place/);
   assert.match(place.description, /output_path stays inside XSXB root/);

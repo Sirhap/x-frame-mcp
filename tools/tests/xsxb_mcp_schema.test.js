@@ -120,7 +120,7 @@ test("attack-trail catalog keeps its purpose, motion constraint, and stick inter
   assert.match(tool.description, /attack-trail/i);
   assert.match(tool.description, /blade-edge/i);
   assert.match(tool.description, /smooth_arc only for truly curved motion/);
-  assert.match(tool.description, /pixel-layer crescents belong to place_image/);
+  assert.match(tool.description, /pixel-layer crescents belong to xsxb_plan_smear/);
   assert.deepEqual(tool.inputSchema.properties.path_kind.enum, ["polyline", "smooth_arc"]);
   assert.equal(stick.type, "object");
   assert.equal(stick.properties.frame.type, "integer");

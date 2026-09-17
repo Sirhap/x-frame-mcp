@@ -122,8 +122,7 @@ function toolDefinitions() {
       type: "string",
       enum: ["canvas", "subject"],
       default: "canvas",
-      description:
-        "canvas covers the source frame. subject covers the opaque character box. Grid lines follow this density. Overlay paints row/col indices matching grid.cells; group coordinates are in the receipt JSON.",
+      description: "canvas=full frame; subject=opaque box.",
     },
   };
   const tools = [
@@ -1063,7 +1062,7 @@ function toolDefinitions() {
     {
       name: "xsxb_add_attack_trail",
       description:
-        "Add or replace a still-frame attack-trail segment with blade-edge sticks, layer, color, and optional reverseDirection. Use smooth_arc only for truly curved motion; walk/run loops should use other tools and pixel-layer crescents belong to place_image.",
+        "Add or replace a still-frame attack-trail segment with blade-edge sticks, layer, color, and optional reverseDirection. Use smooth_arc only for truly curved motion; walk/run loops should use other tools and pixel-layer crescents belong to xsxb_plan_smear.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1150,7 +1149,7 @@ function toolDefinitions() {
     {
       name: "xsxb_plan_smear",
       description:
-        "Walk/run loops: do not use this (still-frame / smear only). Compile a clip-specific weapon-smear prompt from the motion and cells you traced on this animation. The generic playbook is only the skeleton — call this before GenerateImage or xsxb_place_image, then execute receipt.brief. path_kind polyline forbids Hermite; smooth_arc may use the mesh only if that arc already matches. layer behind keeps the cup readable (hairline); do not pin the head on the striking-mass cell; do not skip a full grid cell. If a GIF/sheet already passed eye QA, pass accepted_path and reuse it. Receipt.reference is a validated example only (牛来 chop v4), not a recipe for other attacks.",
+        "Walk/run loops: skip. Compile a clip-specific smear receipt.brief (playbook is the skeleton). Pass target_path to paint a 像素层 月牙 from pivot→tip; do not GenerateImage or place a smear PNG. polyline forbids Hermite; smooth_arc may use the mesh only if that arc already matches. layer behind keeps the cup readable. Do not pin the head on the striking-mass cell or skip a full grid cell. accepted_path reuses a QA'd GIF/sheet. reference is example-only (牛来 chop v4).",
       inputSchema: {
         type: "object",
         required: ["motion", "path_kind", "color", "frames"],
@@ -1180,6 +1179,18 @@ function toolDefinitions() {
             type: "string",
             description: "GIF/sheet that already passed eye QA. Reuse those frames; do not regenerate.",
           },
+          target_path: { type: "string", description: "PNG to paint; omit for brief-only." },
+          overlay_id: { type: "string", description: "xsxb_overlay_grid stamp. Required to paint." },
+          view: { type: "object", description: "Overlay view for the cell ids." },
+          pivot_cells: {
+            type: "array",
+            items: { type: "string" },
+            description: "Grip cells. Required to paint.",
+          },
+          arc_degrees: { type: "number", exclusiveMinimum: 0, maximum: 180 },
+          inner_ratio: { type: "number", exclusiveMinimum: 0, maximum: 0.9 },
+          outer_scale: { type: "number", exclusiveMinimum: 1, maximum: 1.6 },
+          output_path: { type: "string" },
           frames: {
             type: "array",
             description: "Locked per-frame smear cells from the trace.",
@@ -1208,7 +1219,7 @@ function toolDefinitions() {
         },
         additionalProperties: false,
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     {
       name: "xsxb_add_attachment",

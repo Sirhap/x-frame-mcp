@@ -81,7 +81,7 @@ const {
   placeImageOnTarget,
   measureAlphaBottom,
 } = require("./xsxb_mcp_place");
-const { compileSmearBrief } = require("./xsxb_mcp_smear_brief");
+const { planSmear } = require("./xsxb_mcp_paint_smear");
 const { compilePlaceBrief } = require("./xsxb_mcp_place_brief");
 const { detectRegions } = require("./xsxb_mcp_detect_regions");
 const { createFlorenceDetector } = require("./xsxb_mcp_florence");
@@ -4518,7 +4518,7 @@ function createXsxbMcpService(options = {}) {
     xsxb_validate_for_godot: validateForGodot,
     xsxb_diff_frames: diffFrames,
     xsxb_add_attack_trail: addAttackTrail,
-    xsxb_plan_smear: compileSmearBrief,
+    xsxb_plan_smear: (args) => planSmear(args, { root, artifactDir: currentArtifactDir() }),
     xsxb_add_attachment: addAttachment,
     xsxb_add_sfx: addSfx,
     xsxb_remove_binding: removeBinding,
@@ -4560,7 +4560,7 @@ function createXsxbMcpService(options = {}) {
   function receiptRoute(name, readOnly) {
     if (readOnly) return "domain_read";
     if (/export_|import_video|sync_godot/u.test(name)) return "external_process";
-    if (/place|plant|shift|register|measure|overlay|diff/u.test(name)) return "geometry";
+    if (/place|plant|shift|register|measure|overlay|diff|smear/u.test(name)) return "geometry";
     return "domain_mutation";
   }
 
@@ -4579,6 +4579,9 @@ function createXsxbMcpService(options = {}) {
     };
     if (name === "xsxb_overlay_grid" && args.crop_from && !args.crop_from.overlay_id) {
       refuse("crop_from");
+    }
+    if (name === "xsxb_plan_smear" && String(args.target_path || "").trim() && !args.overlay_id) {
+      refuse("xsxb_plan_smear");
     }
     if (name !== "xsxb_place_image") return;
     for (const [label, anchor] of [

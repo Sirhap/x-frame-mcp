@@ -33,6 +33,8 @@ test("a polyline chop compiles a pixel-layer brief and forbids Hermite", () => {
   assert.match(planned.brief, /像素层 月牙/);
   assert.match(planned.brief, /#DC2E2E/);
   assert.match(planned.brief, /layer behind/);
+  assert.match(planned.brief, /Do not GenerateImage a smear PNG/);
+  assert.match(planned.brief, /Do not xsxb_place_image a smear PNG/);
   assert.match(planned.brief, /frame 4: start D1 → end H2 head G3 \(solid\)/);
   assert.doesNotMatch(planned.brief, /one gap off/);
   assert.doesNotMatch(planned.brief, /canned chop/);

@@ -12,7 +12,7 @@ const INSTRUCTIONS = [
   "Walk-lock: xsxb_measure_frames → xsxb_register_clip (apply bakes about the feet) → xsxb_export_sheet normalize=feet|none, xsxb_export_overlay or xsxb_diff_frames; plant walk/attack with xsxb_plant_feet (idle default) at y=-1, not 0,0. Do not use xsxb_place_image or xsxb_add_attack_trail.",
   "Video-to-loop: import, xsxb_get_animation, xsxb_cutout (border_flood for white/black plates; inspect preview.path), xsxb_analyze, then xsxb_reorganize_frames applyOrder (not loop.recommended.order alone) with analyze snapshotId as basis; non-empty order commits, then export_gif fps=suggestedGameFps. Do not export_sheet every candidate.",
   "Still-place: xsxb_overlay_grid → xsxb_plan_place → xsxb_place_image with overlay_id. Held object: detect_regions hand as target_anchor, layer=under_target. Do not mix still views with animation grid.cells. Do not OCR overlay digits.",
-  "Smear: xsxb_plan_smear then a pixel crescent or trail mesh.",
+  "Smear: xsxb_plan_smear paints a pixel crescent; do not place a smear PNG.",
   "Observation writes need basis_snapshot_id; still cells need overlay_id. Register/plant/compress preview until apply or dry_run:false. Sync is opt-in. Godot handoff: xsxb_sync_godot immediately before xsxb_validate_for_godot (require_gameplay default needs a gameplay scene/script that instances xsxb_frame_actor; if missing, receipt next lists that). validate_for_godot qa=review or qa=warn is not a pass (scale drift). Diff qa=review means open the PNG.",
   "Report actual results. Missing capability: tell the user and raise to X-Frame with tool, arguments, expected and actual.",
 ].join(" ");

@@ -1626,6 +1626,7 @@ module.exports = {
   alphaAnchor,
   assertOverlayId,
   cellBox,
+  deriveFromCells,
   integerCrop,
   measureAlphaBottom,
   overlayGridImage,

@@ -97,7 +97,7 @@ function compileSmearBrief(args = {}) {
   lines.push(`Path kind: ${pathKind}. ${meshLine}`);
   lines.push(`Smear color (sampled, not a hardcoded red): ${color}.`);
   lines.push(
-    `Place with layer ${layer} so opaque weapon pixels stay readable (hairline). Reject pinning the smear head on the striking-mass cell. Reject a full-grid-cell void that floats the smear.`,
+    `Composite layer ${layer} so opaque weapon pixels stay readable (hairline). Reject pinning the smear head on the striking-mass cell. Reject a full-grid-cell void that floats the smear.`,
   );
   if (acceptedPath) {
     lines.push(
@@ -110,7 +110,7 @@ function compileSmearBrief(args = {}) {
     lines.push(`- frame ${frame.index}: start ${frame.start} → end ${frame.end}${headBit} (${frame.weight})`);
   }
   lines.push(
-    "Generate a hollow sickle on white that follows those locked cells. xsxb_cutout the white, protect the smear colors. xsxb_place_image with cell anchors. Timing: none/faint on wind-up, solid on the committed swing, remnant on follow-through, none on idle.",
+    "Paint with this same tool: pass target_path, overlay_id, view, and pivot_cells. MCP rasterizes a 像素层 月牙 from the blade pivot→tip. Do not GenerateImage a smear PNG. Do not xsxb_place_image a smear PNG. Timing: none/faint on wind-up, solid on the committed swing, remnant on follow-through, none on idle.",
   );
   lines.push(
     "Export xsxb_export_gif and xsxb_export_sheet. Human inspect sheets pass grid=false. Accept a continuous bow; reject bars, slices, 7字, overlap onto the weapon, and a floating cell-sized gap.",
