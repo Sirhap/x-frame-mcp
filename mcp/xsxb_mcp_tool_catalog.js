@@ -14,6 +14,12 @@ const { workbenchSliderSchemaProperties } = require("./xsxb_mcp_cutout");
 const { receiptEnvelopeSchema } = require("./xsxb_mcp_receipt");
 
 const DEFAULT_PROFILE_ID = "mcp_imports";
+const ANIMATION_TYPE_PROPERTY = Object.freeze({
+  type: "string",
+  enum: ["actor", "boss", "vfx", "prop", "scene_prop_attachment"],
+  description:
+    "Stored clip type. vfx and prop skip the idle feet contract. First-import omit is actor. Do not rely on naming the id *_vfx.",
+});
 const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_list_projects",
   "xsxb_get_project",
@@ -46,12 +52,14 @@ const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_delete_animation",
   "xsxb_sync_godot",
   "xsxb_validate_project",
+  "xsxb_validate_for_godot",
   "xsxb_set_active_project",
   "xsxb_bind_godot",
   "xsxb_cutout",
   "xsxb_export_gif",
   "xsxb_export_sheet",
   "xsxb_export_overlay",
+  "xsxb_diff_frames",
   "xsxb_export_pack_slot",
   "xsxb_measure_image",
   "xsxb_detect_regions",
@@ -114,8 +122,7 @@ function toolDefinitions() {
       type: "string",
       enum: ["canvas", "subject"],
       default: "canvas",
-      description:
-        "canvas covers the source frame. subject covers the opaque character box. Grid lines follow this density. Overlay paints row/col indices matching grid.cells; group coordinates are in the receipt JSON.",
+      description: "canvas=full frame; subject=opaque box.",
     },
   };
   const tools = [
@@ -128,7 +135,7 @@ function toolDefinitions() {
     {
       name: "xsxb_get_project",
       description:
-        "Return one project's registry record, Godot binding, animation list, frame counts, and last sync receipt.",
+        "Return one project's registry record, Godot binding, animation list, frame counts, and last sync receipt. Inspecting another id does not change active.",
       inputSchema: {
         type: "object",
         properties: { project_id: projectProperty },
@@ -152,8 +159,7 @@ function toolDefinitions() {
           },
           set_active: {
             type: "boolean",
-            default: true,
-            description: "Make this the active project. Default true.",
+            description: "Activate on create; omit on existing id does not change active.",
           },
         },
         additionalProperties: false,
@@ -163,13 +169,19 @@ function toolDefinitions() {
     {
       name: "xsxb_import_video",
       description:
-        "Video alias of xsxb_import_animation: extract every native frame from a local video, import it as an XSXB animation, optionally sync to Godot, and validate the result.",
+        "Video alias of xsxb_import_animation: extract every native frame from a local video, import it as an XSXB animation, optionally sync to Godot, and validate the result. Omitting fps stores the probed source rate when it is between 1 and 60; otherwise 12. Receipt includes sourceFrameCount, sourceDurationSec when known, suggestedFps (source), and suggestedGameFps (8–12 for GIF/Godot loops). Pass fps=suggestedGameFps when you want game playback, not the camera rate.",
       inputSchema: {
         type: "object",
         required: ["file_path"],
         properties: {
           file_path: { type: "string", description: "Absolute local video path." },
-          fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
+          fps: {
+            type: "number",
+            minimum: 1,
+            maximum: 120,
+            description:
+              "Playback fps. Omit to store the probed source rate (1–60) when known; otherwise 12. Pass fps=suggestedGameFps for GIF/Godot loops instead of the camera rate.",
+          },
           start_time: {
             type: "number",
             minimum: 0,
@@ -194,8 +206,9 @@ function toolDefinitions() {
           sync: { type: "boolean", default: false },
           validate: { type: "boolean", default: false },
           project_id: projectProperty,
-          profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
+          profile_id: { type: "string" },
           animation_id: { type: "string", description: "Defaults to a sanitized video filename." },
+          animation_type: ANIMATION_TYPE_PROPERTY,
           in_place: {
             type: "boolean",
             default: false,
@@ -221,6 +234,12 @@ function toolDefinitions() {
             minimum: 1,
             maximum: 256,
             description: "Grid columns. Pair with rows, or omit and pass cell / grid_divs.",
+          },
+          cols: {
+            type: "integer",
+            minimum: 1,
+            maximum: 256,
+            description: "Alias of columns (overlay_grid cols).",
           },
           rows: {
             type: "integer",
@@ -255,8 +274,7 @@ function toolDefinitions() {
             type: "integer",
             minimum: 0,
             maximum: 64,
-            default: 0,
-            description: "Pixels between cells. Default 0.",
+            description: "Pixels between cells. Omit means 0. Do not inject 0.",
           },
           padding: {
             type: "integer",
@@ -285,9 +303,10 @@ function toolDefinitions() {
             description: "When set, import the kept PNG sequence after slicing.",
           },
           animation_name: { type: "string" },
+          animation_type: ANIMATION_TYPE_PROPERTY,
           project_id: projectProperty,
-          profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
-          fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
+          profile_id: { type: "string" },
+          fps: { type: "number", minimum: 1, maximum: 120 },
           replace: { type: "boolean", default: false },
           sync: { type: "boolean", default: false },
           validate: { type: "boolean", default: false },
@@ -310,7 +329,7 @@ function toolDefinitions() {
     {
       name: "xsxb_import_animation",
       description:
-        "Import a video, PNG sequence, SpriteFrames file, or PNG data items as an XSXB animation. xsxb_import_video is this tool's video alias.",
+        "Import a video, PNG sequence, SpriteFrames file, or PNG data items as an XSXB animation. xsxb_import_video is this tool's video alias. Pass animation_type=vfx|prop for FX so Godot scale skips idle feet; default actor.",
       inputSchema: {
         type: "object",
         properties: {
@@ -326,7 +345,13 @@ function toolDefinitions() {
             items: { type: "object" },
             description: "PNG data-URL items for source=items.",
           },
-          fps: { type: "number", minimum: 1, maximum: 120, default: 12 },
+          fps: {
+            type: "number",
+            minimum: 1,
+            maximum: 120,
+            description:
+              "Playback fps. Video omit stores the probed source rate (1–60) when known; otherwise 12. Other sources omit 12. Pass fps=suggestedGameFps for GIF/Godot loops instead of the camera rate.",
+          },
           start_time: {
             type: "number",
             minimum: 0,
@@ -343,9 +368,10 @@ function toolDefinitions() {
           sync: { type: "boolean", default: false },
           validate: { type: "boolean", default: false },
           project_id: projectProperty,
-          profile_id: { type: "string", default: DEFAULT_PROFILE_ID },
+          profile_id: { type: "string" },
           animation_id: { type: "string" },
           animation_name: { type: "string" },
+          animation_type: ANIMATION_TYPE_PROPERTY,
           loop_endpoint: {
             type: "string",
             enum: ["none", "duplicate_first"],
@@ -367,7 +393,7 @@ function toolDefinitions() {
     {
       name: "xsxb_get_animation",
       description:
-        "Return animation metadata and frames. Pass frames=summary for a compact sample without animation.frames. Pass include to also read back current boxes, timing, sfx, attachments, or trails. Receipts use group coordinates (foot 0,0, body negative y), the same space as the overlay ticks.",
+        "Return animation metadata and frames. Pass frames=summary for a compact sample without animation.frames. Pass include to also read back current boxes, timing, sfx, attachments, or trails. Receipts use group coordinates (foot 0,0, body negative y), the same space as the overlay ticks. Inspecting another clip does not change the session selection.",
       inputSchema: {
         type: "object",
         properties: {
@@ -448,7 +474,7 @@ function toolDefinitions() {
     {
       name: "xsxb_find_duplicates",
       description:
-        "Find near-duplicate hold frames with the same Tuner duplicate finder. Pass threshold or duplicate_ratio for the organizer 重复比例 slider; do not pass both unless they match. If autoAdjustedThreshold is set, do not apply order unless you passed auto_adjust. Query an imported animation, a PNG directory, or file_paths. Does not mutate frames; apply the keep-order with xsxb_reorganize_frames.",
+        "Find near-duplicate hold frames with the same Tuner duplicate finder. Pass threshold or duplicate_ratio for the organizer 重复比例 slider; do not pass both unless they match. If autoAdjustedThreshold is set and you did not pass auto_adjust, applyBlocked is true and order is empty — use suggestedOrder only after auto_adjust. Query an imported animation, a PNG directory, or file_paths. Does not mutate frames; apply the keep-order with xsxb_reorganize_frames.",
       inputSchema: {
         type: "object",
         properties: {
@@ -467,21 +493,21 @@ function toolDefinitions() {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates.",
+            description:
+              "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           duplicate_ratio: {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Alias of threshold. Same organizer 重复比例 slider.",
+            description:
+              "Alias of threshold. Same organizer 重复比例 slider. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           auto_adjust: {
             type: "boolean",
             default: false,
             description:
-              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default keeps order unchanged and reports autoAdjustedThreshold / suggestedOrder.",
+              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default sets applyBlocked, leaves order empty, and reports autoAdjustedThreshold / suggestedOrder / suggestedDrop.",
           },
           sample_size: {
             type: "integer",
@@ -521,7 +547,7 @@ function toolDefinitions() {
     {
       name: "xsxb_analyze",
       description:
-        "One-pass clip analysis after import: duplicates, loop, and motion window. Decodes each PNG once. Writes a grid=false preview sheet of the recommended window (loop, or motion when oneShotLikely). Does not mutate frames; apply with xsxb_reorganize_frames using loop.recommended.order or motion.order. Look at preview.path — do not export_sheet every candidate. oneShotLikely means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. After duplicates, do not apply order when autoAdjustedThreshold is set unless you passed auto_adjust. Surgical find_loop / find_duplicates / find_motion remain for a single query.",
+        "One-pass clip analysis after import: duplicates, loop, and motion window. Decodes each PNG once. Writes a grid=false preview sheet of the recommended window (loop, or motion when oneShotLikely). Does not mutate frames; apply with xsxb_reorganize_frames using applyOrder (or recommended.applyOrder): drop holds when auto_adjust is set or autoAdjustedThreshold is null, then slice to the loop or motion window. Do not pass loop.recommended.order or motion.order alone — those index the full imported clip and keep rest holds. Look at preview.path — do not export_sheet every candidate. oneShotLikely means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. When duplicates.applyBlocked, do not apply duplicates.order until you pass auto_adjust. Surgical find_loop / find_duplicates / find_motion remain for a single query.",
       inputSchema: {
         type: "object",
         properties: {
@@ -540,21 +566,21 @@ function toolDefinitions() {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates.",
+            description:
+              "Organizer 相似度阈值 / 重复比例 slider. Higher keeps more near-duplicates. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           duplicate_ratio: {
             type: "number",
             minimum: ORGANIZER_SIMILARITY_THRESHOLD.min,
             maximum: ORGANIZER_SIMILARITY_THRESHOLD.max,
-            default: ORGANIZER_SIMILARITY_THRESHOLD.fallback,
-            description: "Alias of threshold. Same organizer 重复比例 slider.",
+            description:
+              "Alias of threshold. Same organizer 重复比例 slider. Omit both aliases to use the organizer fallback 88; pass only one. Hosts must not inject 88.",
           },
           auto_adjust: {
             type: "boolean",
             default: false,
             description:
-              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default keeps order unchanged and reports autoAdjustedThreshold / suggestedOrder.",
+              "If true, apply the finder's lowered threshold when nothing matches the requested slider. Default sets applyBlocked, leaves order empty, and reports autoAdjustedThreshold / suggestedOrder / suggestedDrop.",
           },
           min_period: {
             type: "integer",
@@ -634,7 +660,7 @@ function toolDefinitions() {
     {
       name: "xsxb_estimate_boxes",
       description:
-        "Auto-estimate hurtbox, collisionbox, and hitbox overrides for every animation frame from opaque pixel bounds. Keeps existing overrides unless replace=true. Use dry_run to preview.",
+        "Auto-estimate hurtbox, collisionbox, and hitbox overrides for every animation frame from opaque pixel bounds. Keeps existing overrides unless replace=true. Omitting dry_run writes; dry_run:true previews. Enabled hitboxes need a gold crescent; sword-only or windup stay disabled.",
       inputSchema: {
         type: "object",
         properties: {
@@ -644,7 +670,11 @@ function toolDefinitions() {
             default: false,
             description: "Recompute frames that already have box overrides.",
           },
-          dry_run: { type: "boolean", default: false },
+          dry_run: {
+            type: "boolean",
+            default: false,
+            description: "Omitting dry_run writes overrides; dry_run:true previews.",
+          },
           sync: { type: "boolean", default: false },
         },
         additionalProperties: false,
@@ -875,7 +905,7 @@ function toolDefinitions() {
     {
       name: "xsxb_reorganize_frames",
       description:
-        "Preview frame reordering and remapping of frame-owned tuning, audio, attachments, and trails; dry_run:false commits atomically and sync:true explicitly synchronizes Godot.",
+        "Reorder frames and remap frame-owned tuning, audio, attachments, and trails; a non-empty order commits unless dry_run is true, omitting order is an identity preview, and sync:true explicitly synchronizes Godot.",
       inputSchema: {
         type: "object",
         properties: {
@@ -893,8 +923,8 @@ function toolDefinitions() {
           },
           dry_run: {
             type: "boolean",
-            default: true,
-            description: "Preview the output order; false commits the reorganization.",
+            description:
+              "Omit order always previews (even dry_run:false); non-empty order commits unless dry_run:true.",
           },
           sync: { type: "boolean", default: false },
         },
@@ -968,7 +998,7 @@ function toolDefinitions() {
     {
       name: "xsxb_plant_feet",
       description:
-        "Plant opaque soles onto a target group-Y without computing dx/dy. Translate only — does not scale; lock height with xsxb_register_clip. Walk-loop plant after xsxb_measure_frames; still confirm on the overlay. Default target is y=-1 (last pixel row of the lock canvas). Yellow 0,0 is outside the bitmap — do not plant soles to 0,0. metrics.feetY is the boot sole and ignores connected bright slash/glow below it. Hanging VFX that would clip is kept by padding the PNG; apply writes the new height into the animation manifest so Tuner/Godot origin matches the bitmap. Optional to accepts an overlay cell id (E5 / e5 / {cell:E5}) and maps to that cell's group coordinate. dry_run (default) returns the plan; apply bakes the translate. Reuses the shift_frames pixel pipeline.",
+        "Plant opaque soles onto a target group-Y without computing dx/dy. Translate only — does not scale; lock height with xsxb_register_clip. Walk-loop plant after xsxb_measure_frames; still confirm on the overlay. Default target is y=-1 (last pixel row of the lock canvas). Yellow 0,0 is outside the bitmap — do not plant soles to 0,0. metrics.feetY is the boot sole and ignores connected bright slash/glow below it. Hanging VFX that would clip is kept by padding the PNG; apply writes the new height into the animation manifest so Tuner/Godot origin matches the bitmap. After apply plans selected frames, every frame in this animation is padded to that clip's on-disk max(width)×max(height) with xsxb_resize_canvas pad rules (no resample) so canvases match for diff_frames. Pass reference_animation_id (usually idle) so apply pads this clip to at least that canvas with xsxb_resize_canvas pad rules, then plants soles onto the reference clip's measured feetY (same group row as idle boots) when target_y is omitted or -1. Omitted reference on a grounded non-idle clip defaults to profile idle. Optional to accepts an overlay cell id (E5 / e5 / {cell:E5}) and maps to that cell's group coordinate. dry_run (default) returns the plan; apply bakes the translate. Reuses the shift_frames pixel pipeline.",
       inputSchema: {
         type: "object",
         properties: {
@@ -983,6 +1013,11 @@ function toolDefinitions() {
             default: -1,
             description:
               "Destination group Y for the opaque sole. Default -1 is the last pixel row. Do not use 0 (yellow 0,0 is outside the bitmap).",
+          },
+          reference_animation_id: {
+            type: "string",
+            description:
+              "When set, pad this clip to at least the reference canvas (transparent, no resample; same origin-preserving pad as xsxb_resize_canvas) then plant soles onto that clip's measured feetY (same group row as idle boots) when target_y is omitted or -1. Usually idle.",
           },
           to: {
             description:
@@ -1027,7 +1062,7 @@ function toolDefinitions() {
     {
       name: "xsxb_add_attack_trail",
       description:
-        "Add or replace a still-frame attack-trail segment with blade-edge sticks, layer, color, and optional reverseDirection. Use smooth_arc only for truly curved motion; walk/run loops should use other tools and pixel-layer crescents belong to place_image.",
+        "Add or replace a still-frame attack-trail segment with blade-edge sticks, layer, color, and optional reverseDirection. Use smooth_arc only for truly curved motion; walk/run loops should use other tools and pixel-layer crescents belong to xsxb_plan_smear.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1114,7 +1149,7 @@ function toolDefinitions() {
     {
       name: "xsxb_plan_smear",
       description:
-        "Walk/run loops: do not use this (still-frame / smear only). Compile a clip-specific weapon-smear prompt from the motion and cells you traced on this animation. The generic playbook is only the skeleton — call this before GenerateImage or xsxb_place_image, then execute receipt.brief. path_kind polyline forbids Hermite; smooth_arc may use the mesh only if that arc already matches. layer behind keeps the cup readable (hairline); do not pin the head on the striking-mass cell; do not skip a full grid cell. If a GIF/sheet already passed eye QA, pass accepted_path and reuse it. Receipt.reference is a validated example only (牛来 chop v4), not a recipe for other attacks.",
+        "Walk/run loops: skip. Compile a clip-specific smear receipt.brief (playbook is the skeleton). Pass target_path to paint a 像素层 月牙 from pivot→tip; do not GenerateImage or place a smear PNG. polyline forbids Hermite; smooth_arc may use the mesh only if that arc already matches. layer behind keeps the cup readable. Do not pin the head on the striking-mass cell or skip a full grid cell. accepted_path reuses a QA'd GIF/sheet. reference is example-only (牛来 chop v4).",
       inputSchema: {
         type: "object",
         required: ["motion", "path_kind", "color", "frames"],
@@ -1144,6 +1179,18 @@ function toolDefinitions() {
             type: "string",
             description: "GIF/sheet that already passed eye QA. Reuse those frames; do not regenerate.",
           },
+          target_path: { type: "string", description: "PNG to paint; omit for brief-only." },
+          overlay_id: { type: "string", description: "xsxb_overlay_grid stamp. Required to paint." },
+          view: { type: "object", description: "Overlay view for the cell ids." },
+          pivot_cells: {
+            type: "array",
+            items: { type: "string" },
+            description: "Grip cells. Required to paint.",
+          },
+          arc_degrees: { type: "number", exclusiveMinimum: 0, maximum: 180 },
+          inner_ratio: { type: "number", exclusiveMinimum: 0, maximum: 0.9 },
+          outer_scale: { type: "number", exclusiveMinimum: 1, maximum: 1.6 },
+          output_path: { type: "string" },
           frames: {
             type: "array",
             description: "Locked per-frame smear cells from the trace.",
@@ -1172,7 +1219,7 @@ function toolDefinitions() {
         },
         additionalProperties: false,
       },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     {
       name: "xsxb_add_attachment",
@@ -1280,7 +1327,7 @@ function toolDefinitions() {
     {
       name: "xsxb_sync_godot",
       description:
-        "Synchronize the current project to its bound Godot root without changing animation data. Drops stale .godot/imported .ctex files when synced PNG bytes no longer match the cached source_md5.",
+        "Synchronize the current project to its bound Godot root without changing animation data. Drops stale .godot/imported .ctex files when synced PNG bytes no longer match the cached source_md5. Receipt.godot is a disk snapshot (runtime files, animation counts) an editor MCP can describe against.",
       inputSchema: {
         type: "object",
         properties: { project_id: projectProperty, force: { type: "boolean", default: false } },
@@ -1291,7 +1338,7 @@ function toolDefinitions() {
     {
       name: "xsxb_validate_project",
       description:
-        "Validate standalone XSXB data, generated frames, Godot-synchronized data, assets, and runtime files.",
+        "Validate standalone XSXB data, generated frames, Godot-synchronized data, assets, and runtime files. ok is the gate — domain fail sets envelope ok false; do not treat a tools/call as passed from the text summary alone.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1303,6 +1350,25 @@ function toolDefinitions() {
             enum: ["all", "standalone", "bind", "gameplay"],
             default: "all",
             description: "Report only one validation layer. Default all, bind errors listed first.",
+          },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: "xsxb_validate_for_godot",
+      description:
+        "Gate Godot handoff: import/sync files, a real gameplay scene using xsxb_frame_actor, and a grounded scale contract (idle feet/height; clips with animation_type vfx/prop or jump/airborne tokens skipped). require_gameplay defaults true. Scale drift is a warning unless strict. qa is clean|review|warn — warn means stop. ok is the gate, not a visual pass — open evidence.path (evidence.cells: one cell per decodable clip, clip id + picked frame index; zero-decodable, empty_manifest_frames, and unmeasurable_subject clips are listed in evidence.skipped) and run_summary.path. Compose with an editor MCP; this tool does not drive Godot.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project_id: projectProperty,
+          strict: { type: "boolean", default: false },
+          require_gameplay: {
+            type: "boolean",
+            default: true,
+            description: "Require a non-runtime gameplay scene that uses xsxb_frame_actor. Default true.",
           },
         },
         additionalProperties: false,
@@ -1411,7 +1477,7 @@ function toolDefinitions() {
           force: {
             type: "boolean",
             default: false,
-            description: "Re-cut frames whose borders are already transparent.",
+            description: "Re-key already-keyed frames only with key_color. force alone does not rematch.",
           },
           apply_visual: {
             type: "boolean",
@@ -1434,7 +1500,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_gif",
       description:
-        "Export one animation as an animated GIF preview via FFmpeg, honoring per-frame durations, group/frame visual_size, authored attack-trail meshes, and frame image attachments. Skips disabled frames. Returns the absolute output path. output_path may be an absolute path outside the XSXB root (/tmp, a game repo). background defaults to magenta so alpha feet do not bounce on opaque black; pass checker, #00FF00, or transparent. After a 像素层 月牙 trail, also xsxb_export_sheet — GIF forward-play can hide a 7字.",
+        "Export one animation as an animated GIF preview via FFmpeg, honoring per-frame durations, group/frame visual_size, authored attack-trail meshes, and frame image attachments. Skips disabled frames. Returns preview.path — agents must open the GIF. output_path may be an absolute path outside the XSXB root (/tmp, a game repo). background defaults to magenta so alpha feet do not bounce on opaque black; pass checker, #00FF00, or transparent. After a 像素层 月牙 trail, also xsxb_export_sheet — GIF forward-play can hide a 7字. When the animation was imported from video at camera rate, pass fps=suggestedGameFps from the import receipt so the GIF is a game loop, not 24fps flicker.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1452,7 +1518,13 @@ function toolDefinitions() {
             type: "string",
             description: "magenta (default), checker, #00FF00, black, or transparent.",
           },
-          fps: { type: "number", minimum: 1, maximum: 120, description: "Defaults to the animation FPS." },
+          fps: {
+            type: "number",
+            minimum: 1,
+            maximum: 120,
+            description:
+              "Defaults to the animation FPS. When the animation was imported from video at camera rate, pass fps=suggestedGameFps from the import receipt so the GIF is a game loop, not 24fps flicker.",
+          },
           start_frame: { type: "integer", minimum: 0, description: "Inclusive 0-based frame index." },
           end_frame: { type: "integer", minimum: 0, description: "Inclusive 0-based frame index." },
           include_disabled: {
@@ -1468,7 +1540,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_sheet",
       description:
-        "Export a contact sheet PNG without changing source frames. normalize=none|feet preserves scale; normalize=cell stretches into cells. Optional grid settings annotate group cells; use grid=false for clean 月牙/feetY QA.",
+        "Export a contact sheet PNG without changing source frames. normalize=none|feet preserves scale; normalize=cell stretches into cells. Optional grid settings annotate group cells; use grid=false for clean 月牙/feetY QA. Returns preview.path — agents must open it.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1496,8 +1568,8 @@ function toolDefinitions() {
             type: "integer",
             minimum: 8,
             maximum: 1024,
-            default: 220,
-            description: "Shared cell edge in pixels.",
+            description:
+              "Shared cell edge in pixels. Omit uses 220 when grid is true, else the max frame edge (hosts must not inject 220).",
           },
           pad: { type: "integer", minimum: 1, maximum: 64, default: 8 },
           normalize: {
@@ -1528,7 +1600,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_overlay",
       description:
-        "Paint two frames as red / cyan / white intersection for neighbor or idle-vs-run QA. Returns mse and leg width. Walk-loop comparison tool — not a smear mesh.",
+        "Paint two frames as red / cyan / white intersection for neighbor or idle-vs-run QA. Returns mse, leg width, and preview.path — agents must open it. Walk-loop comparison tool — not a smear mesh.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1545,6 +1617,29 @@ function toolDefinitions() {
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: "xsxb_diff_frames",
+      description:
+        "Write a real PNG comparing two animation frames. Keys both studio plates, then occupancy-XOR (1px pad/AA ignored — not raw RGBA). mode=diff paints occupancy-delta magenta; mode=onion paints red/cyan/white. qa is review when occupancy changed; qa=warn means stop (identical occupancy or interior navy/key mismatch, not only identical pixels). Open preview.path — import or sync is not a visual pass. Same-size frames only.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...animationProperties,
+          frame_a: { type: "integer", minimum: 0, default: 0 },
+          frame_b: { type: "integer", minimum: 0, description: "Defaults to frame_a + 1." },
+          mode: {
+            type: "string",
+            enum: ["diff", "onion"],
+            default: "diff",
+            description:
+              "diff marks occupancy-XOR pixels magenta. onion composites keyed red/cyan intersection.",
+          },
+          output_path: { type: "string", description: "Optional PNG path. May leave the XSXB root." },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     {
       name: "xsxb_export_pack_slot",
@@ -1641,15 +1736,14 @@ function toolDefinitions() {
             type: "integer",
             minimum: 2,
             maximum: 26,
-            default: 8,
-            description: "Grid rows. Default 8. Wins over grid_divs when set.",
+            description: "Grid rows. Omit to honor grid_divs, or handler 8. Wins over grid_divs when set.",
           },
           cols: {
             type: "integer",
             minimum: 2,
             maximum: 26,
-            default: 8,
-            description: "Grid columns A–Z. Default 8. Wins over grid_divs when set.",
+            description:
+              "Grid columns A–Z. Omit to honor grid_divs, or handler 8. Wins over grid_divs when set.",
           },
           grid_divs: {
             type: "string",

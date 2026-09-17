@@ -86,17 +86,95 @@ test("compression defaults to preview and leaves imported files untouched", asyn
     assert.equal(fs.statSync(file).mtimeMs, before);
   }));
 
+/**
+ * Builds a small unoptimized RGBA PNG so committed compress rewrites bytes.
+ * @param {number} width Pixel width.
+ * @param {number} height Pixel height.
+ * @returns {Buffer} PNG encoded at zlib level 0.
+ */
+function bulkyWalkFramePng(width, height) {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let offset = 0; offset < pixels.length; offset += 4) pixels.set([offset % 250, 40, 200, 255], offset);
+  return encodePngRgba(pixels, width, height, { level: 0 });
+}
+
+test("committed compression checkpoints walk frames and undo restores bytes", async () =>
+  fixture(async ({ call, service }) => {
+    const state = await call("xsxb_get_animation");
+    const file = state.animation.frames[0].absolutePath;
+    fs.writeFileSync(file, bulkyWalkFramePng(16, 16));
+    const before = fs.readFileSync(file);
+    const revisions = (await call("xsxb_list_revisions")).revisions.length;
+    const result = await service.callMcp("xsxb_compress_frames", {
+      animation_id: "walk",
+      dry_run: false,
+    });
+    assert.equal(result.data.dryRun, false);
+    assert.ok(result.data.rewritten >= 1, "level-0 walk frame must shrink on committed compress");
+    assert.ok(!fs.readFileSync(file).equals(before), "committed compress must rewrite PNG bytes");
+    assert.ok(
+      (await call("xsxb_list_revisions")).revisions.length > revisions,
+      "committed compress must create an undo checkpoint",
+    );
+    const undone = await call("xsxb_undo", { dry_run: false });
+    assert.equal(undone.restored, true);
+    assert.deepEqual(fs.readFileSync(file), before);
+  }));
+
+/** Reads walk-clip frameCount from the on-disk project manifest. */
+function walkFrameCountOnDisk(manifestPath) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const profile = (manifest.profiles || []).find((entry) => entry.id === "hero");
+  const animation = (profile?.animations || []).find((entry) => entry.id === "walk" || entry.name === "walk");
+  return (animation?.frames || []).length;
+}
+
+test("reorganization with only order writes frames and changes on-disk frameCount", async () =>
+  fixture(async ({ service, call, paths }) => {
+    assert.equal(walkFrameCountOnDisk(paths.manifest), 3);
+    const revisionsBefore = (await call("xsxb_list_revisions")).revisions.length;
+    const snapshot = (await service.callMcp("xsxb_get_animation")).observation.snapshotId;
+    const committed = await service.callMcp("xsxb_reorganize_frames", {
+      order: [1, 0],
+      basis_snapshot_id: snapshot,
+    });
+    assert.equal(committed.data.dryRun, false);
+    assert.equal(committed.data.applied, true);
+    assert.equal(committed.data.outputFrameCount, 2);
+    assert.equal(walkFrameCountOnDisk(paths.manifest), 2);
+    assert.ok(
+      (await call("xsxb_list_revisions")).revisions.length > revisionsBefore,
+      "committed reorder must create an undo checkpoint",
+    );
+    const undone = await call("xsxb_undo", { dry_run: false });
+    assert.equal(undone.restored, true);
+    assert.equal(walkFrameCountOnDisk(paths.manifest), 3);
+  }));
+
 test("reorganization previews by default and commits locally only when requested", async () =>
   fixture(async ({ call, service, paths }) => {
     const before = fs.readFileSync(paths.manifest);
     const revisions = (await call("xsxb_list_revisions")).revisions.length;
     const snapshot = (await service.callMcp("xsxb_get_animation")).observation.snapshotId;
+    const identityPreview = await service.callMcp("xsxb_reorganize_frames", {
+      sync: true,
+      basis_snapshot_id: snapshot,
+    });
+    assert.equal(identityPreview.data.dryRun, true);
+    assert.equal(identityPreview.data.applied, false);
+    assert.equal(identityPreview.data.identityOrder, true);
+    assert.equal(identityPreview.data.outputFrameCount, 3);
+    assert.equal(identityPreview.data.sync.requested, false);
+    assert.deepEqual(fs.readFileSync(paths.manifest), before);
+    assert.equal((await call("xsxb_list_revisions")).revisions.length, revisions);
     const preview = await service.callMcp("xsxb_reorganize_frames", {
       order: [1, 0],
+      dry_run: true,
       sync: true,
       basis_snapshot_id: snapshot,
     });
     assert.equal(preview.data.dryRun, true);
+    assert.equal(preview.data.applied, false);
     assert.equal(preview.data.outputFrameCount, 2);
     assert.equal(preview.data.sync.requested, false);
     assert.deepEqual(fs.readFileSync(paths.manifest), before);
@@ -107,8 +185,20 @@ test("reorganization previews by default and commits locally only when requested
       basis_snapshot_id: snapshot,
     });
     assert.equal(committed.data.dryRun, false);
+    assert.equal(committed.data.applied, true);
     assert.equal(committed.data.sync.requested, false);
     assert.equal((await call("xsxb_get_animation")).animation.frames.length, 2);
+  }));
+
+test("reorganize_frames dry_run:false without order still previews", async () =>
+  fixture(async ({ service, call, paths }) => {
+    const before = fs.readFileSync(paths.manifest);
+    const revisions = (await call("xsxb_list_revisions")).revisions.length;
+    const result = await service.callMcp("xsxb_reorganize_frames", { dry_run: false });
+    assert.equal(result.data.dryRun, true);
+    assert.equal(result.data.applied, false);
+    assert.deepEqual(fs.readFileSync(paths.manifest), before);
+    assert.equal((await call("xsxb_list_revisions")).revisions.length, revisions);
   }));
 
 test("attachment creation and removal do not synchronize unless requested", async () =>
@@ -127,9 +217,16 @@ test("catalog preview and sync flags match runtime and avoid conflicting injecte
     assert.equal(properties.dry_run.default, undefined);
     assert.equal(properties.apply.default, undefined);
   }
-  for (const name of ["xsxb_compress_frames", "xsxb_reorganize_frames"]) {
-    assert.equal(definitions.get(name).inputSchema.properties.dry_run.default, true);
-  }
+  assert.equal(definitions.get("xsxb_compress_frames").inputSchema.properties.dry_run.default, true);
+  const estimateDryRun = definitions.get("xsxb_estimate_boxes").inputSchema.properties.dry_run;
+  assert.equal(estimateDryRun.default, false);
+  assert.match(estimateDryRun.description, /omitting dry_run writes/i);
+  assert.match(estimateDryRun.description, /dry_run:\s*true preview/i);
+  const reorganizeDryRun = definitions.get("xsxb_reorganize_frames").inputSchema.properties.dry_run;
+  assert.equal(reorganizeDryRun.default, undefined);
+  assert.match(reorganizeDryRun.description, /omit order always previews.*even dry_run:\s*false/i);
+  assert.match(reorganizeDryRun.description, /non-empty order commits/i);
+  assert.match(reorganizeDryRun.description, /unless dry_run:\s*true/i);
   for (const name of [
     "xsxb_add_attachment",
     "xsxb_add_sfx",

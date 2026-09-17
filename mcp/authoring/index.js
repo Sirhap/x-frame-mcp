@@ -5,6 +5,7 @@ const { createCanvasTool } = require("./canvas");
 const { createQualityTool } = require("./quality");
 const { createAttachmentInterpolation } = require("./attachment_interpolation");
 const { shouldCommit } = require("../xsxb_mcp_commit");
+const { booleanFlag } = require("../xsxb_mcp_arguments");
 
 /** Connects domain modules to the existing project selection and synchronization seams. */
 function createAuthoringTools(context) {
@@ -50,11 +51,14 @@ function createAuthoringTools(context) {
       projectId: project(args).id,
       ...revisions.save(project(args), args.label),
     }),
-    xsxb_list_revisions: (args) => ({
-      projectId: project(args).id,
-      revisions: revisions.list(project(args)),
-    }),
-    xsxb_compare_revisions: (args) => revisions.compare(project(args), args),
+    xsxb_list_revisions: (args) => {
+      const selected = context.lookupProject(args.project_id);
+      return {
+        projectId: selected.id,
+        revisions: revisions.list(selected),
+      };
+    },
+    xsxb_compare_revisions: (args) => revisions.compare(context.lookupProject(args.project_id), args),
     xsxb_restore_revision: restore,
     xsxb_undo: (args) => {
       const id = args.revision_id || revisions.list(project(args))[0]?.revisionId;
@@ -69,6 +73,7 @@ function createAuthoringTools(context) {
   const checkpointTools = new Set([
     "xsxb_import_video",
     "xsxb_import_animation",
+    "xsxb_slice_sheet",
     "xsxb_cutout",
     "xsxb_update_frame_boxes",
     "xsxb_update_timing",
@@ -85,17 +90,23 @@ function createAuthoringTools(context) {
     "xsxb_remove_binding",
     "xsxb_delete_animation",
     "xsxb_reorganize_frames",
+    "xsxb_compress_frames",
   ]);
   /** Records recovery data only for project mutations, never standalone image operations. */
   function checkpoint(name, args) {
     if (!checkpointTools.has(name) || args.dry_run === true || (name === "xsxb_cutout" && args.file_path))
       return null;
+    if (name === "xsxb_slice_sheet" && !(args.animation_id || args.animation)) return null;
     if (
       ["xsxb_register_clip", "xsxb_plant_feet", "xsxb_estimate_visual"].includes(name) &&
       !shouldCommit(args)
     )
       return null;
-    if (name === "xsxb_reorganize_frames" && args.dry_run !== false) return null;
+    if (name === "xsxb_reorganize_frames") {
+      const hasOrder = Array.isArray(args.order) && args.order.length > 0;
+      if (!hasOrder || booleanFlag(args.dry_run)) return null;
+    }
+    if (name === "xsxb_compress_frames" && booleanFlag(args.dry_run, true)) return null;
     const p = context.registryProject(args.project_id, false);
     return { project: p, revisionId: revisions.save(p, `before ${name}`, true, true).revisionId };
   }

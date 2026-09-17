@@ -211,7 +211,7 @@ test("concise tools retain routing constraints and workflow docs retain the cres
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.ok(trail && place && cutout && gif && sheet);
   assert.match(trail.description, /smooth_arc only for truly curved motion/);
-  assert.match(trail.description, /pixel-layer crescents belong to place_image/);
+  assert.match(trail.description, /pixel-layer crescents belong to xsxb_plan_smear/);
   assert.match(place.description, /require overlay_id/);
   assert.match(place.description, /xsxb_plan_place/);
   assert.match(place.description, /output_path stays inside XSXB root/);
@@ -535,6 +535,8 @@ test("XSXB MCP service executes the complete mutation workflow", async () => {
     assert.equal(sfx.sync.audioCount, 1);
 
     const reorganized = await current.service.call("xsxb_reorganize_frames", { dry_run: false });
+    assert.equal(reorganized.dryRun, true);
+    assert.equal(reorganized.applied, false);
     assert.equal(reorganized.outputFrameCount, 3);
     assert.equal(reorganized.identityOrder, true);
 
@@ -575,6 +577,8 @@ test("MCP catalog includes the production editing tools", () => {
     "xsxb_update_frame_boxes",
     "xsxb_update_timing",
     "xsxb_sync_godot",
+    "xsxb_validate_for_godot",
+    "xsxb_diff_frames",
     "xsxb_get_project",
     "xsxb_create_project",
     "xsxb_delete_animation",
@@ -697,6 +701,118 @@ animations = [{
   }
 });
 
+/**
+ * Writes a two-clip Godot SpriteFrames tres plus idle/walk PNGs.
+ * @param {string} godotRoot Bound Godot project root.
+ * @param {Buffer} idlePng Idle frame bytes.
+ * @param {Buffer} walkPng Walk frame bytes.
+ * @returns {string} Absolute path to hero.spriteframes.tres.
+ */
+function writeTwoClipSpriteFrames(godotRoot, idlePng, walkPng) {
+  const spriteDir = path.join(godotRoot, "sprites");
+  fs.mkdirSync(spriteDir, { recursive: true });
+  fs.writeFileSync(path.join(spriteDir, "idle.png"), idlePng);
+  fs.writeFileSync(path.join(spriteDir, "walk.png"), walkPng);
+  const tresPath = path.join(spriteDir, "hero.spriteframes.tres");
+  fs.writeFileSync(
+    tresPath,
+    `[ext_resource type="Texture2D" path="res://sprites/idle.png" id="1_tex"]
+[ext_resource type="Texture2D" path="res://sprites/walk.png" id="2_tex"]
+
+[resource]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_tex")
+}],
+"loop": true,
+"name": &"idle",
+"speed": 8.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("2_tex")
+}],
+"loop": true,
+"name": &"walk",
+"speed": 10.0
+}]
+`,
+  );
+  return tresPath;
+}
+
+test("import_spriteframes_animation_id_selects_one_clip_not_renames_every_row", async () => {
+  const idleColor = [210, 36, 42, 255];
+  const walkColor = [32, 80, 200, 255];
+  const idlePng = encodePngRgba(new Uint8ClampedArray(idleColor), 1, 1);
+  const walkPng = encodePngRgba(new Uint8ClampedArray(walkColor), 1, 1);
+
+  const current = fixture();
+  try {
+    const tresPath = writeTwoClipSpriteFrames(current.godotRoot, idlePng, walkPng);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "spriteframes",
+      file_path: tresPath,
+      animation_id: "walk",
+    });
+    assert.equal(imported.importedAnimationCount, 1);
+    assert.equal(imported.animationId, "walk");
+    assert.deepEqual(
+      imported.animations.map((entry) => entry.animationId),
+      ["walk"],
+    );
+
+    const walk = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const pixels = decodePngRgba(walk.animation.frames[0].absolutePath).data;
+    assert.equal(pixels[0], walkColor[0]);
+    assert.equal(pixels[1], walkColor[1]);
+    assert.equal(pixels[2], walkColor[2]);
+
+    const project = await current.service.call("xsxb_get_project");
+    assert.ok(!project.animations.some((entry) => entry.id === "walk_2"));
+    assert.ok(!project.animations.some((entry) => entry.id === "idle"));
+    await assert.rejects(
+      () => current.service.call("xsxb_get_animation", { animation_id: "idle" }),
+      /not found/i,
+    );
+    await assert.rejects(
+      () => current.service.call("xsxb_get_animation", { animation_id: "walk_2" }),
+      /not found/i,
+    );
+  } finally {
+    current.cleanup();
+  }
+
+  const omitted = fixture();
+  try {
+    const tresPath = writeTwoClipSpriteFrames(omitted.godotRoot, idlePng, walkPng);
+    const imported = await omitted.service.call("xsxb_import_animation", {
+      source: "spriteframes",
+      file_path: tresPath,
+    });
+    assert.equal(imported.importedAnimationCount, 2);
+    assert.deepEqual(imported.animations.map((entry) => entry.animationId).sort(), ["idle", "walk"]);
+    const idle = await omitted.service.call("xsxb_get_animation", { animation_id: "idle" });
+    const walk = await omitted.service.call("xsxb_get_animation", { animation_id: "walk" });
+    const idlePixels = decodePngRgba(idle.animation.frames[0].absolutePath).data;
+    const walkPixels = decodePngRgba(walk.animation.frames[0].absolutePath).data;
+    assert.equal(idlePixels[0], idleColor[0]);
+    assert.equal(walkPixels[0], walkColor[0]);
+    await assert.rejects(
+      () =>
+        omitted.service.call("xsxb_import_animation", {
+          source: "spriteframes",
+          file_path: tresPath,
+          animation_id: "jump",
+        }),
+      /jump|available|idle|walk/i,
+    );
+  } finally {
+    omitted.cleanup();
+  }
+});
+
 test("MCP catalog exposes bind, cutout, and active tools without open_tuner", () => {
   for (const name of ["xsxb_bind_godot", "xsxb_cutout", "xsxb_set_active_project"]) {
     assert.ok(MCP_TOOL_NAMES.includes(name), name);
@@ -730,6 +846,248 @@ test("bind_godot retargets a project to an existing Godot root", async () => {
     assert.equal(bound.projectId, "orphan");
     assert.equal(bound.godotProjectValid, true);
     assert.equal(path.resolve(bound.projectRoot), path.resolve(current.godotRoot));
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("bind_godot retarget prunes previous Godot project slices", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const oldDataDir = path.join(current.godotRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test");
+    const oldWorkspaceDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "workspace",
+      "projects",
+      "mcp-test",
+    );
+    assert.equal(fs.existsSync(oldDataDir), true);
+    const workspaceExisted = fs.existsSync(oldWorkspaceDir);
+
+    const leftoverRuntime = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "runtime",
+      "xsxb_frame_actor.tscn",
+    );
+    fs.mkdirSync(path.dirname(leftoverRuntime), { recursive: true });
+    fs.writeFileSync(leftoverRuntime, "[gd_scene leftover]\n");
+
+    const secondRoot = path.join(current.root, "godot-second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    fs.writeFileSync(path.join(secondRoot, "project.godot"), '[application]\nconfig/name="Second"\n');
+
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(bound.projectId, "mcp-test");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
+    assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
+    if (workspaceExisted) {
+      assert.equal(
+        fs.existsSync(oldWorkspaceDir),
+        false,
+        "retarget must drop previous workspace/projects/<id>",
+      );
+    }
+    assert.equal(
+      fs.existsSync(path.join(secondRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test")),
+      false,
+      "bind_godot must not sync slices into the new Godot root",
+    );
+    await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(fs.existsSync(leftoverRuntime), true, "shared runtime under the old root must stay");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("bind_godot retarget forgets stale Godot imported ctex from pruned slices", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const hashPath = path.join(attachmentDir, pngs[0]);
+    const stem = path.basename(hashPath, path.extname(hashPath));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${hashPath}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+
+    const leftoverRuntime = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "runtime",
+      "xsxb_frame_actor.tscn",
+    );
+    fs.mkdirSync(path.dirname(leftoverRuntime), { recursive: true });
+    fs.writeFileSync(leftoverRuntime, "[gd_scene leftover]\n");
+
+    const oldDataDir = path.join(current.godotRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test");
+    assert.equal(fs.existsSync(oldDataDir), true);
+
+    const secondRoot = path.join(current.root, "godot-second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    fs.writeFileSync(path.join(secondRoot, "project.godot"), '[application]\nconfig/name="Second"\n');
+
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(bound.projectId, "mcp-test");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
+    assert.equal(fs.existsSync(hashPath), false, "retarget must drop previous attachment hash PNG");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+      false,
+      `pruned ${stem}.ctex must be forgotten from .godot/imported`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `pruned ${stem}.md5 must be forgotten from .godot/imported`,
+    );
+    assert.equal(fs.existsSync(leftoverRuntime), true, "shared runtime under the old root must stay");
+    assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("bind_godot retarget forgets stale Godot imported sample from pruned audio slices", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const hit = path.join(current.root, "hit.wav");
+    fs.writeFileSync(hit, createTestWav());
+    const added = await current.service.call("xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hit,
+      id: "hit",
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+
+    const audioDir = path.join(current.godotRoot, "xsxb_frame_tuner", "audio", "projects", "mcp-test");
+    const wavs = [];
+    const walkWavs = (directory) => {
+      if (!fs.existsSync(directory)) return;
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) walkWavs(fullPath);
+        else if (/\.wav$/i.test(entry.name)) wavs.push(fullPath);
+      }
+    };
+    walkWavs(audioDir);
+    assert.ok(wavs.length >= 1, "add_sfx+sync must copy a WAV into Godot audio/projects");
+    const wavPath = wavs[0];
+    const stem = path.basename(wavPath, path.extname(wavPath));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${wavPath}.import`, `path="res://.godot/imported/${stem}.sample"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.sample`), "stale-sample");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-sample");
+
+    const leftoverRuntime = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "runtime",
+      "xsxb_frame_actor.tscn",
+    );
+    fs.mkdirSync(path.dirname(leftoverRuntime), { recursive: true });
+    fs.writeFileSync(leftoverRuntime, "[gd_scene leftover]\n");
+
+    const oldDataDir = path.join(current.godotRoot, "xsxb_frame_tuner", "data", "projects", "mcp-test");
+    assert.equal(fs.existsSync(oldDataDir), true);
+
+    const secondRoot = path.join(current.root, "godot-second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    fs.writeFileSync(path.join(secondRoot, "project.godot"), '[application]\nconfig/name="Second"\n');
+
+    const bound = await current.service.call("xsxb_bind_godot", {
+      project_id: "mcp-test",
+      project_root: secondRoot,
+    });
+    assert.equal(bound.projectId, "mcp-test");
+    assert.equal(path.resolve(bound.projectRoot), path.resolve(secondRoot));
+    assert.equal(fs.existsSync(wavPath), false, "retarget must drop previous audio WAV");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.sample`)),
+      false,
+      `pruned ${stem}.sample must be forgotten from .godot/imported`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `pruned ${stem}.md5 must be forgotten from .godot/imported`,
+    );
+    assert.equal(fs.existsSync(leftoverRuntime), true, "shared runtime under the old root must stay");
+    assert.equal(fs.existsSync(oldDataDir), false, "retarget must drop previous data/projects/<id>");
   } finally {
     current.cleanup();
   }
@@ -1079,6 +1437,509 @@ test("reorganize duplicated frames receive unique ids", async () => {
     const animation = await current.service.call("xsxb_get_animation", { animation_id: "walk" });
     const ids = animation.animation.frames.map((frame) => frame.id);
     assert.equal(new Set(ids).size, ids.length);
+  } finally {
+    current.cleanup();
+  }
+});
+
+/**
+ * Lists synced Godot `frame_*.png` copies under `xsxb_frame_tuner`.
+ * @param {string} godotRoot Bound Godot project root.
+ * @param {string} [clipId] When set, keep only files whose path includes `/clipId/`.
+ * @returns {string[]} Absolute PNG paths.
+ */
+function syncedGodotFramePngs(godotRoot, clipId) {
+  const tuner = path.join(godotRoot, "xsxb_frame_tuner");
+  const found = [];
+  const visit = (directory) => {
+    if (!fs.existsSync(directory)) return;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(fullPath);
+      else if (/^frame_\d+\.png$/i.test(entry.name)) found.push(fullPath);
+    }
+  };
+  visit(tuner);
+  if (!clipId) return found;
+  const needle = `${path.sep}${clipId}${path.sep}`;
+  return found.filter((filePath) => filePath.includes(needle));
+}
+
+/**
+ * Reads one clip's frame count from the Godot-side animation manifest.
+ * @param {string} godotRoot Bound Godot project root.
+ * @param {string} projectId Registry project id.
+ * @param {string} animationId Clip id.
+ * @returns {number} Manifest frame count, or 0 when the clip is absent.
+ */
+function godotManifestFrameCount(godotRoot, projectId, animationId) {
+  const manifestPath = path.join(
+    godotRoot,
+    "xsxb_frame_tuner",
+    "data",
+    "projects",
+    projectId,
+    "animation_manifest.json",
+  );
+  if (!fs.existsSync(manifestPath)) return 0;
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const profile of manifest.profiles || []) {
+    for (const animation of profile.animations || []) {
+      if (String(animation.id || animation.name) === animationId) return (animation.frames || []).length;
+    }
+  }
+  return 0;
+}
+
+test("sync_godot_prunes_stale_synced_frame_pngs_after_clip_shrink_or_delete", async () => {
+  const current = fixture();
+  try {
+    const walkDir = path.join(current.root, "walk-sequence");
+    fs.mkdirSync(walkDir, { recursive: true });
+    for (let index = 1; index <= 4; index += 1) {
+      fs.writeFileSync(path.join(walkDir, `walk_${String(index).padStart(2, "0")}.png`), ONE_PIXEL_PNG);
+    }
+    const importedWalk = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: walkDir,
+      animation_id: "walk",
+      fps: 10,
+      sync: true,
+    });
+    assert.equal(importedWalk.importedFrameCount, 4);
+    assert.equal(importedWalk.sync.ok, true);
+    const walkBefore = syncedGodotFramePngs(current.godotRoot, "walk");
+    assert.equal(walkBefore.length, 4, "import+sync must copy four walk PNGs into xsxb_frame_tuner");
+    assert.equal(godotManifestFrameCount(current.godotRoot, "mcp-test", "walk"), 4);
+
+    const observation = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    const reorganized = await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0, 1],
+      basis_snapshot_id: observation.observation.snapshotId,
+      sync: true,
+    });
+    assert.equal(reorganized.applied, true);
+    assert.equal(reorganized.outputFrameCount, 2);
+    assert.equal(reorganized.sync.ok, true);
+    const walkAfter = syncedGodotFramePngs(current.godotRoot, "walk");
+    assert.equal(walkAfter.length, 2, "Godot walk dir must drop leftover frame_0003/0004 after shrink+sync");
+    assert.equal(godotManifestFrameCount(current.godotRoot, "mcp-test", "walk"), 2);
+
+    const idleDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(idleDir, { recursive: true });
+    fs.writeFileSync(path.join(idleDir, "idle_01.png"), ONE_PIXEL_PNG);
+    fs.writeFileSync(path.join(idleDir, "idle_02.png"), ONE_PIXEL_PNG);
+    const importedIdle = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: idleDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(importedIdle.importedFrameCount, 2);
+    assert.equal(importedIdle.sync.ok, true);
+    const idleBefore = syncedGodotFramePngs(current.godotRoot, "idle");
+    assert.equal(idleBefore.length, 2, "import+sync must copy idle PNGs into xsxb_frame_tuner");
+    const idleParent = path.dirname(idleBefore[0]);
+
+    const removed = await current.service.call("xsxb_delete_animation", {
+      animation_id: "idle",
+      sync: true,
+    });
+    assert.equal(removed.deleted, true);
+    assert.equal(removed.sync.ok, true);
+    const idleAfter = syncedGodotFramePngs(current.godotRoot, "idle");
+    assert.equal(idleAfter.length, 0, "deleted clip must not leave frame_*.png under Godot");
+    assert.equal(
+      fs.existsSync(idleParent) && fs.readdirSync(idleParent).some((name) => /^frame_\d+\.png$/i.test(name)),
+      false,
+    );
+    assert.equal(syncedGodotFramePngs(current.godotRoot, "walk").length, 2);
+    assert.equal(godotManifestFrameCount(current.godotRoot, "mcp-test", "idle"), 0);
+    assert.equal(godotManifestFrameCount(current.godotRoot, "mcp-test", "walk"), 2);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("sync_godot_forgets_stale_imported_ctex_after_clip_shrink", async () => {
+  const current = fixture();
+  try {
+    const walkDir = path.join(current.root, "walk-sequence");
+    fs.mkdirSync(walkDir, { recursive: true });
+    for (let index = 1; index <= 4; index += 1) {
+      fs.writeFileSync(path.join(walkDir, `walk_${String(index).padStart(2, "0")}.png`), ONE_PIXEL_PNG);
+    }
+    const importedWalk = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: walkDir,
+      animation_id: "walk",
+      fps: 10,
+      sync: true,
+    });
+    assert.equal(importedWalk.importedFrameCount, 4);
+    assert.equal(importedWalk.sync.ok, true);
+    const walkBefore = syncedGodotFramePngs(current.godotRoot, "walk");
+    assert.equal(walkBefore.length, 4, "import+sync must copy four walk PNGs into xsxb_frame_tuner");
+
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    for (const pngPath of walkBefore) {
+      const stem = path.basename(pngPath, path.extname(pngPath));
+      fs.writeFileSync(`${pngPath}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+      fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+      fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+    }
+
+    const observation = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    const reorganized = await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0, 1],
+      basis_snapshot_id: observation.observation.snapshotId,
+      sync: true,
+    });
+    assert.equal(reorganized.applied, true);
+    assert.equal(reorganized.outputFrameCount, 2);
+    assert.equal(reorganized.sync.ok, true);
+    const walkAfter = syncedGodotFramePngs(current.godotRoot, "walk");
+    assert.equal(walkAfter.length, 2, "Godot walk dir must drop leftover frame_0003/0004 after shrink+sync");
+
+    const retained = new Set(walkAfter.map((filePath) => path.resolve(filePath)));
+    const dropped = walkBefore.filter((filePath) => !retained.has(path.resolve(filePath)));
+    for (const pngPath of dropped) {
+      const stem = path.basename(pngPath, path.extname(pngPath));
+      assert.equal(
+        fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+        false,
+        `dropped ${stem}.ctex must be forgotten from .godot/imported`,
+      );
+    }
+    assert.equal(syncedGodotFramePngs(current.godotRoot, "walk").length, 2);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("sync_godot_prunes_stale_synced_attachment_pngs_after_remove_binding", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const hashName = pngs[0];
+    const hashPath = path.join(attachmentDir, hashName);
+
+    const godotAttachmentsPath = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "data",
+      "projects",
+      "mcp-test",
+      "frame_image_attachments.json",
+    );
+    const beforeJson = JSON.parse(fs.readFileSync(godotAttachmentsPath, "utf8"));
+    assert.ok(
+      beforeJson.some((entry) => String(entry.path || "").includes(hashName)),
+      "Godot attachments JSON must list the synced hash PNG",
+    );
+
+    const removed = await current.service.call("xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "attachment",
+      id: "spark",
+      sync: true,
+    });
+    assert.equal(removed.removedCount, 1);
+    assert.equal(removed.sync.ok, true);
+
+    const afterJson = JSON.parse(fs.readFileSync(godotAttachmentsPath, "utf8"));
+    assert.equal(
+      afterJson.some((entry) => String(entry.path || "").includes(hashName)),
+      false,
+      "Godot attachments JSON must drop the removed binding",
+    );
+    assert.equal(
+      fs.existsSync(hashPath),
+      false,
+      "stale Godot attachment hash PNG must be pruned after remove_binding+sync",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("sync_godot_forgets_stale_imported_ctex_after_attachment_remove", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const hashName = pngs[0];
+    const hashPath = path.join(attachmentDir, hashName);
+    const stem = path.basename(hashPath, path.extname(hashPath));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${hashPath}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+
+    const removed = await current.service.call("xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "attachment",
+      id: "spark",
+      sync: true,
+    });
+    assert.equal(removed.removedCount, 1);
+    assert.equal(removed.sync.ok, true);
+    assert.equal(
+      fs.existsSync(hashPath),
+      false,
+      "stale Godot attachment hash PNG must be pruned after remove_binding+sync",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+      false,
+      `dropped ${stem}.ctex must be forgotten from .godot/imported`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `dropped ${stem}.md5 must be forgotten from .godot/imported`,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("sync_godot_forgets_stale_imported_ctex_after_kept_attachment_overwrite", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const spark = path.join(current.root, "spark.png");
+    fs.writeFileSync(spark, ONE_PIXEL_PNG);
+    const added = await current.service.call("xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: spark,
+      id: "spark",
+      frame: 0,
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+    assert.equal(added.sync.imageAttachmentCount, 1);
+
+    const attachmentDir = path.join(
+      current.godotRoot,
+      "xsxb_frame_tuner",
+      "attachments",
+      "projects",
+      "mcp-test",
+    );
+    const pngs = fs.existsSync(attachmentDir)
+      ? fs.readdirSync(attachmentDir).filter((name) => /\.png$/i.test(name))
+      : [];
+    assert.ok(pngs.length >= 1, "add_attachment+sync must copy a hash PNG into Godot attachments");
+    const dest = path.join(attachmentDir, pngs[0]);
+    const stem = path.basename(dest, path.extname(dest));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${dest}.import`, `path="res://.godot/imported/${stem}.ctex"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.ctex`), "stale-ctex");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-ctex");
+
+    const authoringAttachmentsPath = path.join(
+      current.godotRoot,
+      ".x-frame",
+      "data",
+      "projects",
+      "mcp-test",
+      "frame_image_attachments.json",
+    );
+    assert.equal(fs.existsSync(authoringAttachmentsPath), true, "authoring attachments JSON must exist");
+    const authoringAttachments = JSON.parse(fs.readFileSync(authoringAttachmentsPath, "utf8"));
+    const sparkEntry =
+      authoringAttachments.find((entry) => String(entry?.id || "") === "spark") || authoringAttachments[0];
+    assert.ok(sparkEntry, "authoring frame_image_attachments.json must list spark");
+    if (!sparkEntry.assetHash) sparkEntry.assetHash = stem;
+    fs.writeFileSync(authoringAttachmentsPath, `${JSON.stringify(authoringAttachments, null, 2)}\n`);
+
+    const receiptPath = String(added.binding?.path || "");
+    let sourcePath = receiptPath
+      ? path.isAbsolute(receiptPath)
+        ? receiptPath
+        : path.join(current.root, receiptPath)
+      : "";
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      const recorded = String(sparkEntry.path || "");
+      sourcePath = path.isAbsolute(recorded) ? recorded : path.join(current.root, recorded);
+    }
+    assert.ok(fs.existsSync(sourcePath), "must find workspace attachment source for overwrite");
+
+    const redPng = encodePngRgba(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1);
+    fs.writeFileSync(sourcePath, redPng);
+
+    const synced = await current.service.call("xsxb_sync_godot");
+    assert.equal(synced.ok, true);
+    assert.equal(fs.existsSync(dest), true, "kept dest hash PNG must still exist");
+    assert.equal(
+      fs.readFileSync(dest).equals(ONE_PIXEL_PNG),
+      false,
+      "dest bytes must change after source overwrite",
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.ctex`)),
+      false,
+      `kept ${stem}.ctex must be forgotten after overwrite+sync`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `kept ${stem}.md5 must be forgotten after overwrite+sync`,
+    );
+    assert.equal(fs.existsSync(`${dest}.import`), true, "dest .import sidecar must stay");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("sync_godot_forgets_stale_imported_sample_after_kept_sfx_resync", async () => {
+  const current = fixture();
+  try {
+    const clipDir = path.join(current.root, "idle-sequence");
+    fs.mkdirSync(clipDir, { recursive: true });
+    fs.writeFileSync(path.join(clipDir, "idle_01.png"), ONE_PIXEL_PNG);
+    const imported = await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: clipDir,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    assert.equal(imported.importedFrameCount, 1);
+    assert.equal(imported.sync.ok, true);
+
+    const hit = path.join(current.root, "hit.wav");
+    fs.writeFileSync(hit, createTestWav());
+    const added = await current.service.call("xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hit,
+      id: "hit",
+      sync: true,
+    });
+    assert.equal(added.sync.ok, true);
+
+    const audioDir = path.join(current.godotRoot, "xsxb_frame_tuner", "audio", "projects", "mcp-test");
+    const wavs = [];
+    const walkWavs = (directory) => {
+      if (!fs.existsSync(directory)) return;
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) walkWavs(fullPath);
+        else if (/\.wav$/i.test(entry.name)) wavs.push(fullPath);
+      }
+    };
+    walkWavs(audioDir);
+    assert.ok(wavs.length >= 1, "add_sfx+sync must copy a WAV into Godot audio/projects");
+    const wav = wavs[0];
+    const stem = path.basename(wav, path.extname(wav));
+    const importedDir = path.join(current.godotRoot, ".godot", "imported");
+    fs.mkdirSync(importedDir, { recursive: true });
+    fs.writeFileSync(`${wav}.import`, `path="res://.godot/imported/${stem}.sample"\n`);
+    fs.writeFileSync(path.join(importedDir, `${stem}.sample`), "stale-sample");
+    fs.writeFileSync(path.join(importedDir, `${stem}.md5`), "stale-sample");
+
+    const synced = await current.service.call("xsxb_sync_godot");
+    assert.equal(synced.ok, true);
+    assert.equal(fs.existsSync(wav), true, "kept hash WAV must still exist");
+    assert.equal(fs.existsSync(`${wav}.import`), true, "kept .import sidecar must stay");
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.sample`)),
+      false,
+      `kept ${stem}.sample must be forgotten after resync`,
+    );
+    assert.equal(
+      fs.existsSync(path.join(importedDir, `${stem}.md5`)),
+      false,
+      `kept ${stem}.md5 must be forgotten after resync`,
+    );
   } finally {
     current.cleanup();
   }

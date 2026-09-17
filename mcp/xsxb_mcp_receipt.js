@@ -249,6 +249,7 @@ function receiptSummary(receipt) {
   const snapshotId = receipt.observation?.snapshotId;
   if (typeof snapshotId === "string" && snapshotId.startsWith("obs_v1_")) parts.push(snapshotId);
   const data = receipt.data && typeof receipt.data === "object" ? receipt.data : null;
+  if (data?.qa) parts.push(`qa=${data.qa}`);
   const artifactPath = data?.preview?.path || data?.outputPath || receipt.execution?.artifacts?.[0]?.path;
   if (typeof artifactPath === "string" && artifactPath) {
     const base = artifactPath.replace(/\\/g, "/").split("/").pop();
@@ -257,12 +258,41 @@ function receiptSummary(receipt) {
   return parts.join(" ");
 }
 
+/**
+ * Wraps a domain gate whose `data.ok` is the user-visible pass/fail.
+ * Keeps the structured payload when the project is not ready for Godot.
+ * @param {string} tool Tool name.
+ * @param {object} data Handler payload that includes `ok`.
+ * @param {object} [options] Observation and route metadata.
+ * @returns {object} Versioned receipt.
+ */
+function gateReceipt(tool, data, options = {}) {
+  const receipt = successReceipt(tool, data, options);
+  if (!data || data.ok !== false) return receipt;
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  return {
+    ...receipt,
+    ok: false,
+    error: {
+      code: "XSXB_VALIDATE_FAILED",
+      message: errors[0] || `${tool} failed its domain gate.`,
+      details: { errors, warnings: data.warnings || [] },
+    },
+    verification: {
+      status: "unsatisfied",
+      checks: errors,
+      evidence: [data.qa ? `qa=${data.qa}` : "", data.evidence?.path || ""].filter(Boolean),
+    },
+  };
+}
+
 module.exports = {
   EFFECTS,
   RECEIPT_SCHEMA_VERSION,
   ROUTES,
   VERIFICATION_STATUSES,
   errorReceipt,
+  gateReceipt,
   receiptEnvelopeSchema,
   receiptSummary,
   successReceipt,

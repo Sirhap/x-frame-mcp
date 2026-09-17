@@ -17,6 +17,7 @@ const {
   toolDefinitions,
 } = require("./xsxb_mcp_service");
 const { decodePngRgba, encodePngRgba, subjectAnchor } = require("./xsxb_mcp_cutout");
+const { GODOT_SYNC_ROOT } = require("./lib/godot_sync");
 
 const ONE_PIXEL_PNG = encodePngRgba(new Uint8ClampedArray([255, 255, 255, 255]), 1, 1);
 
@@ -321,8 +322,29 @@ animations = [{
       fps: 12,
       in_place: true,
     });
-    if (png.importedFrameCount !== 2 || sprite.importedFrameCount < 1 || inplace.importedFrameCount !== 2) {
-      return verdict("xsxb_import_animation", "fail", JSON.stringify({ png, sprite, inplace }));
+    const vfxDir = path.join(fixture.root, "spark-seq");
+    fs.mkdirSync(vfxDir, { recursive: true });
+    fs.writeFileSync(path.join(vfxDir, "01.png"), ONE_PIXEL_PNG);
+    fs.writeFileSync(path.join(vfxDir, "02.png"), ONE_PIXEL_PNG);
+    const typed = await fixture.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory: vfxDir,
+      animation_id: "spark",
+      animation_type: "vfx",
+    });
+    const typedAnim = await fixture.call("xsxb_get_animation", { animation_id: "spark" });
+    if (
+      png.importedFrameCount !== 2 ||
+      sprite.importedFrameCount < 1 ||
+      inplace.importedFrameCount !== 2 ||
+      typed.animationType !== "vfx" ||
+      typedAnim.animation?.type !== "vfx"
+    ) {
+      return verdict(
+        "xsxb_import_animation",
+        "fail",
+        JSON.stringify({ png, sprite, inplace, typed, typedAnim }),
+      );
     }
     return verdict(
       "xsxb_import_animation",
@@ -942,7 +964,12 @@ animations = [{
   async xsxb_sync_godot(fixture) {
     await importSequence(fixture, "walk");
     const synced = await fixture.call("xsxb_sync_godot", { project_id: "usable" });
-    if (synced.ok !== true || synced.requested !== true) {
+    if (
+      synced.ok !== true ||
+      synced.requested !== true ||
+      synced.godot?.runtime?.actorScript !== true ||
+      !Array.isArray(synced.godot?.animations)
+    ) {
       return verdict("xsxb_sync_godot", "fail", JSON.stringify(synced));
     }
     return verdict("xsxb_sync_godot", "ready", "syncs a bound Godot root");
@@ -950,11 +977,128 @@ animations = [{
 
   async xsxb_validate_project(fixture) {
     await importSequence(fixture, "walk");
+    try {
+      await fixture.request("xsxb_validate_project");
+      return verdict("xsxb_validate_project", "fail", "unsynced bind/gameplay must fail envelope.ok");
+    } catch (error) {
+      if (error.code !== "XSXB_VALIDATE_FAILED") {
+        return verdict("xsxb_validate_project", "fail", error.message);
+      }
+    }
     const standalone = await fixture.call("xsxb_validate_project", { layer: "standalone" });
-    if (!standalone.layers || !standalone.layers.standalone) {
+    if (!standalone.layers || !standalone.layers.standalone || standalone.ok !== true) {
       return verdict("xsxb_validate_project", "fail", JSON.stringify(standalone));
     }
-    return verdict("xsxb_validate_project", "ready", `layer=${standalone.layer} ok=${standalone.ok}`);
+    return verdict(
+      "xsxb_validate_project",
+      "ready",
+      `domain fail sets envelope.ok false; standalone ok=${standalone.ok}`,
+    );
+  },
+
+  async xsxb_diff_frames(fixture) {
+    const directory = path.join(fixture.root, "diff-seq");
+    fs.mkdirSync(directory, { recursive: true });
+    const left = new Uint8ClampedArray(32 * 32 * 4);
+    const right = new Uint8ClampedArray(32 * 32 * 4);
+    for (let offset = 0; offset < left.length; offset += 4) {
+      left.set([248, 248, 248, 255], offset);
+      right.set([248, 248, 248, 255], offset);
+    }
+    for (let y = 10; y < 24; y += 1) {
+      for (let x = 8; x < 16; x += 1) left.set([24, 48, 96, 255], (y * 32 + x) * 4);
+      for (let x = 12; x < 20; x += 1) right.set([24, 48, 96, 255], (y * 32 + x) * 4);
+    }
+    fs.writeFileSync(path.join(directory, "00.png"), encodePngRgba(left, 32, 32));
+    fs.writeFileSync(path.join(directory, "01.png"), encodePngRgba(right, 32, 32));
+    await fixture.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "idle",
+      fps: 8,
+    });
+    const diffed = await fixture.call("xsxb_diff_frames", {
+      animation_id: "idle",
+      frame_a: 0,
+      frame_b: 1,
+      mode: "diff",
+    });
+    if (
+      !fs.existsSync(diffed.preview.path) ||
+      Number(diffed.changedPixelCount) < 20 ||
+      diffed.qa !== "review"
+    ) {
+      return verdict("xsxb_diff_frames", "fail", JSON.stringify(diffed));
+    }
+    return verdict("xsxb_diff_frames", "ready", `changed=${diffed.changedPixelCount} qa=${diffed.qa}`);
+  },
+
+  async xsxb_validate_for_godot(fixture) {
+    const directory = path.join(fixture.root, "godot-seq");
+    fs.mkdirSync(directory, { recursive: true });
+    const idle = new Uint8ClampedArray(32 * 32 * 4);
+    for (let offset = 0; offset < idle.length; offset += 4) idle.set([248, 248, 248, 255], offset);
+    for (let y = 10; y < 24; y += 1) {
+      for (let x = 8; x < 16; x += 1) {
+        const boot = y >= 22;
+        idle.set(boot ? [12, 20, 40, 255] : [24, 48, 96, 255], (y * 32 + x) * 4);
+      }
+    }
+    fs.writeFileSync(path.join(directory, "00.png"), encodePngRgba(idle, 32, 32));
+    fs.writeFileSync(path.join(directory, "01.png"), encodePngRgba(idle, 32, 32));
+    await fixture.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "idle",
+      fps: 8,
+      sync: true,
+    });
+    await fixture.call("xsxb_estimate_boxes", { animation_id: "idle", sync: true });
+    const actor = `res://${GODOT_SYNC_ROOT}/runtime/xsxb_frame_actor.tscn`;
+    fs.writeFileSync(
+      path.join(fixture.godotRoot, "player.gd"),
+      [
+        "extends Node2D",
+        `const ACTOR := preload("${actor}")`,
+        "func _ready() -> void:",
+        "\tvar actor = ACTOR.instantiate()",
+        "\tadd_child(actor)",
+        '\tactor.play_frame_animation("idle")',
+        '\tvar _lock := actor.animation_duration("idle")',
+        "\tvar _move := actor.scene_scale()",
+        "",
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      path.join(fixture.godotRoot, "player.tscn"),
+      [
+        "[gd_scene load_steps=3 format=3]",
+        "",
+        `[ext_resource type="Script" path="res://player.gd" id="1_script"]`,
+        `[ext_resource type="PackedScene" path="${actor}" id="2_actor"]`,
+        "",
+        '[node name="Player" type="Node2D"]',
+        'script = ExtResource("1_script")',
+        "",
+        '[node name="XFrameActor" parent="." instance=ExtResource("2_actor")]',
+        "",
+      ].join("\n"),
+    );
+    const ready = await fixture.call("xsxb_validate_for_godot", { require_gameplay: true });
+    if (
+      ready.ok !== true ||
+      ready.qa !== "clean" ||
+      !fs.existsSync(ready.evidence.path) ||
+      !ready.godot?.runtime?.actorScript ||
+      !fs.existsSync(ready.run_summary.path)
+    ) {
+      return verdict("xsxb_validate_for_godot", "fail", JSON.stringify(ready));
+    }
+    return verdict(
+      "xsxb_validate_for_godot",
+      "ready",
+      `qa=${ready.qa} evidence=${path.basename(ready.evidence.path)}`,
+    );
   },
 
   async xsxb_cutout(fixture) {

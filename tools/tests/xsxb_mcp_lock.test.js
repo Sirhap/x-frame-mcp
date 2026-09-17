@@ -544,6 +544,71 @@ test("export_sheet normalize=none keeps a short canvas from filling the cell", a
   }
 });
 
+test("export_sheet grid=false omit cell uses maxEdge; injected 220 blows the sheet", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "tiny");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 64, 16, 24);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "tiny",
+    });
+    const omitted = await current.service.call("xsxb_export_sheet", {
+      animation_id: "tiny",
+      grid: false,
+    });
+    const injected = await current.service.call("xsxb_export_sheet", {
+      animation_id: "tiny",
+      grid: false,
+      cell: 220,
+    });
+    const gridOmit = await current.service.call("xsxb_export_sheet", {
+      animation_id: "tiny",
+      grid: true,
+    });
+    assert.equal(omitted.cell, 64);
+    assert.equal(omitted.width, 80);
+    assert.equal(omitted.height, 80);
+    assert.equal(injected.cell, 220);
+    assert.equal(injected.width, 236);
+    assert.equal(gridOmit.cell, 220);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("export_sheet returns preview.path for walk-lock visual QA", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "walk");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "walk",
+    });
+    const sheet = await current.service.call("xsxb_export_sheet", {
+      animation_id: "walk",
+      grid: false,
+    });
+    assert.equal(typeof sheet.preview, "object");
+    assert.ok(sheet.preview);
+    assert.equal(sheet.preview.path, sheet.outputPath);
+    assert.ok(fs.existsSync(sheet.preview.path));
+    const image = decodePngRgba(sheet.preview.path);
+    assert.equal(sheet.preview.width, sheet.width);
+    assert.equal(sheet.width, image.width);
+    assert.equal(sheet.preview.height, sheet.height);
+    assert.equal(sheet.height, image.height);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("export_gif accepts an outside path, flattens onto magenta, and reports baked visual", async () => {
   const jobs = [];
   const current = fixture({
@@ -574,6 +639,35 @@ test("export_gif accepts an outside path, flattens onto magenta, and reports bak
     assert.equal(jobs.length, 1);
     assert.deepEqual(jobs[0].firstPixel, [255, 0, 255, 255]);
     fs.rmSync(outside, { force: true });
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("export_gif returns preview.path for visual QA", async () => {
+  const current = fixture({
+    encodeGifImpl: async (job) => {
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a"));
+    },
+  });
+  try {
+    const directory = path.join(current.root, "walk");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "walk",
+    });
+    const exported = await current.service.call("xsxb_export_gif", {
+      animation_id: "walk",
+    });
+    assert.equal(typeof exported.preview, "object");
+    assert.ok(exported.preview);
+    assert.equal(exported.preview.path, exported.outputPath);
+    assert.ok(fs.existsSync(exported.preview.path));
+    assert.match(exported.preview.path, /\.gif$/i);
   } finally {
     current.cleanup();
   }
@@ -642,6 +736,35 @@ test("export_overlay paints A red, B cyan, intersection white", async () => {
   }
 });
 
+test("export_overlay returns preview.path for walk-lock visual QA", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "pair");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8, { left: 4 });
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8, { left: 6 });
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "pair",
+    });
+    const overlay = await current.service.call("xsxb_export_overlay", {
+      animation_id: "pair",
+      frame_a: 0,
+      frame_b: 1,
+    });
+    assert.equal(typeof overlay.preview, "object");
+    assert.ok(overlay.preview);
+    assert.equal(overlay.preview.path, overlay.outputPath);
+    assert.ok(fs.existsSync(overlay.preview.path));
+    const image = decodePngRgba(overlay.outputPath);
+    assert.equal(overlay.preview.width, image.width);
+    assert.equal(overlay.preview.height, image.height);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("export_pack_slot copies frames into a game-pack destination", async () => {
   const current = fixture();
   try {
@@ -665,6 +788,164 @@ test("export_pack_slot copies frames into a game-pack destination", async () => 
     assert.equal(exported.copied, 2);
     assert.ok(fs.existsSync(path.join(dest, "0.png")) || exported.paths.length === 2);
     fs.rmSync(dest, { recursive: true, force: true });
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("export_pack_slot clears stale numbered pngs when clip shrinks after reorganize", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "run");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "03.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "04.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "run",
+    });
+    const dest = path.join(current.root, "frost_armed-run-front");
+    const first = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(first.copied, 4);
+    for (const name of ["0.png", "1.png", "2.png", "3.png"]) {
+      assert.ok(fs.existsSync(path.join(dest, name)), name);
+    }
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "run",
+      order: [0, 1],
+    });
+    const exported = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(exported.copied, 2);
+    assert.ok(fs.existsSync(path.join(dest, "0.png")));
+    assert.ok(fs.existsSync(path.join(dest, "1.png")));
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "3.png")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("export_pack_slot clears stale numbered png sidecars when clip shrinks", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "run");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "03.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "04.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "run",
+    });
+    const dest = path.join(current.root, "frost_armed-run-front");
+    const first = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(first.copied, 4);
+    for (const name of ["0.png", "1.png", "2.png", "3.png"]) {
+      assert.ok(fs.existsSync(path.join(dest, name)), name);
+    }
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    fs.writeFileSync(path.join(dest, "2.png.import"), "godot import");
+    fs.writeFileSync(path.join(dest, "3.png.uid"), "uid://stale");
+    await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "run",
+      order: [0, 1],
+    });
+    const exported = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(exported.copied, 2);
+    assert.ok(fs.existsSync(path.join(dest, "0.png")));
+    assert.ok(fs.existsSync(path.join(dest, "1.png")));
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "3.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "2.png.import")), false);
+    assert.equal(fs.existsSync(path.join(dest, "3.png.uid")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("export_pack_slot forgets stale Godot imported ctex when dest is a Godot folder", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "run");
+    fs.mkdirSync(directory);
+    writeBodyPng(path.join(directory, "01.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "02.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "03.png"), 16, 4, 8);
+    writeBodyPng(path.join(directory, "04.png"), 16, 4, 8);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "run",
+    });
+    const godotPack = path.join(current.root, "godot-pack");
+    const dest = path.join(godotPack, "slots", "run");
+    fs.mkdirSync(godotPack, { recursive: true });
+    fs.writeFileSync(path.join(godotPack, "project.godot"), '[application]\nconfig/name="Pack"\n');
+    const first = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(first.copied, 4);
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    const imported = path.join(godotPack, ".godot", "imported");
+    fs.mkdirSync(imported, { recursive: true });
+    fs.writeFileSync(path.join(dest, "2.png.import"), 'path="res://.godot/imported/run_2.ctex"\n');
+    fs.writeFileSync(path.join(imported, "run_2.ctex"), "stale-ctex-2");
+    fs.writeFileSync(path.join(imported, "run_2.md5"), 'source_md5="deadbeef"\n');
+    fs.writeFileSync(path.join(dest, "0.png.import"), 'path="res://.godot/imported/run_0.ctex"\n');
+    fs.writeFileSync(path.join(imported, "run_0.ctex"), "stale-ctex-0");
+    await current.service.call("xsxb_reorganize_frames", {
+      animation_id: "run",
+      order: [0, 1],
+    });
+    const exported = await current.service.call("xsxb_export_pack_slot", {
+      animation_id: "run",
+      dest,
+      slot: "run",
+      view: "front",
+    });
+    assert.equal(exported.copied, 2);
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "2.png.import")), false);
+    assert.equal(fs.existsSync(path.join(imported, "run_2.ctex")), false);
+    assert.equal(fs.existsSync(path.join(imported, "run_0.ctex")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
   } finally {
     current.cleanup();
   }

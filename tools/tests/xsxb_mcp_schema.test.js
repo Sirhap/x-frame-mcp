@@ -120,7 +120,7 @@ test("attack-trail catalog keeps its purpose, motion constraint, and stick inter
   assert.match(tool.description, /attack-trail/i);
   assert.match(tool.description, /blade-edge/i);
   assert.match(tool.description, /smooth_arc only for truly curved motion/);
-  assert.match(tool.description, /pixel-layer crescents belong to place_image/);
+  assert.match(tool.description, /pixel-layer crescents belong to xsxb_plan_smear/);
   assert.deepEqual(tool.inputSchema.properties.path_kind.enum, ["polyline", "smooth_arc"]);
   assert.equal(stick.type, "object");
   assert.equal(stick.properties.frame.type, "integer");
@@ -134,6 +134,8 @@ test("export catalog describes previews and preserves sheet scale and grid optio
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.match(gif.description, /trail/i);
+  assert.match(gif.description, /fps=suggestedGameFps/);
+  assert.match(gif.inputSchema.properties.fps.description, /suggestedGameFps/);
   assert.match(sheet.description, /contact sheet PNG/i);
   assert.match(sheet.description, /without changing source frames/i);
   assert.match(sheet.description, /normalize=none\|feet preserves scale/);
@@ -146,6 +148,15 @@ test("export catalog describes previews and preserves sheet scale and grid optio
   assert.equal(sheet.inputSchema.properties.grid_divs.type, "string");
   assert.deepEqual(sheet.inputSchema.properties.grid_density.enum, ["sparse", "normal", "dense"]);
   assert.deepEqual(sheet.inputSchema.properties.grid_scope.enum, ["canvas", "subject"]);
+});
+
+test("export_sheet cell schema has no injected default so grid=false omit uses maxEdge", () => {
+  const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
+  assert.equal(
+    sheet.inputSchema.properties.cell.default,
+    undefined,
+    "schema default 220 is injected and skips the grid=false maxEdge path",
+  );
 });
 
 test("shift catalog retains translation constraints and frame coordinate inputs", () => {
@@ -246,12 +257,43 @@ test("create_project and import_video window fields stay optional and lenient", 
   const animation = toolDefinitions().find((entry) => entry.name === "xsxb_import_animation");
   assert.ok(!list.inputSchema.required || list.inputSchema.required.length === 0);
   assert.ok(!get.inputSchema.required || !get.inputSchema.required.includes("project_id"));
+  assert.match(get.description, /does not change active/i);
   assert.deepEqual(setActive.inputSchema.required, ["project_id"]);
   assert.ok(create, "xsxb_create_project is catalogued");
   assert.ok(!create.inputSchema.required || create.inputSchema.required.length === 0);
+  assert.equal(
+    create.inputSchema.properties.set_active.default,
+    undefined,
+    "omit set_active on an existing id must not advertise a default activate",
+  );
   assert.ok(video.inputSchema.properties.start_time);
   assert.ok(video.inputSchema.properties.duration);
   assert.ok(animation.inputSchema.properties.start_time);
+  assert.deepEqual(animation.inputSchema.properties.animation_type.enum, [
+    "actor",
+    "boss",
+    "vfx",
+    "prop",
+    "scene_prop_attachment",
+  ]);
+  assert.equal(
+    animation.inputSchema.properties.animation_type.default,
+    undefined,
+    "schema default actor is injected on replace and overwrites a stored vfx/prop type",
+  );
+  const slice = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(video.inputSchema.properties.animation_type.default, undefined);
+  assert.equal(slice.inputSchema.properties.animation_type.default, undefined);
+  assert.ok(video.inputSchema.properties.animation_type);
+  assert.throws(
+    () =>
+      validateToolArguments("xsxb_import_animation", animation.inputSchema, {
+        source: "png_sequence",
+        directory: "/tmp/seq",
+        animation_type: "jumper",
+      }),
+    /animation_type/,
+  );
   validateToolArguments("xsxb_import_video", video.inputSchema, {
     file_path: "/tmp/a.mp4",
     fps: "12",
@@ -260,6 +302,17 @@ test("create_project and import_video window fields stay optional and lenient", 
     sync: "true",
   });
   validateToolArguments("xsxb_import_video", video.inputSchema, { file_path: "/tmp/a.mp4" });
+});
+
+test("import profile_id schema has no injected default so omit uses last context profile", () => {
+  for (const name of ["xsxb_import_animation", "xsxb_import_video", "xsxb_slice_sheet"]) {
+    const tool = toolDefinitions().find((entry) => entry.name === name);
+    assert.equal(
+      tool.inputSchema.properties.profile_id.default,
+      undefined,
+      `${name} schema default mcp_imports is injected and skips the last-context-profile path`,
+    );
+  }
 });
 
 test("every declared tool schema is one this validator understands", () => {

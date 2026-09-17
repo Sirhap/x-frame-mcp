@@ -4,10 +4,20 @@ const { animationLooksAttack, frameBoxKey } = require("./box_estimator");
 const { EMPTY_ATTACK_TRAILS, normalizeAttackTrails, pngInfo } = require("./attack_trails");
 const { EMPTY_MANIFEST, EMPTY_TUNING, createProjectStore, slug } = require("./project_store");
 const { resolveXsxbRoot } = require("./xsxb_root");
+const { fileContentHash, GODOT_SYNC_ROOT, sourcePathForFrame } = require("./godot_sync");
 
 const ROOT = resolveXsxbRoot(__dirname);
 const projectStore = createProjectStore(ROOT);
-const SKIP_DIRS = new Set([".git", ".godot", "addons", "node_modules", "xsxb_frame_tuner"]);
+const SKIP_DIRS = new Set([
+  ".git",
+  ".godot",
+  "addons",
+  "node_modules",
+  "xsxb_frame_tuner",
+  "x_frame",
+  GODOT_SYNC_ROOT,
+]);
+const ACTOR_RES_RE = /(?:xsxb_frame_tuner|x_frame)\/runtime\/xsxb_frame_actor\.(?:tscn|gd)/;
 
 function parseArgs(argv) {
   const args = {};
@@ -65,11 +75,11 @@ function isInside(childPath, parentPath) {
 function validBox(box) {
   return Boolean(
     box &&
-      typeof box === "object" &&
-      Number(box?.size?.x) > 0 &&
-      Number(box?.size?.y) > 0 &&
-      Number.isFinite(Number(box?.offset?.x)) &&
-      Number.isFinite(Number(box?.offset?.y)),
+    typeof box === "object" &&
+    Number(box?.size?.x) > 0 &&
+    Number(box?.size?.y) > 0 &&
+    Number.isFinite(Number(box?.offset?.x)) &&
+    Number.isFinite(Number(box?.offset?.y)),
   );
 }
 
@@ -98,6 +108,77 @@ function walkTextFiles(root) {
   };
   walk(root);
   return files;
+}
+
+/**
+ * Resolves the on-disk Godot sync prefix that already has runtime files.
+ * @param {string} projectRoot Bound Godot root.
+ * @returns {string} Sync directory name under the Godot root.
+ */
+function resolveSyncRoot(projectRoot) {
+  if (
+    projectRoot &&
+    fs.existsSync(path.join(projectRoot, GODOT_SYNC_ROOT, "runtime", "xsxb_frame_actor.gd"))
+  ) {
+    return GODOT_SYNC_ROOT;
+  }
+  if (projectRoot && fs.existsSync(path.join(projectRoot, "x_frame", "runtime", "xsxb_frame_actor.gd"))) {
+    return "x_frame";
+  }
+  if (
+    projectRoot &&
+    fs.existsSync(path.join(projectRoot, "xsxb_frame_tuner", "runtime", "xsxb_frame_actor.gd"))
+  ) {
+    return "xsxb_frame_tuner";
+  }
+  return GODOT_SYNC_ROOT;
+}
+
+/**
+ * True when a bound Godot root has stale or missing game-local authoring copies.
+ * Unbound projects return false so callers do not sync.
+ * Detects tuning/manifest identity drift and per-frame PNG content drift
+ * (pixel edits that leave frame counts unchanged).
+ * @param {object} project Registry project.
+ * @param {object} [store] Project store.
+ * @param {string} [xsxbRoot] Standalone XSXB root used to resolve frame.path.
+ * @returns {boolean} Whether standalone authoring diverges from game-local copies.
+ */
+function gameLocalAuthoringStale(project, store = projectStore, xsxbRoot = ROOT) {
+  const projectRoot = project?.projectRoot ? path.resolve(project.projectRoot) : "";
+  if (!projectRoot || !fs.existsSync(path.join(projectRoot, "project.godot"))) return false;
+  const authoringRoot = path.resolve(xsxbRoot || ROOT);
+  const paths = store.projectPaths(project);
+  const manifest = readJson(paths.manifest, EMPTY_MANIFEST);
+  const tuning = readJson(paths.tuning, EMPTY_TUNING);
+  const gameDataDir = path.join(projectRoot, resolveSyncRoot(projectRoot), "data", "projects", project.id);
+  const gameManifestPath = path.join(gameDataDir, "animation_manifest.json");
+  const gameTuningPath = path.join(gameDataDir, "animation_tuning.json");
+  if (!fs.existsSync(gameManifestPath) || !fs.existsSync(gameTuningPath)) return true;
+  const gameTuning = readJson(gameTuningPath, EMPTY_TUNING);
+  if (JSON.stringify(tuning) !== JSON.stringify(gameTuning)) return true;
+  const standaloneAnimations = animationMap(manifest);
+  const gameAnimations = animationMap(readJson(gameManifestPath, EMPTY_MANIFEST));
+  if (standaloneAnimations.size !== gameAnimations.size) return true;
+  for (const [key, record] of standaloneAnimations.entries()) {
+    const gameRecord = gameAnimations.get(key);
+    if (!gameRecord) return true;
+    const expectedFrames = record.animation.frames || [];
+    const gameFrames = gameRecord.animation.frames || [];
+    if (expectedFrames.length !== gameFrames.length) return true;
+    const pairCount = Math.min(expectedFrames.length, gameFrames.length);
+    for (let index = 0; index < pairCount; index += 1) {
+      const standalonePath = sourcePathForFrame(authoringRoot, projectRoot, expectedFrames[index]?.path);
+      const gameRelative = String(gameFrames[index]?.path || "")
+        .replace(/^res:\/\//, "")
+        .replace(/^\/+/, "");
+      const gamePath = gameRelative ? path.resolve(projectRoot, gameRelative) : "";
+      if (!gamePath || !fs.existsSync(gamePath)) return true;
+      if (!standalonePath || !fs.existsSync(standalonePath)) continue;
+      if (fileContentHash(standalonePath) !== fileContentHash(gamePath)) return true;
+    }
+  }
+  return false;
 }
 
 function resolveProject(args, store = projectStore) {
@@ -200,9 +281,8 @@ function validateImport(args, options = {}) {
     });
   }
 
-  const gameDataDir = projectRoot
-    ? path.join(projectRoot, "xsxb_frame_tuner", "data", "projects", project.id)
-    : "";
+  const syncRoot = resolveSyncRoot(projectRoot);
+  const gameDataDir = projectRoot ? path.join(projectRoot, syncRoot, "data", "projects", project.id) : "";
   const gameManifestPath = path.join(gameDataDir, "animation_manifest.json");
   const gameTuningPath = path.join(gameDataDir, "animation_tuning.json");
   const gameAudioPath = path.join(gameDataDir, "frame_audio_bindings.json");
@@ -327,7 +407,7 @@ function validateImport(args, options = {}) {
     if (!localAttackTrails.bindings[key]) errors.push(`${key}: unexpected game-local attack trail binding.`);
   }
 
-  const runtimeDir = path.join(projectRoot, "xsxb_frame_tuner", "runtime");
+  const runtimeDir = path.join(projectRoot, syncRoot, "runtime");
   const runtimeScriptPath = path.join(runtimeDir, "xsxb_frame_actor.gd");
   for (const fileName of [
     "xsxb_frame_actor.gd",
@@ -362,9 +442,7 @@ function validateImport(args, options = {}) {
 
   if (projectRoot && fs.existsSync(projectRoot)) {
     const gameplayFiles = walkTextFiles(projectRoot);
-    const usesRuntime = gameplayFiles.some((entry) =>
-      /xsxb_frame_tuner\/runtime\/xsxb_frame_actor\.(?:tscn|gd)/.test(entry.text),
-    );
+    const usesRuntime = gameplayFiles.some((entry) => ACTOR_RES_RE.test(entry.text));
     if (args["require-gameplay"] && !usesRuntime)
       errors.push("No non-runtime gameplay scene or script uses xsxb_frame_actor.");
     else if (!usesRuntime) warnings.push("No non-runtime gameplay scene or script uses xsxb_frame_actor.");
@@ -419,4 +497,5 @@ if (require.main === module) main();
 module.exports = {
   parseArgs,
   validateImport,
+  gameLocalAuthoringStale,
 };

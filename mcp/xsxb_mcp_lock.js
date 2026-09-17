@@ -212,7 +212,23 @@ function planRegisterClip(frames, options = {}) {
 }
 
 /**
+ * True when RGB is a yellow/gold family sample (saturated core or pale glow).
+ * Achromatic studio white is excluded so border flood can still key the plate.
+ * @param {number} r Red.
+ * @param {number} g Green.
+ * @param {number} b Blue.
+ * @returns {boolean} Yellow/gold family.
+ */
+function isYellowGoldFamily(r, g, b) {
+  const sat = Math.max(r, g, b) - Math.min(r, g, b);
+  if (sat < 28 || r < 180 || g < 140 || b >= g) return false;
+  return r - b >= 36 && g - b >= 16;
+}
+
+/**
  * True when a pixel matches a protected RGB swatch.
+ * Yellow/gold swatches also protect the pale crescent glow that sits next to a
+ * white plate — a tight RGB box misses those high-luma yellows.
  * @param {number} r Red.
  * @param {number} g Green.
  * @param {number} b Blue.
@@ -221,6 +237,7 @@ function planRegisterClip(frames, options = {}) {
  * @returns {boolean} Protected.
  */
 function isProtected(r, g, b, protectedColors, tolerance) {
+  const goldSample = isYellowGoldFamily(r, g, b);
   for (const color of protectedColors) {
     if (
       Math.abs(r - color.r) <= tolerance &&
@@ -229,6 +246,7 @@ function isProtected(r, g, b, protectedColors, tolerance) {
     ) {
       return true;
     }
+    if (goldSample && isYellowGoldFamily(color.r, color.g, color.b)) return true;
   }
   return false;
 }
@@ -490,6 +508,7 @@ module.exports = {
   composeRbOverlay,
   flattenFrameBackground,
   geometryDeltas,
+  isYellowGoldFamily,
   measureSpriteGeometry,
   metricHeight,
   planRegisterClip,

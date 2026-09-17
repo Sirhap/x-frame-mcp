@@ -218,13 +218,86 @@ function writeHolds(directory) {
   });
 }
 
+/**
+ * Writes a repeating RRGGBB cycle so the loop window still contains hold frames.
+ * @param {string} directory Output directory.
+ * @param {number} [repeats=2] How many RRGGBB groups to write.
+ * @returns {string[]} Written paths.
+ */
+function writeHoldCycle(directory, repeats = 2) {
+  fs.mkdirSync(directory, { recursive: true });
+  const colors = [];
+  for (let cycle = 0; cycle < repeats; cycle += 1) {
+    for (const phase of PHASES) colors.push(phase, phase);
+  }
+  return colors.map((color, index) => {
+    const filePath = path.join(directory, `${String(index + 1).padStart(2, "0")}.png`);
+    fs.writeFileSync(filePath, solidPng(color));
+    return filePath;
+  });
+}
+
+/**
+ * Writes near-duplicate frames that miss a high slider and trigger auto-adjust.
+ * @param {string} directory Output directory.
+ * @param {number} [count=3] Frame count.
+ * @returns {string[]} Written paths.
+ */
+function writeNearDuplicates(directory, count = 3) {
+  fs.mkdirSync(directory, { recursive: true });
+  const near = new Uint8ClampedArray(16 * 16 * 4);
+  const tinted = new Uint8ClampedArray(16 * 16 * 4);
+  for (let y = 0; y < 16; y += 1) {
+    for (let x = 0; x < 16; x += 1) {
+      const offset = (y * 16 + x) * 4;
+      const border = x < 3 || y < 3 || x > 12 || y > 12;
+      near.set(border ? [40, 40, 40, 255] : [210, 36, 42, 255], offset);
+      tinted.set(border ? [40, 40, 40, 255] : [40, 90, 200, 255], offset);
+    }
+  }
+  return Array.from({ length: count }, (_, index) => {
+    const filePath = path.join(directory, `${index}.png`);
+    let pixels = index === 1 ? tinted : near;
+    if (index >= 3) {
+      pixels = new Uint8ClampedArray(16 * 16 * 4);
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        pixels.set([20, 180, 40 + index * 8, 255], offset);
+      }
+    }
+    fs.writeFileSync(filePath, encodePngRgba(pixels, 16, 16));
+    return filePath;
+  });
+}
+
+/**
+ * Merges allowed duplicate drops into the loop or motion window.
+ * @param {{loop:object,motion:object,duplicates:object}} analyzed Analyze receipt.
+ * @returns {number[]} Indexes to pass to xsxb_reorganize_frames.
+ */
+function expectedApplyOrder(analyzed) {
+  const loop = analyzed.loop.recommended;
+  const useLoop = Boolean(loop) && analyzed.loop.oneShotLikely !== true;
+  const windowOrder = useLoop ? loop.order : analyzed.motion.order;
+  const dropped = new Set(analyzed.duplicates.drop || []);
+  return windowOrder.filter((index) => !dropped.has(index));
+}
+
 test("find_duplicates slider matches the organizer 重复比例 range", () => {
   const schema = toolDefinitions().find((tool) => tool.name === "xsxb_find_duplicates").inputSchema;
   for (const name of ["threshold", "duplicate_ratio"]) {
     assert.equal(schema.properties[name].minimum, ORGANIZER_SIMILARITY_THRESHOLD.min, name);
     assert.equal(schema.properties[name].maximum, ORGANIZER_SIMILARITY_THRESHOLD.max, name);
-    assert.equal(schema.properties[name].default, ORGANIZER_SIMILARITY_THRESHOLD.fallback, name);
   }
+  assert.equal(
+    schema.properties.threshold.default,
+    undefined,
+    "schema default 88 is injected beside an explicit duplicate_ratio and the handler throws",
+  );
+  assert.equal(
+    schema.properties.duplicate_ratio.default,
+    undefined,
+    "schema default 88 is injected beside an explicit threshold and the handler throws",
+  );
   assert.throws(
     () =>
       validateToolArguments("xsxb_find_duplicates", schema, {
@@ -234,6 +307,120 @@ test("find_duplicates slider matches the organizer 重复比例 range", () => {
   );
 });
 
+test("duplicate_ratio schema has no injected default so explicit threshold does not throw on analyze", async () => {
+  const injectedDefaultMessage =
+    "schema default 88 is injected beside an explicit alias and the handler throws";
+  for (const name of ["xsxb_find_duplicates", "xsxb_analyze"]) {
+    const tool = toolDefinitions().find((entry) => entry.name === name);
+    assert.equal(tool.inputSchema.properties.threshold.default, undefined, injectedDefaultMessage);
+    assert.equal(tool.inputSchema.properties.duplicate_ratio.default, undefined, injectedDefaultMessage);
+  }
+
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "dup-ratio-seq");
+    writeCycle(directory);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "cycle",
+    });
+    const analyzed = await current.service.call("xsxb_analyze", {
+      animation_id: "cycle",
+      threshold: 95,
+      sample_size: 8,
+    });
+    assert.equal(analyzed.animationId, "cycle");
+    await assert.rejects(
+      current.service.call("xsxb_analyze", {
+        animation_id: "cycle",
+        threshold: 95,
+        duplicate_ratio: 88,
+      }),
+      /disagree/,
+    );
+    const found = await current.service.call("xsxb_find_duplicates", {
+      animation_id: "cycle",
+      threshold: 95,
+      sample_size: 8,
+    });
+    assert.equal(found.animationId, "cycle");
+    await assert.rejects(
+      current.service.call("xsxb_find_duplicates", {
+        animation_id: "cycle",
+        threshold: 95,
+        duplicate_ratio: 88,
+      }),
+      /disagree/,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("find_duplicates duplicate_ratio-only survives host threshold schema injection", async () => {
+  const injectedDefaultMessage =
+    "schema default 88 is injected beside an explicit duplicate_ratio and the handler throws";
+  for (const name of ["xsxb_find_duplicates", "xsxb_analyze"]) {
+    const tool = toolDefinitions().find((entry) => entry.name === name);
+    assert.equal(tool.inputSchema.properties.threshold.default, undefined, injectedDefaultMessage);
+    assert.equal(tool.inputSchema.properties.duplicate_ratio.default, undefined, injectedDefaultMessage);
+  }
+
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "dup-ratio-only-seq");
+    writeCycle(directory);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "cycle",
+    });
+    const analyzed = await current.service.call("xsxb_analyze", {
+      animation_id: "cycle",
+      duplicate_ratio: 95,
+      sample_size: 8,
+    });
+    assert.equal(analyzed.animationId, "cycle");
+    assert.equal(analyzed.duplicates.threshold, 95);
+    const omittedAnalyze = await current.service.call("xsxb_analyze", {
+      animation_id: "cycle",
+      sample_size: 8,
+    });
+    assert.equal(omittedAnalyze.duplicates.threshold, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+    await assert.rejects(
+      current.service.call("xsxb_analyze", {
+        animation_id: "cycle",
+        threshold: 88,
+        duplicate_ratio: 95,
+      }),
+      /disagree/,
+    );
+    const found = await current.service.call("xsxb_find_duplicates", {
+      animation_id: "cycle",
+      duplicate_ratio: 95,
+      sample_size: 8,
+    });
+    assert.equal(found.animationId, "cycle");
+    assert.equal(found.threshold, 95);
+    const omittedFound = await current.service.call("xsxb_find_duplicates", {
+      animation_id: "cycle",
+      sample_size: 8,
+    });
+    assert.equal(omittedFound.threshold, ORGANIZER_SIMILARITY_THRESHOLD.fallback);
+    await assert.rejects(
+      current.service.call("xsxb_find_duplicates", {
+        animation_id: "cycle",
+        threshold: 88,
+        duplicate_ratio: 95,
+      }),
+      /disagree/,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("findDuplicatesInPngFiles keeps the first of each hold and drops the rest", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-dup-core-"));
   try {
@@ -241,6 +428,7 @@ test("findDuplicatesInPngFiles keeps the first of each hold and drops the rest",
     const found = findDuplicatesInPngFiles(files, { sampleSize: 8, threshold: 88 });
     assert.deepEqual(found.drop, [1, 3]);
     assert.deepEqual(found.order, [0, 2, 4]);
+    assert.equal(found.applyBlocked, false);
     assert.equal(found.applied, false);
     assert.equal(found.threshold, 88);
   } finally {
@@ -251,28 +439,20 @@ test("findDuplicatesInPngFiles keeps the first of each hold and drops the rest",
 test("findDuplicatesInPngFiles does not apply an auto-lowered threshold unless asked", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-dup-auto-"));
   try {
-    const near = new Uint8ClampedArray(16 * 16 * 4);
-    const tinted = new Uint8ClampedArray(16 * 16 * 4);
-    for (let y = 0; y < 16; y += 1) {
-      for (let x = 0; x < 16; x += 1) {
-        const offset = (y * 16 + x) * 4;
-        const border = x < 3 || y < 3 || x > 12 || y > 12;
-        near.set(border ? [40, 40, 40, 255] : [210, 36, 42, 255], offset);
-        tinted.set(border ? [40, 40, 40, 255] : [40, 90, 200, 255], offset);
-      }
-    }
-    const files = ["a.png", "b.png", "c.png"].map((name, index) => {
-      const filePath = path.join(directory, name);
-      fs.writeFileSync(filePath, encodePngRgba(index === 1 ? tinted : near, 16, 16));
-      return filePath;
-    });
+    const files = writeNearDuplicates(directory, 3);
     const strict = findDuplicatesInPngFiles(files, { sampleSize: 8, threshold: 100 });
     assert.equal(strict.autoAdjustedThreshold != null, true);
+    assert.equal(strict.applyBlocked, true);
     assert.deepEqual(strict.drop, []);
-    assert.deepEqual(strict.order, [0, 1, 2]);
+    assert.deepEqual(strict.order, []);
     assert.ok(strict.suggestedDrop.length >= 1);
+    assert.ok(Array.isArray(strict.suggestedOrder));
+    assert.notDeepEqual(strict.order, [0, 1, 2], "blocked receipt must not look like an identity keep-list");
+    assert.notDeepEqual(strict.suggestedOrder, [0, 1, 2]);
     const opted = findDuplicatesInPngFiles(files, { sampleSize: 8, threshold: 100, autoAdjust: true });
+    assert.equal(opted.applyBlocked, false);
     assert.ok(opted.drop.length >= 1);
+    assert.deepEqual(opted.order, opted.suggestedOrder);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -389,4 +569,96 @@ test("MCP catalog lists xsxb_analyze after the surgical finders", () => {
   const names = toolDefinitions().map((tool) => tool.name);
   assert.ok(names.includes("xsxb_analyze"));
   assert.ok(names.indexOf("xsxb_analyze") > names.indexOf("xsxb_find_motion"));
+});
+
+test("analyzePngFiles applyOrder drops holds then slices to the recommended window", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-analyze-apply-"));
+  try {
+    const files = writeHoldCycle(directory, 2);
+    const found = analyzePngFiles(files, { sampleSize: 8, minPeriod: 2, maxPeriod: 8 });
+    const loopOrder = found.loop.recommended.order;
+    const merged = expectedApplyOrder(found);
+    assert.equal(found.duplicates.applyBlocked, false);
+    assert.ok(found.duplicates.drop.length >= 1, "hold cycle must expose duplicate indexes");
+    assert.ok(
+      loopOrder.some((index) => found.duplicates.drop.includes(index)),
+      "loop.recommended.order still indexes the full clip, including rest holds",
+    );
+    assert.deepEqual(found.applyOrder, merged);
+    assert.deepEqual(found.recommended.applyOrder, merged);
+    assert.ok(found.recommended.kind === "loop" || found.recommended.kind === "motion");
+    assert.notDeepEqual(found.applyOrder, loopOrder);
+    assert.ok(
+      found.applyOrder.every((index) => !found.duplicates.drop.includes(index)),
+      "applyOrder must not keep dropped holds",
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("analyzePngFiles blocks duplicates.order when autoAdjustedThreshold is set without auto_adjust", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-analyze-blocked-"));
+  try {
+    const files = writeNearDuplicates(directory, 4);
+    const blocked = analyzePngFiles(files, { sampleSize: 8, threshold: 100 });
+    assert.equal(blocked.duplicates.autoAdjustedThreshold != null, true);
+    assert.equal(blocked.duplicates.applyBlocked, true);
+    assert.deepEqual(blocked.duplicates.drop, []);
+    assert.deepEqual(blocked.duplicates.order, []);
+    assert.ok(blocked.duplicates.suggestedDrop.length >= 1);
+    assert.ok(Array.isArray(blocked.duplicates.suggestedOrder));
+    assert.notDeepEqual(blocked.duplicates.order, blocked.duplicates.suggestedOrder);
+    assert.match(String(blocked.duplicates.note || ""), /auto_adjust/);
+    const windowOrder =
+      blocked.loop.recommended && blocked.loop.oneShotLikely !== true
+        ? blocked.loop.recommended.order
+        : blocked.motion.order;
+    assert.deepEqual(blocked.applyOrder, windowOrder);
+    assert.deepEqual(blocked.recommended.applyOrder, windowOrder);
+
+    const opted = analyzePngFiles(files, { sampleSize: 8, threshold: 100, autoAdjust: true });
+    assert.equal(opted.duplicates.applyBlocked, false);
+    assert.ok(opted.duplicates.drop.length >= 1);
+    assert.deepEqual(opted.duplicates.order, opted.duplicates.suggestedOrder);
+    assert.deepEqual(opted.applyOrder, expectedApplyOrder(opted));
+    assert.ok(opted.applyOrder.every((index) => !opted.duplicates.drop.includes(index)));
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("xsxb_analyze receipt prefers applyOrder for reorganize", async () => {
+  const current = fixture();
+  try {
+    const directory = path.join(current.root, "apply-seq");
+    writeHoldCycle(directory, 2);
+    await current.service.call("xsxb_import_animation", {
+      source: "png_sequence",
+      directory,
+      animation_id: "holds",
+    });
+    const analyzed = await current.service.call("xsxb_analyze", {
+      animation_id: "holds",
+      sample_size: 8,
+      min_period: 2,
+      max_period: 8,
+    });
+    assert.ok(Array.isArray(analyzed.applyOrder));
+    assert.deepEqual(analyzed.applyOrder, expectedApplyOrder(analyzed));
+    assert.deepEqual(analyzed.recommended.applyOrder, analyzed.applyOrder);
+    assert.notDeepEqual(analyzed.applyOrder, analyzed.loop.recommended.order);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("MCP catalog prefers applyOrder over loop.recommended.order", () => {
+  const analyze = toolDefinitions().find((tool) => tool.name === "xsxb_analyze");
+  const duplicates = toolDefinitions().find((tool) => tool.name === "xsxb_find_duplicates");
+  assert.match(analyze.description, /applyOrder/);
+  assert.match(analyze.description, /applyBlocked|auto_adjust/);
+  assert.doesNotMatch(analyze.description, /using loop\.recommended\.order or motion\.order/);
+  assert.match(duplicates.description, /applyBlocked/);
+  assert.match(duplicates.inputSchema.properties.auto_adjust.description, /applyBlocked|empty/);
 });

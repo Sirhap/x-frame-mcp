@@ -704,6 +704,49 @@ test("overlay_grid and still-place instructions name cell ids and crop_from", ()
   assert.match(overlay.description, /eye/i);
 });
 
+test("overlay_grid rows/cols schema has no injected default so omit honors grid_divs", () => {
+  const overlay = toolDefinitions().find((entry) => entry.name === "xsxb_overlay_grid");
+  const rows = overlay.inputSchema.properties.rows;
+  const cols = overlay.inputSchema.properties.cols;
+  assert.equal(
+    rows.default,
+    undefined,
+    "schema default 8 is injected as explicit rows and skips the grid_divs-on-omit path",
+  );
+  assert.equal(
+    cols.default,
+    undefined,
+    "schema default 8 is injected as explicit cols and skips the grid_divs-on-omit path",
+  );
+  assert.match(overlay.inputSchema.properties.grid_divs.description, /when rows\/cols are omitted/);
+});
+
+test("overlay_grid omit rows/cols uses grid_divs; injected 8 overwrites it", async () => {
+  const current = fixture();
+  try {
+    const image = fieldImage(64, 64);
+    const filePath = writePng(path.join(current.root, "scene.png"), image.data, 64, 64);
+    const omitted = await current.service.call("xsxb_overlay_grid", {
+      file_path: filePath,
+      grid_divs: "4x4",
+    });
+    assert.deepEqual(omitted.view, { x: 0, y: 0, width: 64, height: 64, rows: 4, cols: 4 });
+    const injected = await current.service.call("xsxb_overlay_grid", {
+      file_path: filePath,
+      grid_divs: "4x4",
+      rows: 8,
+      cols: 8,
+    });
+    assert.deepEqual(
+      injected.view,
+      { x: 0, y: 0, width: 64, height: 64, rows: 8, cols: 8 },
+      "hosts that inject schema default 8 treat grid_divs as unused",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("place_image description retains the physical held-object placement workflow", () => {
   const place = toolDefinitions().find((entry) => entry.name === "xsxb_place_image");
   assert.match(place.description, /source-upright/i, "must reject leaving rotation 0");

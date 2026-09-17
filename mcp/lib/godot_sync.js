@@ -29,6 +29,24 @@ function validGodotProjectRoot(project) {
   return projectRoot;
 }
 
+/**
+ * Walks up from startDir looking for a folder that contains project.godot.
+ * @param {string} startDir Directory that may sit inside a Godot project.
+ * @returns {string} Godot project root, or empty string at the filesystem root.
+ */
+function findGodotProjectRoot(startDir) {
+  if (!startDir) return "";
+  let current = path.resolve(String(startDir));
+  const { root } = path.parse(current);
+  while (true) {
+    if (fs.existsSync(path.join(current, "project.godot"))) return current;
+    if (current === root) return "";
+    const parent = path.dirname(current);
+    if (parent === current) return "";
+    current = parent;
+  }
+}
+
 function godotProjectRelPath(...parts) {
   return reslash(path.join(GODOT_SYNC_ROOT, ...parts));
 }
@@ -97,18 +115,70 @@ function invalidateGodotImport(projectRoot, pngPath) {
 }
 
 /**
+ * Deletes Godot imported texture (.ctex) or audio (.sample) cache and sibling .md5
+ * referenced by a source file's .import sidecar (PNG or wav/ogg/mp3/flac/aac).
+ * Always forgets the cache (not only when source_md5 is stale) so overwritten
+ * numbered frames cannot keep showing old pixels after export_pack_slot.
+ * @param {string} projectRoot Godot root with project.godot.
+ * @param {string} pngPath Absolute source path inside the Godot project.
+ * @returns {number} Deleted cache files.
+ */
+function forgetGodotImportCache(projectRoot, pngPath) {
+  const importPath = `${pngPath}.import`;
+  if (!fs.existsSync(importPath) || !projectRoot) return 0;
+  const importRoot = path.join(projectRoot, ".godot", "imported");
+  const text = fs.readFileSync(importPath, "utf8");
+  const dests = new Set();
+  for (const match of text.matchAll(/res:\/\/(\.godot\/imported\/[^\s"\]]+)/g)) {
+    const rel = match[1];
+    if (/\.(?:ctex|sample)$/i.test(rel)) dests.add(rel);
+  }
+  if (!dests.size) return 0;
+  let deleted = 0;
+  for (const rel of dests) {
+    const cachePath = path.join(projectRoot, rel);
+    if (!isInside(cachePath, importRoot)) continue;
+    const md5Path = cachePath.replace(/\.(?:ctex|sample)$/i, ".md5");
+    for (const filePath of [cachePath, md5Path]) {
+      if (!fs.existsSync(filePath)) continue;
+      fs.rmSync(filePath, { force: true });
+      deleted += 1;
+    }
+  }
+  return deleted;
+}
+
+/**
  * Removes unreferenced files from one generated asset directory and prunes empty folders.
+ * Forgets Godot .ctex/.sample/.md5 for unretained PNGs and audio before deleting,
+ * while .import sidecars still exist. Retained audio keeps its .import like retained PNGs.
  * @param {string} directory Generated directory to prune.
  * @param {Set<string>} retainedPaths Absolute file paths that must remain available.
  * @returns {void}
  */
 function pruneGeneratedDirectory(directory, retainedPaths) {
   if (!fs.existsSync(directory)) return;
+  const unretained = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) pruneGeneratedDirectory(fullPath, retainedPaths);
-    else if (!retainedPaths.has(path.resolve(fullPath))) fs.rmSync(fullPath, { force: true });
+    else {
+      const resolved = path.resolve(fullPath);
+      if (retainedPaths.has(resolved)) continue;
+      const assetForSidecar = /\.(?:png|wav|ogg|mp3|flac|aac)\.import$/i.test(fullPath)
+        ? fullPath.replace(/\.import$/i, "")
+        : "";
+      if (assetForSidecar && retainedPaths.has(path.resolve(assetForSidecar))) continue;
+      unretained.push(fullPath);
+    }
   }
+  for (const fullPath of unretained) {
+    if (!/\.(?:png|wav|ogg|mp3|flac|aac)(?:\.import)?$/i.test(fullPath)) continue;
+    const assetPath = /\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
+    const godotRoot = findGodotProjectRoot(path.dirname(assetPath));
+    if (godotRoot) forgetGodotImportCache(godotRoot, assetPath);
+  }
+  for (const fullPath of unretained) fs.rmSync(fullPath, { force: true });
   if (!fs.readdirSync(directory).length) fs.rmSync(directory, { recursive: true, force: true });
 }
 
@@ -144,6 +214,55 @@ function localFrameRelPath(framePath, fallbackName = "frame.png") {
   return godotProjectRelPath(path.posix.basename(raw || fallbackName));
 }
 
+/**
+ * Resolves Godot-manifest frame paths that already live under GODOT_SYNC_ROOT.
+ * @param {object|null|undefined} manifest Previously synced animation manifest.
+ * @param {string} projectRoot Bound Godot project root.
+ * @returns {string[]} Absolute synced frame paths.
+ */
+function resolveSyncedManifestFramePaths(manifest, projectRoot) {
+  const syncRoot = path.join(projectRoot, GODOT_SYNC_ROOT);
+  const resolved = [];
+  for (const profile of Array.isArray(manifest?.profiles) ? manifest.profiles : []) {
+    for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
+      for (const frame of Array.isArray(animation.frames) ? animation.frames : []) {
+        const raw = String(frame?.path || "").trim();
+        if (!raw) continue;
+        const fullPath = path.resolve(projectRoot, raw);
+        if (isInside(fullPath, syncRoot)) resolved.push(path.resolve(fullPath));
+      }
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Drops leftover synced frame files and empty clip directories after a shrink or delete.
+ * Prunes only parent directories of retained ∪ previous frame paths, never GODOT_SYNC_ROOT itself.
+ * @param {string[]} previousPaths Absolute frame paths from the last Godot manifest.
+ * @param {Set<string>} retained Absolute frame PNG paths this sync keeps.
+ * @param {string} syncRoot Absolute GODOT_SYNC_ROOT directory.
+ * @returns {void}
+ */
+function pruneStaleSyncedFrames(previousPaths, retained, syncRoot) {
+  const resolvedSyncRoot = path.resolve(syncRoot);
+  for (const previous of previousPaths) {
+    const fullPath = path.resolve(previous);
+    if (retained.has(fullPath)) continue;
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) continue;
+    const godotRoot = findGodotProjectRoot(path.dirname(fullPath));
+    if (godotRoot) forgetGodotImportCache(godotRoot, fullPath);
+    fs.rmSync(fullPath, { force: true });
+  }
+  const parents = new Set();
+  for (const filePath of [...retained, ...previousPaths]) {
+    const parent = path.dirname(path.resolve(filePath));
+    if (parent === resolvedSyncRoot || !isInside(parent, resolvedSyncRoot)) continue;
+    parents.add(parent);
+  }
+  for (const directory of parents) pruneGeneratedDirectory(directory, retained);
+}
+
 function syncManifest(root, projectStore, project, manifestInput = null, options = {}) {
   const projectRoot = validGodotProjectRoot(project);
   if (!projectRoot) return { manifest: manifestInput || EMPTY_MANIFEST, copiedFrames: 0, frameCount: 0 };
@@ -153,6 +272,18 @@ function syncManifest(root, projectStore, project, manifestInput = null, options
   let copiedFrames = 0;
   let frameCount = 0;
   let invalidatedImports = 0;
+  const syncRoot = path.join(projectRoot, GODOT_SYNC_ROOT);
+  const targetManifest = path.join(godotDataDir(projectRoot, project), "animation_manifest.json");
+  let previousManifest = EMPTY_MANIFEST;
+  if (fs.existsSync(targetManifest)) {
+    try {
+      previousManifest = JSON.parse(fs.readFileSync(targetManifest, "utf8"));
+    } catch {
+      previousManifest = EMPTY_MANIFEST;
+    }
+  }
+  const previousPaths = resolveSyncedManifestFramePaths(previousManifest, projectRoot);
+  const retained = new Set();
 
   for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
     for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
@@ -164,15 +295,16 @@ function syncManifest(root, projectStore, project, manifestInput = null, options
         const target = path.join(projectRoot, nextRel);
         frame.path = nextRel;
         frameCount += 1;
-        if (!isInside(target, path.join(projectRoot, GODOT_SYNC_ROOT))) continue;
+        if (!isInside(target, syncRoot)) continue;
         if (!source || path.extname(source).toLowerCase() !== ".png") continue;
+        retained.add(path.resolve(target));
         if (copyFileIfChanged(source, target, options.force === true)) copiedFrames += 1;
         if (fs.existsSync(target)) invalidatedImports += invalidateGodotImport(projectRoot, target);
       }
     }
   }
 
-  const targetManifest = path.join(godotDataDir(projectRoot, project), "animation_manifest.json");
+  pruneStaleSyncedFrames(previousPaths, retained, syncRoot);
   writeJson(targetManifest, manifest);
   return { copiedFrames, frameCount, invalidatedImports };
 }
@@ -294,6 +426,7 @@ function syncFrameAudio(projectStore, project, bindingsInput = null) {
       const target = path.join(projectRoot, audioRel);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, data.buffer);
+      forgetGodotImportCache(projectRoot, target);
       copiedAudio += 1;
       next.path = `res://${audioRel}`;
       next.type = next.type || data.mime;
@@ -324,6 +457,8 @@ function syncFrameImageAttachments(root, projectStore, project, attachmentsInput
   const attachments = Array.isArray(raw) ? raw.filter((entry) => entry && typeof entry === "object") : [];
   const localAttachments = [];
   let copiedImageAttachments = 0;
+  const attachmentRoot = path.join(projectRoot, GODOT_SYNC_ROOT, "attachments", "projects", project.id);
+  const retainedAttachments = new Set();
 
   attachments.forEach((attachment, index) => {
     const next = clone(attachment);
@@ -333,13 +468,18 @@ function syncFrameImageAttachments(root, projectStore, project, attachmentsInput
     const hash = String(next.assetHash || fileContentHash(source));
     const nextRel = godotProjectRelPath("attachments", "projects", project.id, `${hash}${ext.toLowerCase()}`);
     const target = path.join(projectRoot, nextRel);
-    if (copyFileIfChanged(source, target)) copiedImageAttachments += 1;
+    if (copyFileIfChanged(source, target)) {
+      copiedImageAttachments += 1;
+      forgetGodotImportCache(projectRoot, target);
+    }
+    retainedAttachments.add(path.resolve(target));
     next.path = `res://${nextRel}`;
     next.assetHash = hash;
     assignStableFrameBindingKey(next, attachment, index);
     localAttachments.push(next);
   });
 
+  pruneGeneratedDirectory(attachmentRoot, retainedAttachments);
   const targetFile = path.join(godotDataDir(projectRoot, project), "frame_image_attachments.json");
   writeJson(targetFile, localAttachments);
   return { imageAttachmentCount: localAttachments.length, copiedImageAttachments };
@@ -360,7 +500,10 @@ function syncAttackTrails(root, projectStore, project, trailsInput = null) {
     const presetHash = String(local.presetTexture.assetHash || fileContentHash(presetSource));
     const presetRel = godotProjectRelPath("attack_trails", "presets", `${presetHash}.png`);
     const presetTarget = path.join(projectRoot, presetRel);
-    if (copyFileIfChanged(presetSource, presetTarget)) copiedAttackTrailTextures += 1;
+    if (copyFileIfChanged(presetSource, presetTarget)) {
+      copiedAttackTrailTextures += 1;
+      forgetGodotImportCache(projectRoot, presetTarget);
+    }
     local.presetTexture.path = `res://${presetRel}`;
     local.presetTexture.assetHash = presetHash;
   }
@@ -381,7 +524,10 @@ function syncAttackTrails(root, projectStore, project, trailsInput = null) {
       );
       const target = path.join(projectRoot, nextRel);
       retainedProjectTextures.add(path.resolve(target));
-      if (copyFileIfChanged(source, target)) copiedAttackTrailTextures += 1;
+      if (copyFileIfChanged(source, target)) {
+        copiedAttackTrailTextures += 1;
+        forgetGodotImportCache(projectRoot, target);
+      }
       segment.texture.path = `res://${nextRel}`;
       segment.texture.assetHash = hash;
     }
@@ -437,14 +583,18 @@ function syncGodotProject(root, projectStore, project, options = {}) {
 
 module.exports = {
   GODOT_SYNC_ROOT,
+  fileContentHash,
   godotDataRelPath,
   localFrameRelPath,
+  sourcePathForFrame,
   syncFrameAudio,
   syncFrameImageAttachments,
   syncAttackTrails,
   syncGodotProject,
   syncManifest,
   syncTuning,
+  findGodotProjectRoot,
+  forgetGodotImportCache,
   invalidateGodotImport,
   validGodotProjectRoot,
 };

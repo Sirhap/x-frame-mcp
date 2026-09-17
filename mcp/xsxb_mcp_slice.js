@@ -7,10 +7,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { findGodotProjectRoot, forgetGodotImportCache } = require("./lib/godot_sync");
 const { booleanFlag, PNG_NAME, requireExistingFile } = require("./xsxb_mcp_arguments");
 const { decodePngRgba, encodePngRgba } = require("./xsxb_mcp_cutout");
 
 const NUMBERED_PNG = /^\d+\.png$/i;
+const NUMBERED_PNG_SIDECAR = /^\d+\.png\.(import|uid)$/i;
 
 /**
  * Parses a positive integer argument or throws a named error.
@@ -42,13 +44,19 @@ function parseSliceGridDivs(value) {
 }
 
 /**
- * Reads pad / padding (pixels between cells). Default 0.
+ * Reads pad / padding (pixels between cells). Omit means 0.
+ * If both are present and Number() values differ, throws. Matching values are accepted.
  * @param {object} args Tool arguments.
  * @returns {number} Pad in pixels.
  */
 function resolvePad(args) {
-  const raw = args.pad !== undefined && args.pad !== null && args.pad !== "" ? args.pad : args.padding;
-  if (raw === undefined || raw === null || raw === "") return 0;
+  const hasPad = argumentPresent(args.pad);
+  const hasPadding = argumentPresent(args.padding);
+  if (hasPad && hasPadding && Number(args.pad) !== Number(args.padding)) {
+    throw new Error("pad and padding disagree. Pass only one.");
+  }
+  const raw = hasPad ? args.pad : args.padding;
+  if (!argumentPresent(raw)) return 0;
   const pad = Number(raw);
   if (!Number.isInteger(pad) || pad < 0) {
     throw new Error(`pad must be an integer >= 0. Received: ${raw}`);
@@ -107,6 +115,11 @@ function countCells(span, cell, pad) {
  */
 function resolveSliceGrid(args, width, height) {
   const pad = resolvePad(args);
+  const hasColumns = argumentPresent(args.columns);
+  const hasCols = argumentPresent(args.cols);
+  if (hasColumns && hasCols && Number(args.columns) !== Number(args.cols)) {
+    throw new Error("columns and cols disagree. Pass only one.");
+  }
   let columns = optionalPositiveInt(args.columns ?? args.cols, "columns");
   let rows = optionalPositiveInt(args.rows, "rows");
   if (args.grid_divs !== undefined && args.grid_divs !== null && args.grid_divs !== "") {
@@ -187,16 +200,27 @@ function cellIsEmpty(rgba) {
 }
 
 /**
- * Removes previous numbered slice outputs so a re-run cannot poison a sequence import.
+ * Removes previous numbered slice outputs and Godot sidecars so a re-run cannot poison a sequence import.
  * @param {string} dest Output directory.
  * @returns {void}
  */
 function clearNumberedPngs(dest) {
   if (!fs.existsSync(dest)) return;
   for (const name of fs.readdirSync(dest)) {
-    if (!NUMBERED_PNG.test(name)) continue;
     const filePath = path.join(dest, name);
-    if (fs.statSync(filePath).isFile()) fs.unlinkSync(filePath);
+    if (NUMBERED_PNG.test(name)) {
+      if (fs.statSync(filePath).isFile()) fs.unlinkSync(filePath);
+      for (const extra of [`${name}.import`, `${name}.uid`]) {
+        const sidecarPath = path.join(dest, extra);
+        if (fs.existsSync(sidecarPath) && fs.statSync(sidecarPath).isFile()) {
+          fs.unlinkSync(sidecarPath);
+        }
+      }
+      continue;
+    }
+    if (NUMBERED_PNG_SIDECAR.test(name) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      fs.unlinkSync(filePath);
+    }
   }
 }
 
@@ -278,8 +302,43 @@ function packingFromSidecar(sidecar) {
 }
 
 /**
+ * Throws SLICE_PACKING_MISMATCH when a caller grid does not match sidecar packing.
+ * @param {string} detail What the caller passed (e.g. `grid_divs "8x8"`).
+ * @param {{columns:number,rows:number,cellW?:number,cellH?:number,pad:number}} packing Sidecar packing.
+ * @returns {never}
+ */
+function throwSlicePackingMismatch(detail, packing) {
+  const err = new Error(
+    `${detail} does not match contact-sheet packing ${packing.columns}x${packing.rows} (cell ${formatPackingCell(packing)}, pad ${packing.pad}). Pass columns/rows/cell/pad from the export_sheet receipt, not overlay grid_divs.`,
+  );
+  err.code = "SLICE_PACKING_MISMATCH";
+  throw err;
+}
+
+/**
+ * Resolves columns/rows from slice args without inferring cell size from the image.
+ * @param {object} args Tool arguments.
+ * @returns {{columns?:number,rows?:number}} Grid from columns/cols/rows/grid_divs.
+ */
+function resolveArgsGrid(args) {
+  const hasColumns = argumentPresent(args.columns);
+  const hasCols = argumentPresent(args.cols);
+  if (hasColumns && hasCols && Number(args.columns) !== Number(args.cols)) {
+    throw new Error("columns and cols disagree. Pass only one.");
+  }
+  let columns = optionalPositiveInt(args.columns ?? args.cols, "columns");
+  let rows = optionalPositiveInt(args.rows, "rows");
+  if (argumentPresent(args.grid_divs)) {
+    const parsed = parseSliceGridDivs(args.grid_divs);
+    if (columns === undefined) columns = parsed.columns;
+    if (rows === undefined) rows = parsed.rows;
+  }
+  return { columns, rows };
+}
+
+/**
  * Fills omitted slice packing from an export_sheet sidecar, or throws when
- * overlay `grid_divs` does not match the packed columns×rows.
+ * caller columns/rows (including overlay `grid_divs`) do not match the packed grid.
  * @param {object} args Tool arguments.
  * @param {string} pngPath Sheet PNG.
  * @returns {object} Args, possibly with sidecar columns/rows/cell/pad filled in.
@@ -291,21 +350,41 @@ function applyContactSheetSidecar(args, pngPath) {
   const hasColumns = argumentPresent(args.columns) || argumentPresent(args.cols);
   const hasRows = argumentPresent(args.rows);
   const hasCell = argumentPresent(args.cell) || argumentPresent(args.cell_w) || argumentPresent(args.cell_h);
+  const hasPad = argumentPresent(args.pad) || argumentPresent(args.padding);
   const hasGridDivs = argumentPresent(args.grid_divs);
-  if (hasGridDivs && !hasColumns && !hasRows && !hasCell) {
-    const parsed = parseSliceGridDivs(args.grid_divs);
-    if (parsed.columns !== packing.columns || parsed.rows !== packing.rows) {
-      const err = new Error(
-        `grid_divs "${args.grid_divs}" does not match contact-sheet packing ${packing.columns}x${packing.rows} (cell ${formatPackingCell(packing)}, pad ${packing.pad}). Pass columns/rows/cell/pad from the export_sheet receipt, not overlay grid_divs.`,
+  const grid = resolveArgsGrid(args);
+  if (grid.columns !== undefined && grid.columns !== packing.columns) {
+    const detail = hasGridDivs && !hasColumns ? `grid_divs "${args.grid_divs}"` : `columns ${grid.columns}`;
+    throwSlicePackingMismatch(detail, packing);
+  }
+  if (grid.rows !== undefined && grid.rows !== packing.rows) {
+    const detail = hasGridDivs && !hasRows ? `grid_divs "${args.grid_divs}"` : `rows ${grid.rows}`;
+    throwSlicePackingMismatch(detail, packing);
+  }
+  if (hasCell) {
+    const cellSize = resolveCellSize(args);
+    if (
+      cellSize &&
+      packing.cellW !== undefined &&
+      packing.cellH !== undefined &&
+      (cellSize.cellW !== packing.cellW || cellSize.cellH !== packing.cellH)
+    ) {
+      throw new Error(
+        `cell and sidecar.cell disagree (${cellSize.cellW}x${cellSize.cellH} vs ${formatPackingCell(packing)}).`,
       );
-      err.code = "SLICE_PACKING_MISMATCH";
-      throw err;
     }
   }
-  if (hasColumns || hasRows || hasCell || hasGridDivs) return args;
-  const merged = { ...args, columns: packing.columns, rows: packing.rows };
-  if (!argumentPresent(args.pad) && !argumentPresent(args.padding)) merged.pad = packing.pad;
-  if (packing.cellW !== undefined && packing.cellH !== undefined) {
+  if (hasPad) {
+    const pad = resolvePad(args);
+    if (pad !== packing.pad) {
+      throw new Error(`pad and sidecar.pad disagree (${pad} vs ${packing.pad}).`);
+    }
+  }
+  const merged = { ...args };
+  if (!hasColumns && !hasGridDivs) merged.columns = packing.columns;
+  if (!hasRows && !hasGridDivs) merged.rows = packing.rows;
+  if (!hasPad) merged.pad = packing.pad;
+  if (!hasCell && packing.cellW !== undefined && packing.cellH !== undefined) {
     if (packing.cellW === packing.cellH) merged.cell = packing.cellW;
     else {
       merged.cell_w = packing.cellW;
@@ -341,6 +420,18 @@ function sliceSheet(args = {}) {
     throw new Error("dest must be a directory, not the sheet PNG.");
   }
   fs.mkdirSync(dest, { recursive: true });
+  const godotRoot = findGodotProjectRoot(dest);
+  if (godotRoot) {
+    for (const name of fs.readdirSync(dest)) {
+      const pngName = /^\d+\.png$/i.test(name)
+        ? name
+        : /^\d+\.png\.import$/i.test(name)
+          ? name.replace(/\.import$/i, "")
+          : "";
+      if (!pngName) continue;
+      forgetGodotImportCache(godotRoot, path.join(dest, pngName));
+    }
+  }
   clearNumberedPngs(dest);
   const paths = [];
   const skipped = [];
@@ -374,4 +465,4 @@ function sliceSheet(args = {}) {
   };
 }
 
-module.exports = { parseSliceGridDivs, resolveSliceGrid, sliceSheet };
+module.exports = { clearNumberedPngs, parseSliceGridDivs, resolveSliceGrid, sliceSheet };

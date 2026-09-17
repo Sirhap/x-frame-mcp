@@ -71,6 +71,16 @@ function pixelAt(filePath, x, y) {
   return [...image.data.subarray(index, index + 4)];
 }
 
+/**
+ * Walk-clip frameCount from xsxb_get_project, or 0 if the clip is absent.
+ * @param {object} project Project snapshot receipt.
+ * @returns {number} Frame count.
+ */
+function walkFrameCount(project) {
+  const animation = (project.animations || []).find((entry) => entry.id === "walk");
+  return animation ? animation.frameCount : 0;
+}
+
 test("catalog contains xsxb_slice_sheet immediately after import_video", () => {
   const video = MCP_TOOL_NAMES.indexOf("xsxb_import_video");
   const animation = MCP_TOOL_NAMES.indexOf("xsxb_import_animation");
@@ -87,6 +97,81 @@ test("catalog contains xsxb_slice_sheet immediately after import_video", () => {
     toolDefinitions().map((entry) => entry.name),
     [...MCP_TOOL_NAMES],
   );
+});
+
+test("slice_sheet fps schema has no injected default so replace omit keeps manifest fps", () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(
+    tool.inputSchema.properties.fps.default,
+    undefined,
+    "schema default 12 is injected as an explicit fps and resets replace omit to 12",
+  );
+});
+
+test("slice_sheet pad schema has no injected default so padding alias works", async () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(
+    tool.inputSchema.properties.pad.default,
+    undefined,
+    "schema default 0 is injected and skips the padding alias",
+  );
+
+  const current = fixture();
+  try {
+    const sheetPath = path.join(current.root, "padded-sheet.png");
+    writePaddedTwoCellSheet(sheetPath, RED, GREEN, 8, 4);
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      cell: 8,
+      padding: 4,
+    });
+    assert.equal(sliced.pad, 4);
+    assert.equal(sliced.frameCount, 2);
+    assert.deepEqual(pixelAt(sliced.paths[1], 0, 0), GREEN);
+    await assert.rejects(
+      () =>
+        current.service.call("xsxb_slice_sheet", {
+          file_path: sheetPath,
+          cell: 8,
+          pad: 0,
+          padding: 4,
+        }),
+      /disagree|do not pass both/i,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("slice_sheet cols alias validates and slices same as columns", async () => {
+  const tool = toolDefinitions().find((entry) => entry.name === "xsxb_slice_sheet");
+  assert.equal(tool.inputSchema.properties.cols.type, "integer");
+
+  const current = fixture();
+  try {
+    const sheetPath = path.join(current.root, "sheet.png");
+    writeColorSheet(sheetPath, [RED, GREEN, BLUE, YELLOW]);
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      cols: 2,
+      rows: 2,
+    });
+    assert.equal(sliced.frameCount, 4);
+    assert.deepEqual(pixelAt(sliced.paths[0], 1, 1), RED);
+    assert.deepEqual(pixelAt(sliced.paths[1], 1, 1), GREEN);
+    await assert.rejects(
+      () =>
+        current.service.call("xsxb_slice_sheet", {
+          file_path: sheetPath,
+          columns: 2,
+          cols: 4,
+          rows: 2,
+        }),
+      /disagree|do not pass both/i,
+    );
+  } finally {
+    current.cleanup();
+  }
 });
 
 test("a 2×2 sheet of known-color cells slices to 4 PNGs with correct colors", async () => {
@@ -177,6 +262,28 @@ test("dest outside the XSXB root works", async () => {
     fs.rmSync(dest, { recursive: true, force: true });
   }
 });
+
+/**
+ * Writes a 2×1 sheet of square cells with a transparent gap between them.
+ * @param {string} filePath Destination PNG.
+ * @param {number[]} left RGBA of the first cell.
+ * @param {number[]} right RGBA of the second cell.
+ * @param {number} cellSize Uniform cell edge.
+ * @param {number} pad Transparent pixels between cells.
+ * @returns {void}
+ */
+function writePaddedTwoCellSheet(filePath, left, right, cellSize, pad) {
+  const width = cellSize * 2 + pad;
+  const height = cellSize;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < cellSize; x += 1) {
+      rgba.set(left, (y * width + x) * 4);
+      rgba.set(right, (y * width + cellSize + pad + x) * 4);
+    }
+  }
+  fs.writeFileSync(filePath, encodePngRgba(rgba, width, height));
+}
 
 /**
  * Writes a 1-row packed sheet of equal square cells (no pad).
@@ -281,6 +388,148 @@ test("contact-sheet sidecar: explicit columns+rows still works", async () => {
     assert.equal(sliced.rows, 1);
     assert.deepEqual(pixelAt(sliced.paths[0], 0, 0), RED);
     assert.deepEqual(pixelAt(sliced.paths[3], 4, 4), YELLOW);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("contact-sheet sidecar: partial columns+rows merges cell and pad from sidecar", async () => {
+  const current = fixture();
+  try {
+    const sheetPath = path.join(current.root, "padded-contact.png");
+    writePaddedTwoCellSheet(sheetPath, RED, GREEN, 30, 10);
+    writeSheetSidecar(sheetPath, { columns: 2, rows: 1, cell: 30, pad: 10 });
+
+    const omitted = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      dest: path.join(current.root, "omit-all"),
+    });
+
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 1,
+      dest: path.join(current.root, "partial"),
+    });
+    assert.equal(sliced.cell, 30);
+    assert.equal(sliced.pad, 10);
+    assert.equal(sliced.frameCount, 2);
+    assert.equal(omitted.cell, 30);
+    assert.equal(omitted.pad, 10);
+    assert.equal(omitted.frameCount, 2);
+    assert.deepEqual(pixelAt(sliced.paths[0], 0, 0), pixelAt(omitted.paths[0], 0, 0));
+    assert.deepEqual(pixelAt(sliced.paths[0], 29, 29), pixelAt(omitted.paths[0], 29, 29));
+    assert.deepEqual(pixelAt(sliced.paths[1], 0, 0), pixelAt(omitted.paths[1], 0, 0));
+    assert.deepEqual(pixelAt(sliced.paths[1], 29, 29), pixelAt(omitted.paths[1], 29, 29));
+    assert.deepEqual(pixelAt(sliced.paths[0], 0, 0), RED);
+    assert.deepEqual(pixelAt(sliced.paths[1], 0, 0), GREEN);
+
+    const byDivs = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      grid_divs: "2x1",
+      dest: path.join(current.root, "by-divs"),
+    });
+    assert.equal(byDivs.cell, 30);
+    assert.equal(byDivs.pad, 10);
+    assert.equal(byDivs.frameCount, 2);
+    assert.deepEqual(pixelAt(byDivs.paths[0], 0, 0), RED);
+    assert.deepEqual(pixelAt(byDivs.paths[1], 0, 0), GREEN);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("committed slice+import must create an undo checkpoint", async () => {
+  const current = fixture();
+  try {
+    await current.service.call("xsxb_set_active_project", { project_id: "slice" });
+    const sheetPath = path.join(current.root, "sheet.png");
+    writeColorSheet(sheetPath, [RED, GREEN, BLUE, YELLOW]);
+    const revisionsBeforeStandalone = (await current.service.call("xsxb_list_revisions")).revisions.length;
+    const standalone = await current.service.callMcp("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 2,
+      dest: path.join(current.root, "standalone-cells"),
+      project_id: "slice",
+    });
+    assert.equal(standalone.data.frameCount, 4);
+    assert.equal(standalone.data.imported, undefined);
+    assert.equal(
+      (await current.service.call("xsxb_list_revisions")).revisions.length,
+      revisionsBeforeStandalone,
+      "standalone slice must not create a checkpoint",
+    );
+    const projectBefore = await current.service.call("xsxb_get_project", { project_id: "slice" });
+    const frameCountBefore = projectBefore.frameCount;
+    assert.equal(walkFrameCount(projectBefore), 0);
+    const revisionsBefore = (await current.service.call("xsxb_list_revisions")).revisions.length;
+    const sliced = await current.service.callMcp("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 2,
+      animation_id: "walk",
+      project_id: "slice",
+    });
+    assert.ok(sliced.data.imported, "imported");
+    assert.equal(sliced.data.imported.animationId, "walk");
+    assert.equal(sliced.data.imported.importedFrameCount, 4);
+    assert.equal(sliced.data.frameCount, 4);
+    assert.equal(walkFrameCount(await current.service.call("xsxb_get_project", { project_id: "slice" })), 4);
+    assert.ok(
+      (await current.service.call("xsxb_list_revisions")).revisions.length > revisionsBefore,
+      "committed slice+import must create an undo checkpoint",
+    );
+    const undone = await current.service.call("xsxb_undo", { dry_run: false });
+    assert.equal(undone.restored, true);
+    const restored = await current.service.call("xsxb_get_project", { project_id: "slice" });
+    assert.equal(walkFrameCount(restored), 0);
+    assert.equal(restored.frameCount, frameCountBefore);
+    assert.equal(
+      (restored.animations || []).some((entry) => entry.id === "walk"),
+      false,
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("slice_sheet forgets stale Godot imported ctex when dest is a Godot folder", async () => {
+  const current = fixture();
+  try {
+    const dest = path.join(current.root, "godot", "cells");
+    const sheetPath = path.join(current.root, "sheet.png");
+    writeColorSheet(sheetPath, [RED, GREEN, BLUE, YELLOW]);
+    const first = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 2,
+      dest,
+    });
+    assert.equal(first.frameCount, 4);
+    const sidecar = path.join(dest, "notes.txt");
+    fs.writeFileSync(sidecar, "keep me");
+    const imported = path.join(current.root, "godot", ".godot", "imported");
+    fs.mkdirSync(imported, { recursive: true });
+    fs.writeFileSync(path.join(dest, "2.png.import"), 'path="res://.godot/imported/cell_2.ctex"\n');
+    fs.writeFileSync(path.join(imported, "cell_2.ctex"), "stale-ctex-2");
+    fs.writeFileSync(path.join(imported, "cell_2.md5"), 'source_md5="deadbeef"\n');
+    fs.writeFileSync(path.join(dest, "0.png.import"), 'path="res://.godot/imported/cell_0.ctex"\n');
+    fs.writeFileSync(path.join(imported, "cell_0.ctex"), "stale-ctex-0");
+    const sliced = await current.service.call("xsxb_slice_sheet", {
+      file_path: sheetPath,
+      columns: 2,
+      rows: 1,
+      cell: 4,
+      dest,
+    });
+    assert.equal(sliced.frameCount, 2);
+    assert.equal(fs.existsSync(path.join(dest, "2.png")), false);
+    assert.equal(fs.existsSync(path.join(dest, "2.png.import")), false);
+    assert.equal(fs.existsSync(path.join(imported, "cell_2.ctex")), false);
+    assert.equal(fs.existsSync(path.join(imported, "cell_0.ctex")), false);
+    assert.ok(fs.existsSync(sidecar));
+    assert.equal(fs.readFileSync(sidecar, "utf8"), "keep me");
   } finally {
     current.cleanup();
   }

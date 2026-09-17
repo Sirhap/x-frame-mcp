@@ -43,6 +43,107 @@ function trimmedSpan(counts, fallbackMin, fallbackMax, trimRatio = 0.003) {
   return min <= max ? { min, max } : { min: fallbackMin, max: fallbackMax };
 }
 
+/**
+ * True when RGB is saturated slash gold, not brown hair or a white plate.
+ * @param {number} r Red.
+ * @param {number} g Green.
+ * @param {number} b Blue.
+ * @param {number} a Alpha.
+ * @returns {boolean} Crescent gold sample.
+ */
+function isCrescentGoldSample(r, g, b, a) {
+  if (a < 160) return false;
+  const sat = Math.max(r, g, b) - Math.min(r, g, b);
+  return r >= 220 && g >= 180 && b <= 180 && r - b >= 50 && g - b >= 20 && sat >= 40;
+}
+
+/**
+ * Finds 8-connected gold crescents large enough to be a slash arc.
+ * @param {Buffer} decoded Unfiltered PNG rows.
+ * @param {number} width Canvas width.
+ * @param {number} height Canvas height.
+ * @param {number} rowBytes Bytes per row.
+ * @param {number} pixelBytes Bytes per pixel.
+ * @param {number} sampleBytes Bytes per channel.
+ * @returns {Array<{count:number,minX:number,minY:number,maxX:number,maxY:number,width:number,height:number}>}
+ */
+function collectCrescentBlobs(decoded, width, height, rowBytes, pixelBytes, sampleBytes) {
+  if (pixelBytes < 3 * sampleBytes) return [];
+  const channel = (base, index) => {
+    const offset = base + index * sampleBytes;
+    return sampleBytes === 1 ? decoded[offset] : decoded.readUInt16BE(offset) / 257;
+  };
+  const goldAt = (x, y) => {
+    const base = y * rowBytes + x * pixelBytes;
+    const r = channel(base, 0);
+    const g = channel(base, 1);
+    const b = channel(base, 2);
+    const a = pixelBytes >= 4 * sampleBytes ? channel(base, 3) : 255;
+    return isCrescentGoldSample(r, g, b, a);
+  };
+  const seen = new Uint8Array(width * height);
+  const blobs = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const start = y * width + x;
+      if (seen[start] || !goldAt(x, y)) continue;
+      const stack = [start];
+      seen[start] = 1;
+      let count = 0;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      while (stack.length) {
+        const index = stack.pop();
+        const px = index % width;
+        const py = Math.floor(index / width);
+        count += 1;
+        minX = Math.min(minX, px);
+        minY = Math.min(minY, py);
+        maxX = Math.max(maxX, px);
+        maxY = Math.max(maxY, py);
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (!dx && !dy) continue;
+            const nx = px + dx;
+            const ny = py + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const next = ny * width + nx;
+            if (seen[next] || !goldAt(nx, ny)) continue;
+            seen[next] = 1;
+            stack.push(next);
+          }
+        }
+      }
+      if (count >= 80 && maxX - minX + 1 >= 20 && maxY - minY + 1 >= 8) {
+        blobs.push({
+          count,
+          minX,
+          minY,
+          maxX,
+          maxY,
+          width: maxX - minX + 1,
+          height: maxY - minY + 1,
+        });
+      }
+    }
+  }
+  return blobs.sort((left, right) => right.count - left.count);
+}
+
+/**
+ * Picks a gold blob that reaches past the body, not a belt spark on the torso.
+ * @param {Array<{minX:number,maxX:number}>|undefined} blobs Crescents.
+ * @param {{x:number,width:number}} body Dense body span.
+ * @returns {object|null} Reach crescent.
+ */
+function pickReachCrescent(blobs, body) {
+  const left = body.x;
+  const right = body.x + body.width;
+  return (blobs || []).find((blob) => blob.maxX >= right || blob.minX <= left) || null;
+}
+
 function denseColumnSpan(columns, minX, maxX) {
   let maxCount = 0;
   const smoothed = columns.map((value, index) => {
@@ -263,14 +364,19 @@ function opaqueBoundsForPng(filePath, cache = null) {
       bodyMaxY = Math.max(bodyMaxY, y);
     }
   }
-  const body = bodyMaxX >= bodyMinX && bodyMaxY >= bodyMinY
-    ? {
-        x: bodyMinX,
-        y: bodyMinY,
-        width: Math.max(1, bodyMaxX - bodyMinX + 1),
-        height: Math.max(1, bodyMaxY - bodyMinY + 1),
-      }
-    : null;
+  const body =
+    bodyMaxX >= bodyMinX && bodyMaxY >= bodyMinY
+      ? {
+          x: bodyMinX,
+          y: bodyMinY,
+          width: Math.max(1, bodyMaxX - bodyMinX + 1),
+          height: Math.max(1, bodyMaxY - bodyMinY + 1),
+        }
+      : null;
+  const crescents =
+    png.colorType === 6
+      ? collectCrescentBlobs(decoded, png.width, png.height, rowBytes, pixelBytes, sampleBytes)
+      : [];
   const bounds = {
     x: xSpan.min,
     y: ySpan.min,
@@ -278,7 +384,10 @@ function opaqueBoundsForPng(filePath, cache = null) {
     height: Math.max(1, ySpan.max - ySpan.min + 1),
     canvasWidth: png.width,
     canvasHeight: png.height,
+    subjectMinY: minY,
+    subjectMaxY: maxY,
     body,
+    crescents,
   };
   if (hasCache) cache.set(cacheKey, bounds);
   return bounds;
@@ -286,8 +395,12 @@ function opaqueBoundsForPng(filePath, cache = null) {
 
 function animationLooksAttack(animationId, animationName = "") {
   const text = `${animationId} ${animationName}`.toLowerCase();
-  if (/(^|[\s_-])(attack|atk|slash|strike|shoot|shot|fire|skill|cast|stab|punch|kick|bite|claw|parry|counter)(?=$|[\s_-]|\d)/.test(text)
-    || /(攻击|攻擊|斩|斬|劈|刺|射击|射擊|技能|格挡|格擋|招架|反击|反擊|砍)/.test(text)) {
+  if (
+    /(^|[\s_-])(attack|atk|slash|strike|shoot|shot|fire|skill|cast|stab|punch|kick|bite|claw|parry|counter)(?=$|[\s_-]|\d)/.test(
+      text,
+    ) ||
+    /(攻击|攻擊|斩|斬|劈|刺|射击|射擊|技能|格挡|格擋|招架|反击|反擊|砍)/.test(text)
+  ) {
     return true;
   }
   return false;
@@ -370,15 +483,18 @@ function estimateFrameBoxes(filePath, options = {}) {
   });
   const body = bounds.body || bounds;
   const attackLike = animationLooksAttack(options.animationId, options.animationName);
-  const centerX = (body.x + body.width * (attackLike ? 0.62 : 0.5)) - anchor.x;
-  const centerY = body.y + body.height / 2 - anchor.y;
+  const subjectTop = Number.isFinite(bounds.subjectMinY) ? bounds.subjectMinY : Math.min(body.y, bounds.y);
+  const hurtTop = Math.min(subjectTop, body.y);
+  const hurtBottom = body.y + body.height * 0.91;
+  const centerX = body.x + body.width * (attackLike ? 0.62 : 0.5) - anchor.x;
   const hurtWidth = clamp(body.width * (attackLike ? 0.88 : 0.78), 8, body.width);
-  const hurtHeight = clamp(body.height * 0.82, 8, body.height);
+  const hurtHeight = clamp(hurtBottom - hurtTop, 8, Math.max(8, body.y + body.height - hurtTop));
+  const hurtCenterY = hurtTop + hurtHeight / 2 - anchor.y;
   const collisionWidth = clamp(body.width * 0.42, 6, body.width);
   const collisionHeight = clamp(body.height * 0.72, 6, body.height);
   const boxes = {
     hurtbox: normalizeBox("hurtbox", {
-      offset: { x: centerX, y: centerY },
+      offset: { x: centerX, y: hurtCenterY },
       size: { x: hurtWidth, y: hurtHeight },
       rotation: 0,
       enabled: true,
@@ -391,28 +507,33 @@ function estimateFrameBoxes(filePath, options = {}) {
     }),
   };
   if (attackLike) {
-    const bodyLeft = body.x;
-    const bodyRight = body.x + body.width;
-    const fullLeft = bounds.x;
-    const fullRight = bounds.x + bounds.width;
-    const leftReach = Math.max(0, bodyLeft - fullLeft);
-    const rightReach = Math.max(0, fullRight - bodyRight);
-    const direction = rightReach >= leftReach ? 1 : -1;
-    const reachStart = direction > 0 ? bodyRight - body.width * 0.05 : fullLeft;
-    const reachEnd = direction > 0 ? fullRight : bodyLeft + body.width * 0.05;
-    const reachWidth = Math.max(8, Math.abs(reachEnd - reachStart));
-    const hitWidth = clamp(reachWidth * 0.78, 8, bounds.width);
-    const hitHeight = clamp(body.height * 0.22, 6, body.height);
-    const hitCenterX = ((reachStart + reachEnd) / 2) - anchor.x;
-    boxes.hitbox = normalizeBox("hitbox", {
-      offset: {
-        x: hitCenterX,
-        y: centerY - hurtHeight * 0.1,
-      },
-      size: { x: hitWidth, y: hitHeight },
-      rotation: 0,
-      enabled: hitboxEnabledByDefault(options.frameIndex || 0, options.frameCount || 1, options.animationId, options.animationName),
-    });
+    const crescent = pickReachCrescent(bounds.crescents, body);
+    if (crescent) {
+      const pad = 3;
+      const minX = crescent.minX - pad;
+      const maxX = crescent.maxX + pad;
+      const minY = crescent.minY - pad;
+      const maxY = crescent.maxY + pad;
+      boxes.hitbox = normalizeBox("hitbox", {
+        offset: {
+          x: (minX + maxX) / 2 - anchor.x,
+          y: (minY + maxY) / 2 - anchor.y,
+        },
+        size: {
+          x: Math.max(8, maxX - minX + 1),
+          y: Math.max(8, maxY - minY + 1),
+        },
+        rotation: 0,
+        enabled: true,
+      });
+    } else {
+      boxes.hitbox = normalizeBox("hitbox", {
+        offset: { x: 0, y: hurtCenterY },
+        size: { x: 8, y: 8 },
+        rotation: 0,
+        enabled: false,
+      });
+    }
   }
   return boxes;
 }
@@ -422,9 +543,10 @@ function frameBoxKey(profileId, animationId, frameIndex) {
 }
 
 function clearAnimationBoxOverrides(tuning, profileId, animationId) {
-  tuning.frame_box_overrides = tuning.frame_box_overrides && typeof tuning.frame_box_overrides === "object"
-    ? tuning.frame_box_overrides
-    : {};
+  tuning.frame_box_overrides =
+    tuning.frame_box_overrides && typeof tuning.frame_box_overrides === "object"
+      ? tuning.frame_box_overrides
+      : {};
   const prefix = `${profileId}/${animationId}:`;
   for (const key of Object.keys(tuning.frame_box_overrides)) {
     if (key.startsWith(prefix)) delete tuning.frame_box_overrides[key];
@@ -432,9 +554,10 @@ function clearAnimationBoxOverrides(tuning, profileId, animationId) {
 }
 
 function upsertEstimatedFrameBoxes(tuning, profileId, animation, frameFiles, options = {}) {
-  tuning.frame_box_overrides = tuning.frame_box_overrides && typeof tuning.frame_box_overrides === "object"
-    ? tuning.frame_box_overrides
-    : {};
+  tuning.frame_box_overrides =
+    tuning.frame_box_overrides && typeof tuning.frame_box_overrides === "object"
+      ? tuning.frame_box_overrides
+      : {};
   if (options.replace) clearAnimationBoxOverrides(tuning, profileId, animation.id);
   const boundsCache = createOpaqueBoundsCache();
   const groupCanvas = groupCanvasForFrameFiles(frameFiles, boundsCache);

@@ -8,6 +8,7 @@ const test = require("node:test");
 const { createProjectStore } = require("../project_store");
 const { createTestWav, createXsxbMcpService } = require("../xsxb_mcp_service");
 const { encodePngRgba } = require("../xsxb_mcp_cutout");
+const { handleMessage } = require("../xsxb_mcp_server");
 
 /**
  * Builds a 16x16 transparent PNG with one opaque body block.
@@ -64,6 +65,28 @@ async function importedFixture() {
     animation_id: "walk",
   });
   return current;
+}
+
+/**
+ * Calls one MCP tool through JSON-RPC `tools/call` and returns receipt data.
+ * @param {object} service XSXB service.
+ * @param {string} name Tool name.
+ * @param {object} [args] Tool arguments.
+ * @returns {Promise<object>} `structuredContent.data`.
+ */
+async function callTool(service, name, args = {}) {
+  const response = await handleMessage(
+    {
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/call",
+      params: { name, arguments: args },
+    },
+    service,
+  );
+  const receipt = response.result.structuredContent;
+  assert.equal(receipt.ok, true, receipt.error?.message || JSON.stringify(receipt));
+  return receipt.data;
 }
 
 test("get_animation include reads back boxes, timing, sfx, attachments, and trails", async () => {
@@ -343,6 +366,595 @@ test("add_attack_trail keeps stick layer and reverseDirection and spans the swin
       trail.segment.beforeStopChaseMultiplier > 0.08 && trail.segment.beforeStopChaseMultiplier < 0.3,
     );
     assert.equal(trail.note, null);
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("remove_binding unlinks unreferenced workspace sfx and attachment copies", async () => {
+  const current = await importedFixture();
+  try {
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 0,
+      id: "glow",
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "workspace sfx copy exists before remove");
+    assert.equal(fs.existsSync(attachmentAbs), true, "workspace attachment copy exists before remove");
+
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "walk",
+      kind: "sfx",
+      id: "hit-sound",
+      dry_run: false,
+    });
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "walk",
+      kind: "attachment",
+      id: "glow",
+      dry_run: false,
+    });
+
+    const walk = await current.service.call("xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["sfx", "attachments"],
+    });
+    assert.equal(walk.sfx.length, 0, "walk sfx binding is gone");
+    assert.equal(walk.attachments.length, 0, "walk attachment binding is gone");
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash file stays while idle still references it");
+
+    const idle = await current.service.call("xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idle.sfx.length, 1, "idle sfx binding remains");
+
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "sfx",
+      id: "hit-sound",
+      dry_run: false,
+    });
+    const idleAfter = await current.service.call("xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idleAfter.sfx.length, 0, "idle sfx binding is gone");
+    assert.equal(fs.existsSync(sfxAbs), false, "sfx workspace copy unlinks after last binding");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("delete_animation unlinks unreferenced workspace sfx and attachment copies", async () => {
+  const current = await importedFixture();
+  try {
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 0,
+      id: "glow",
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "workspace sfx copy exists before delete");
+    assert.equal(fs.existsSync(attachmentAbs), true, "workspace attachment copy exists before delete");
+
+    const removed = await callTool(current.service, "xsxb_delete_animation", {
+      animation_id: "walk",
+      dry_run: false,
+    });
+    assert.equal(removed.deleted, true);
+    await assert.rejects(
+      () => current.service.call("xsxb_get_animation", { animation_id: "walk" }),
+      /not found/i,
+    );
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash file stays while idle still references it");
+
+    const removedIdle = await callTool(current.service, "xsxb_delete_animation", {
+      animation_id: "idle",
+      dry_run: false,
+    });
+    assert.equal(removedIdle.deleted, true);
+    assert.equal(fs.existsSync(sfxAbs), false, "sfx workspace copy unlinks after last binding");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("add_attachment rebind unlinks leftover workspace hash png", async () => {
+  const current = await importedFixture();
+  try {
+    const glowA = path.join(current.root, "glow-a.png");
+    fs.writeFileSync(glowA, bodyFrame(1));
+    const walkFirst = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: glowA,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    const oldRel = walkFirst.binding.path;
+    const oldAbs = path.resolve(current.root, oldRel);
+    assert.equal(fs.existsSync(oldAbs), true, "first glow hash png exists");
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleFirst = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: glowA,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    assert.equal(path.basename(idleFirst.binding.path), path.basename(oldRel), "shared hash must stay");
+    assert.equal(fs.existsSync(oldAbs), true, "walk hash png stays after idle bind");
+
+    const glowB = path.join(current.root, "glow-b.png");
+    fs.writeFileSync(glowB, bodyFrame(3));
+    const walkRebound = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: glowB,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    assert.notEqual(walkRebound.binding.path, oldRel, "walk binding.path must change");
+    const walkNewAbs = path.resolve(current.root, walkRebound.binding.path);
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file exists");
+    assert.equal(fs.existsSync(oldAbs), true, "old hash stays while idle still references it");
+
+    const idleRebound = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "idle",
+      file_path: glowB,
+      frame: 0,
+      id: "glow",
+      sync: false,
+    });
+    assert.equal(fs.existsSync(oldAbs), false, "old hash unlinks after last rebind");
+    assert.equal(
+      path.basename(idleRebound.binding.path),
+      path.basename(walkRebound.binding.path),
+      "idle and walk now point at the new hash",
+    );
+    assert.equal(
+      fs.existsSync(path.resolve(current.root, idleRebound.binding.path)),
+      true,
+      "new idle hash file exists",
+    );
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file still exists");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("add_sfx rebind unlinks leftover workspace hash wav", async () => {
+  const current = await importedFixture();
+  try {
+    const hitA = path.join(current.root, "hit-a.wav");
+    fs.writeFileSync(hitA, createTestWav());
+    const walkFirst = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: hitA,
+      frame: 1,
+      id: "hit-sound",
+      sync: false,
+    });
+    const oldRel = walkFirst.binding.path;
+    const oldAbs = path.resolve(current.root, oldRel);
+    assert.equal(fs.existsSync(oldAbs), true, "first hit hash wav exists");
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleFirst = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hitA,
+      frame: 0,
+      id: "hit-sound",
+      sync: false,
+    });
+    assert.equal(idleFirst.binding.path, oldRel, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(oldAbs), true, "walk hash wav stays after idle bind");
+
+    const hitB = path.join(current.root, "hit-b.wav");
+    fs.writeFileSync(hitB, createTestWav({ frequency: 880 }));
+    const walkRebound = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: hitB,
+      frame: 1,
+      id: "hit-sound",
+      sync: false,
+    });
+    assert.notEqual(walkRebound.binding.path, oldRel, "walk binding.path must change");
+    const walkNewAbs = path.resolve(current.root, walkRebound.binding.path);
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file exists");
+    assert.equal(fs.existsSync(oldAbs), true, "old hash stays while idle still references it");
+
+    const idleRebound = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: hitB,
+      frame: 0,
+      id: "hit-sound",
+      sync: false,
+    });
+    assert.equal(fs.existsSync(oldAbs), false, "old hash unlinks after last rebind");
+    assert.equal(
+      idleRebound.binding.path,
+      walkRebound.binding.path,
+      "idle and walk now point at the new hash",
+    );
+    assert.equal(
+      fs.existsSync(path.resolve(current.root, idleRebound.binding.path)),
+      true,
+      "new idle hash file exists",
+    );
+    assert.equal(fs.existsSync(walkNewAbs), true, "new walk hash file still exists");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("add_attack_trail rebind unlinks leftover workspace texture png", async () => {
+  const current = await importedFixture();
+  try {
+    const trailA = path.join(current.root, "trail-a.png");
+    const trailB = path.join(current.root, "trail-b.png");
+    fs.writeFileSync(trailA, bodyFrame(1));
+    fs.writeFileSync(trailB, bodyFrame(3));
+    const sticks = [
+      { frame: 0, top: { x: -10, y: -40 }, bottom: { x: 10, y: -8 } },
+      { frame: 1, top: { x: 40, y: -12 }, bottom: { x: 8, y: -6 } },
+    ];
+    const slash = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailA,
+      sticks,
+      sync: false,
+    });
+    const oldRel = slash.segment.texture.path;
+    const oldAbs = path.resolve(current.root, oldRel);
+    assert.equal(fs.existsSync(oldAbs), true, "first slash workspace texture exists");
+    assert.match(oldRel, /[/\\]attack_trails[/\\]/);
+    assert.ok(!oldRel.includes("presets"), "must not be the preset texture");
+    assert.match(path.basename(oldRel), /^[0-9a-f]{64}\.png$/);
+
+    const glow = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "glow",
+      texture_path: trailA,
+      sticks,
+      sync: false,
+    });
+    assert.equal(glow.segment.texture.path, slash.segment.texture.path, "same dest");
+    assert.equal(fs.existsSync(oldAbs), true, "old dest stays after glow bind");
+
+    const slashRebound = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailB,
+      sticks,
+      sync: false,
+    });
+    assert.notEqual(slashRebound.segment.texture.path, oldRel, "slash path must change");
+    const newAbs = path.resolve(current.root, slashRebound.segment.texture.path);
+    assert.equal(fs.existsSync(newAbs), true, "new slash hash file exists");
+    assert.equal(fs.existsSync(oldAbs), true, "old hash stays while glow still references it");
+
+    const glowRebound = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "glow",
+      texture_path: trailB,
+      sticks,
+      sync: false,
+    });
+    assert.equal(fs.existsSync(oldAbs), false, "old hash unlinks after last rebind");
+    assert.equal(
+      glowRebound.segment.texture.path,
+      slashRebound.segment.texture.path,
+      "both point at new hash file",
+    );
+    assert.equal(
+      fs.existsSync(path.resolve(current.root, glowRebound.segment.texture.path)),
+      true,
+      "new hash file exists",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("replace import unlinks leftover workspace binding copies", async () => {
+  const current = await importedFixture();
+  try {
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 0,
+      id: "glow",
+    });
+
+    const trailA = path.join(current.root, "trail-a.png");
+    fs.writeFileSync(trailA, bodyFrame(3));
+    const slash = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailA,
+      sticks: [
+        { frame: 0, top: { x: -10, y: -40 }, bottom: { x: 10, y: -8 } },
+        { frame: 1, top: { x: 40, y: -12 }, bottom: { x: 8, y: -6 } },
+      ],
+      sync: false,
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    const trailAbs = path.resolve(current.root, slash.segment.texture.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash exists before replace");
+    assert.equal(fs.existsSync(attachmentAbs), true, "attachment hash exists before replace");
+    assert.equal(fs.existsSync(trailAbs), true, "trail texture exists before replace");
+    assert.match(slash.segment.texture.path, /[/\\]attack_trails[/\\]/);
+    assert.ok(!slash.segment.texture.path.includes("presets"), "trail path under attack_trails, not presets");
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "walk",
+      replace: true,
+      sync: false,
+    });
+
+    const walk = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["sfx", "attachments", "trails"],
+    });
+    assert.equal(walk.sfx.length, 0, "walk sfx stripped");
+    assert.equal(walk.attachments.length, 0, "walk attachments stripped");
+    assert.equal(
+      !walk.trails?.length || !walk.trails.some((trail) => trail.id === "slash"),
+      true,
+      "walk slash trail stripped",
+    );
+
+    const idle = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idle.sfx.length, 1, "idle sfx remains");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash stays while idle refs it");
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+    assert.equal(fs.existsSync(trailAbs), false, "unreferenced trail workspace copy must be unlinked");
+
+    await callTool(current.service, "xsxb_remove_binding", {
+      animation_id: "idle",
+      kind: "sfx",
+      id: "hit-sound",
+      dry_run: false,
+    });
+    assert.equal(fs.existsSync(sfxAbs), false, "sfx workspace copy unlinks after last binding");
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("reorganize drop-frame unlinks leftover workspace binding copies", async () => {
+  const current = await importedFixture();
+  try {
+    const wavPath = path.join(current.root, "hit.wav");
+    fs.writeFileSync(wavPath, createTestWav());
+    const walkSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "walk",
+      file_path: wavPath,
+      frame: 1,
+      id: "hit-sound",
+    });
+
+    await callTool(current.service, "xsxb_import_animation", {
+      source: "png_sequence",
+      directory: current.sequenceDir,
+      project_id: "bind-test",
+      animation_id: "idle",
+    });
+    const idleSfx = await callTool(current.service, "xsxb_add_sfx", {
+      animation_id: "idle",
+      file_path: wavPath,
+      frame: 0,
+      id: "hit-sound",
+    });
+
+    const attachmentPath = path.join(current.root, "glow.png");
+    fs.writeFileSync(attachmentPath, bodyFrame(1));
+    const walkAttachment = await callTool(current.service, "xsxb_add_attachment", {
+      animation_id: "walk",
+      file_path: attachmentPath,
+      frame: 1,
+      id: "glow",
+    });
+
+    const sfxAbs = path.resolve(current.root, walkSfx.binding.path);
+    const idleSfxAbs = path.resolve(current.root, idleSfx.binding.path);
+    const attachmentAbs = path.resolve(current.root, walkAttachment.binding.path);
+    assert.equal(sfxAbs, idleSfxAbs, "same wav bytes share one workspace hash file");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash exists before reorganize");
+    assert.equal(fs.existsSync(attachmentAbs), true, "attachment hash exists before reorganize");
+
+    const observed = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    await callTool(current.service, "xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0],
+      basis_snapshot_id: observed.observation.snapshotId,
+      sync: false,
+    });
+
+    const walk = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["sfx", "attachments"],
+    });
+    assert.equal(
+      !walk.attachments?.length || !walk.attachments.some((attachment) => attachment.id === "glow"),
+      true,
+      "walk glow attachment dropped with frame 1",
+    );
+    assert.equal(walk.sfx.length, 0, "walk sfx empty after dropping frame 1");
+
+    const idle = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "idle",
+      include: ["sfx"],
+    });
+    assert.equal(idle.sfx.length, 1, "idle sfx remains");
+    assert.equal(fs.existsSync(sfxAbs), true, "shared sfx hash stays while idle refs it");
+    assert.equal(
+      fs.existsSync(attachmentAbs),
+      false,
+      "unreferenced attachment workspace copy must be unlinked",
+    );
+  } finally {
+    current.cleanup();
+  }
+});
+
+test("reorganize drop-frame removes empty trail segment and texture", async () => {
+  const current = await importedFixture();
+  try {
+    const trailA = path.join(current.root, "trail-a.png");
+    fs.writeFileSync(trailA, bodyFrame(3));
+    const slash = await callTool(current.service, "xsxb_add_attack_trail", {
+      animation_id: "walk",
+      id: "slash",
+      texture_path: trailA,
+      sticks: [
+        { frame: 1, top: { x: -10, y: -40 }, bottom: { x: 10, y: -8 } },
+        { frame: 1, top: { x: 40, y: -12 }, bottom: { x: 8, y: -6 } },
+      ],
+      sync: false,
+    });
+    const trailAbs = path.resolve(current.root, slash.segment.texture.path);
+    assert.equal(fs.existsSync(trailAbs), true, "trail texture exists before reorganize");
+    assert.match(slash.segment.texture.path, /[/\\]attack_trails[/\\]/);
+    assert.ok(!slash.segment.texture.path.includes("presets"), "trail path under attack_trails, not presets");
+
+    const observed = await current.service.callMcp("xsxb_get_animation", { animation_id: "walk" });
+    await callTool(current.service, "xsxb_reorganize_frames", {
+      animation_id: "walk",
+      order: [0],
+      basis_snapshot_id: observed.observation.snapshotId,
+      sync: false,
+    });
+
+    const walk = await callTool(current.service, "xsxb_get_animation", {
+      animation_id: "walk",
+      include: ["trails"],
+    });
+    assert.equal(
+      !walk.trails?.length || !walk.trails.some((trail) => trail.id === "slash"),
+      true,
+      "walk slash trail dropped with frame 1",
+    );
+    assert.equal(fs.existsSync(trailAbs), false, "unreferenced trail workspace copy must be unlinked");
   } finally {
     current.cleanup();
   }

@@ -31,6 +31,33 @@ function safeResolve(base, requested) {
 }
 
 /**
+ * Unlinks one workspace copy when no remaining binding still points at it,
+ * then removes empty ancestor directories down to the workspace root.
+ * @param {string} requested Stored relative or absolute path.
+ * @param {string} allowedRoot Directory the file must remain inside.
+ * @param {Set<string>} retained Resolved paths still referenced.
+ * @param {string} root MCP host root.
+ * @param {string} workspaceDir Project workspace directory (empty-parent stop).
+ * @returns {void}
+ */
+function unlinkUnreferencedWorkspaceCopy(requested, allowedRoot, retained, root, workspaceDir) {
+  const resolved = safeResolve(root, requested);
+  if (!resolved || !resolved.startsWith(`${allowedRoot}${path.sep}`) || retained.has(resolved)) {
+    return;
+  }
+  fs.rmSync(resolved, { force: true });
+  let directory = path.dirname(resolved);
+  while (directory.startsWith(`${workspaceDir}${path.sep}`)) {
+    try {
+      fs.rmdirSync(directory);
+    } catch {
+      break;
+    }
+    directory = path.dirname(directory);
+  }
+}
+
+/**
  * Removes dictionary entries owned by one animation.
  * @param {object} dictionary Indexed override dictionary.
  * @param {string} prefix Animation key prefix.
@@ -229,15 +256,25 @@ function deleteAnimation(options) {
   if (!profile.animations.length) {
     tuning.values = withoutAnimationKeys(tuning.values, `profiles.${profileId}.character.`);
   }
-  const nextAudio = normalizeBindings(audioBindings).filter(
+  const previousAudio = normalizeBindings(audioBindings);
+  const previousAttachments = normalizeBindings(imageAttachments);
+  const previousAssets = normalizeBindings(attachmentAssets);
+  const nextAudio = previousAudio.filter(
     (binding) => !ownedAnimationKeys.some((key) => bindingBelongsToAnimation(binding, key)),
   );
-  const nextAttachments = normalizeBindings(imageAttachments).filter(
+  const nextAttachments = previousAttachments.filter(
     (binding) => !ownedAnimationKeys.some((key) => bindingBelongsToAnimation(binding, key)),
   );
-  const nextAssets = normalizeBindings(attachmentAssets).filter(
-    (asset) => !animationKeys.has(String(asset.groupKey || "")),
-  );
+  const nextAssets = previousAssets.filter((asset) => !animationKeys.has(String(asset.groupKey || "")));
+  const removedAudioPaths = previousAudio
+    .filter((binding) => !nextAudio.includes(binding))
+    .map((binding) => String(binding.path || ""));
+  const removedAttachmentPaths = previousAttachments
+    .filter((binding) => !nextAttachments.includes(binding))
+    .map((binding) => String(binding.path || ""));
+  const removedAssetPaths = previousAssets
+    .filter((asset) => !nextAssets.includes(asset))
+    .map((asset) => String(asset.path || ""));
 
   projectStore.writeJson(paths.manifest, manifest);
   projectStore.writeJson(paths.tuning, tuning);
@@ -258,6 +295,34 @@ function deleteAnimation(options) {
       .map((segment) => safeResolve(root, segment?.texture?.path || ""))
       .filter(Boolean),
   );
+  const retainedWorkspaceCopyPaths = new Set(
+    [...nextAudio, ...nextAttachments, ...nextAssets]
+      .map((entry) => safeResolve(root, entry?.path || ""))
+      .filter(Boolean),
+  );
+  const audioWorkspaceRoot = path.join(workspaceDir, "audio");
+  const attachmentsWorkspaceRoot = path.join(workspaceDir, "attachments");
+  for (const copyPath of removedAudioPaths) {
+    unlinkUnreferencedWorkspaceCopy(
+      copyPath,
+      audioWorkspaceRoot,
+      retainedWorkspaceCopyPaths,
+      root,
+      workspaceDir,
+    );
+  }
+  for (const copyPath of removedAttachmentPaths) {
+    unlinkUnreferencedWorkspaceCopy(
+      copyPath,
+      attachmentsWorkspaceRoot,
+      retainedWorkspaceCopyPaths,
+      root,
+      workspaceDir,
+    );
+  }
+  for (const copyPath of removedAssetPaths) {
+    unlinkUnreferencedWorkspaceCopy(copyPath, workspaceDir, retainedWorkspaceCopyPaths, root, workspaceDir);
+  }
   const attackTrailWorkspaceRoot = path.join(workspaceDir, "attack_trails");
   for (const texturePath of removedAttackTrailTexturePaths) {
     const resolvedTexturePath = safeResolve(root, texturePath);
@@ -303,6 +368,8 @@ module.exports = {
   bindingBelongsToAnimation,
   deleteAnimation,
   normalizeBindings,
+  safeResolve,
   stripAnimationOwnedData,
+  unlinkUnreferencedWorkspaceCopy,
   withoutAnimationKeys,
 };

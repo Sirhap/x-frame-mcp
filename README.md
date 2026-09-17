@@ -57,7 +57,7 @@ Without `XSXB_ROOT`, authoring files go in the current working directory’s `.x
 
 Reload the `x-frame` MCP server after pulling. Confirm with `xsxb_list_projects`.
 
-See [`mcp/README.md`](mcp/README.md) for the tool playbook.
+See [`mcp/README.md`](mcp/README.md) for the tool playbook. Agent playbooks are `skills/x-frame-import`, `skills/x-frame-cutout`, `skills/x-frame-gameplay`, and `skills/x-frame-godot`. Godot editor actions stay in a separate editor MCP; this server only authors frames and gates the handoff.
 
 ## Commands
 
@@ -71,6 +71,7 @@ npm run mcp:perception:doctor
 ```
 
 `npm test` and `npm run check` discover the same `tools/tests/**/*.test.js` files.
+`npm run acceptance:playbooks` drives JSON-RPC `tools/call` with 32×32 plate-and-subject PNGs and decodes the written preview/evidence files.
 Syntax checks visit every JavaScript and Python file under `mcp/` and `tools/`; vendored algorithms retain their upstream formatting. The legacy `check:mcp` and `check:mcp-v2` commands both run the complete check.
 
 The usability audit (`node mcp/xsxb_mcp_tool_usability.js`) exercises public JSON-RPC `tools/call` receipts, including explicit snapshot/overlay flows. GIF encoding is stubbed and identified in the audit report.
@@ -86,7 +87,8 @@ See [authoring tools](mcp/authoring/README.md) for checkpoints/undo, animation c
 | `mcp/`                     | Server, tools, vendored algorithms        |
 | `tools/xsxb_mcp_*.js`      | Compatibility shims (`require` → `mcp/`)  |
 | `tools/tests/`             | MCP tests                                 |
-| `skills/xsxb-frame-tuner/` | Agent skill copied for the same playbooks |
+| `skills/xsxb-frame-tuner/` | Router skill; points at the four playbooks |
+| `skills/x-frame-*`         | Import, cutout, gameplay, Godot playbooks |
 
 ## License
 

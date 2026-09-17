@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { PassThrough } = require("node:stream");
 const test = require("node:test");
 const { handleMessage, startServer, INSTRUCTIONS } = require("../../mcp/xsxb_mcp_server");
@@ -38,6 +40,13 @@ test("initialize instructions are self-contained and do not advertise missing me
   const initialized = await handleMessage(request(1, "initialize"), service);
   assert.deepEqual(initialized.result.capabilities, { tools: { listChanged: false } });
   assert.ok(INSTRUCTIONS.length < 2000, "initialize must not embed full playbooks");
+  assert.doesNotMatch(
+    INSTRUCTIONS,
+    /Register\/plant\/estimate\/compress preview/,
+    "estimate_boxes commits when dry_run is omitted; do not list it with preview-until-apply tools",
+  );
+  assert.match(INSTRUCTIONS, /Register\/plant\/compress preview until apply or dry_run:false/);
+  assert.match(INSTRUCTIONS, /suggestedGameFps/);
   assert.doesNotMatch(INSTRUCTIONS, /prompts\/(list|get)|resources\/(list|read)/);
   assert.match(INSTRUCTIONS, /xsxb_measure_frames/);
   assert.match(INSTRUCTIONS, /xsxb_get_animation/);
@@ -45,6 +54,13 @@ test("initialize instructions are self-contained and do not advertise missing me
   assert.match(INSTRUCTIONS, /xsxb_plan_place/);
   assert.match(INSTRUCTIONS, /xsxb_plan_smear/);
   assert.match(INSTRUCTIONS, /dry_run:false/);
+  assert.match(INSTRUCTIONS, /xsxb_diff_frames/);
+  assert.match(INSTRUCTIONS, /xsxb_validate_for_godot/);
+  assert.match(INSTRUCTIONS, /skills\/x-frame/);
+  assert.match(INSTRUCTIONS, /qa=warn/);
+  const importSkill = fs.readFileSync(path.join(__dirname, "../../skills/x-frame-import/SKILL.md"), "utf8");
+  assert.match(importSkill, /suggestedGameFps/);
+  assert.match(importSkill, /export_gif/);
   assert.equal((await handleMessage(request(2, "prompts/list"), service)).error.code, -32601);
   assert.equal(
     (await handleMessage(request(3, "resources/read", { uri: "xsxb://docs/session" }), service)).error.code,

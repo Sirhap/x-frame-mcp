@@ -3,7 +3,40 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { estimateFrameBoxes, upsertEstimatedFrameBoxes } = require("./box_estimator");
 const { ensureInitialCharacterScale } = require("./import_scale");
-const { stripAnimationOwnedData } = require("./animation_mutations");
+const {
+  normalizeBindings,
+  safeResolve: resolveWorkspaceCopy,
+  stripAnimationOwnedData,
+  unlinkUnreferencedWorkspaceCopy,
+} = require("./animation_mutations");
+const { findGodotProjectRoot, forgetGodotImportCache } = require("./godot_sync");
+
+const ANIMATION_TYPES = Object.freeze(["actor", "boss", "vfx", "prop", "scene_prop_attachment"]);
+
+/**
+ * Normalizes a stored clip type. Invalid values fail instead of becoming actor.
+ * @param {unknown} value Requested type.
+ * @returns {string} One of ANIMATION_TYPES.
+ */
+function resolveAnimationType(value) {
+  const requested = String(value || "actor");
+  if (!ANIMATION_TYPES.includes(requested)) {
+    throw new Error(`animation_type must be one of: ${ANIMATION_TYPES.join(", ")}`);
+  }
+  return requested;
+}
+
+/**
+ * Resolves clip type for import. Replace omit keeps the stored type; first-import omit is actor.
+ * Empty string counts as omitted so it does not wipe a stored vfx/prop type.
+ * @param {unknown} requested Raw animation_type / animationType.
+ * @param {unknown} [existingType] Stored type used when requested is omitted on replace.
+ * @returns {string} One of ANIMATION_TYPES.
+ */
+function resolveImportedAnimationType(requested, existingType) {
+  const omitted = requested === undefined || requested === null || requested === "";
+  return resolveAnimationType(omitted ? (existingType ?? requested) : requested);
+}
 
 /**
  * Deep-clones JSON-compatible project data.
@@ -48,6 +81,63 @@ function storedImportPath(root, absolutePath) {
     return reslash(relative);
   }
   return reslash(resolved);
+}
+
+/**
+ * Resolves absolute PNG paths previously owned by one animation.
+ * Empty stored paths are skipped.
+ * @param {string} root XSXB root.
+ * @param {object|null|undefined} animation Manifest animation.
+ * @returns {string[]} Absolute owned frame paths.
+ */
+function ownedAnimationFramePaths(root, animation) {
+  const frames = Array.isArray(animation?.frames) ? animation.frames : [];
+  const result = [];
+  for (const frame of frames) {
+    const raw = String(frame?.path || "").trim();
+    if (!raw) continue;
+    result.push(path.resolve(root, raw));
+  }
+  return result;
+}
+
+/**
+ * Unlinks previously owned in-place frame files that the replacement clip no longer
+ * references. Skips missing paths and workspace copies (those swap via backup/rename).
+ * Forgets Godot `.ctex` / `.md5` cache and unlinks sibling `.import` / `.uid` sidecars
+ * for each dropped numbered PNG.
+ * @param {string[]} previousPaths Absolute paths owned by the old animation.
+ * @param {Iterable<string>} keptPaths Absolute paths still referenced by the new frames.
+ * @param {string} workspaceTargetDir Workspace asset directory that must not be deleted here.
+ * @returns {void}
+ */
+function unlinkUnreferencedInPlaceFrames(previousPaths, keptPaths, workspaceTargetDir) {
+  const kept = new Set(
+    Array.from(keptPaths || [])
+      .filter(Boolean)
+      .map((filePath) => path.resolve(filePath)),
+  );
+  const workspace = path.resolve(workspaceTargetDir);
+  for (const raw of previousPaths || []) {
+    const absolute = path.resolve(raw);
+    if (kept.has(absolute)) continue;
+    if (absolute === workspace || absolute.startsWith(`${workspace}${path.sep}`)) continue;
+    try {
+      if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) continue;
+      const godotRoot = findGodotProjectRoot(path.dirname(absolute));
+      if (godotRoot) forgetGodotImportCache(godotRoot, absolute);
+      for (const sidecar of [`${absolute}.import`, `${absolute}.uid`]) {
+        try {
+          if (fs.existsSync(sidecar) && fs.statSync(sidecar).isFile()) fs.unlinkSync(sidecar);
+        } catch {
+          // Missing or already gone — skip.
+        }
+      }
+      fs.unlinkSync(absolute);
+    } catch {
+      // Missing or already gone — skip.
+    }
+  }
 }
 
 /**
@@ -230,6 +320,7 @@ function normalizedTrailFramePhase(value) {
 
 /**
  * Remaps attack-trail sticks to the replacement frame order.
+ * Drops segments whose sticks all lived on omitted frames, except empty presetOnly placeholders.
  * @param {object} source Attack-trail document.
  * @param {string} animationKey Stable profile/animation key.
  * @param {Array<{sourceIndex:number|null}>} items New frame plan.
@@ -245,28 +336,30 @@ function remapAttackTrails(source, animationKey, items) {
     if (!frameMap.has(item.sourceIndex)) frameMap.set(item.sourceIndex, []);
     frameMap.get(item.sourceIndex).push(nextIndex);
   });
-  result.bindings[animationKey] = result.bindings[animationKey].map((segment) => {
-    const sticks = Array.from(segment?.sticks || [])
-      .flatMap((stick, sourceIndex) => {
-        const savedOrder = Number(stick?.order);
-        const stableOrder = Number.isFinite(savedOrder) ? savedOrder : sourceIndex;
-        return Array.from(frameMap.get(Number(stick?.frame)) || []).map((frame) => ({
-          stick: { ...stick, frame },
-          sourceIndex,
-          stableOrder,
-        }));
-      })
-      .sort(
-        (left, right) =>
-          left.stick.frame - right.stick.frame ||
-          normalizedTrailFramePhase(left.stick.framePhase) -
-            normalizedTrailFramePhase(right.stick.framePhase) ||
-          left.stableOrder - right.stableOrder ||
-          left.sourceIndex - right.sourceIndex,
-      )
-      .map(({ stick }, order) => ({ ...stick, order }));
-    return { ...segment, sticks };
-  });
+  result.bindings[animationKey] = result.bindings[animationKey]
+    .map((segment) => {
+      const sticks = Array.from(segment?.sticks || [])
+        .flatMap((stick, sourceIndex) => {
+          const savedOrder = Number(stick?.order);
+          const stableOrder = Number.isFinite(savedOrder) ? savedOrder : sourceIndex;
+          return Array.from(frameMap.get(Number(stick?.frame)) || []).map((frame) => ({
+            stick: { ...stick, frame },
+            sourceIndex,
+            stableOrder,
+          }));
+        })
+        .sort(
+          (left, right) =>
+            left.stick.frame - right.stick.frame ||
+            normalizedTrailFramePhase(left.stick.framePhase) -
+              normalizedTrailFramePhase(right.stick.framePhase) ||
+            left.stableOrder - right.stableOrder ||
+            left.sourceIndex - right.sourceIndex,
+        )
+        .map(({ stick }, order) => ({ ...stick, order }));
+      return { ...segment, sticks };
+    })
+    .filter((segment) => segment.sticks.length > 0 || segment.presetOnly === true);
   return result;
 }
 
@@ -419,6 +512,8 @@ function importAnimation(options) {
     (entry) => String(entry.id || entry.name) === animationId,
   );
   const replacing = Boolean(options.replace) && existingIndex >= 0;
+  const previousOwnedFramePaths =
+    replacing && inPlace ? ownedAnimationFramePaths(root, profile.animations[existingIndex]) : [];
   if (existingIndex >= 0 && !replacing) {
     throw Object.assign(new Error(`Animation already exists: ${profileId}/${animationId}`), {
       status: 409,
@@ -519,11 +614,7 @@ function importAnimation(options) {
         ...dimensions,
       };
     });
-    const animationType = ["actor", "boss", "vfx", "prop", "scene_prop_attachment"].includes(
-      String(options.animationType || "actor"),
-    )
-      ? String(options.animationType || "actor")
-      : "actor";
+    const animationType = resolveAnimationType(options.animationType);
     animation = {
       id: animationId,
       name: String(options.animationName || animationId),
@@ -587,12 +678,67 @@ function importAnimation(options) {
     }
     throw error;
   }
+  if (replacing) {
+    const retainedWorkspaceCopyPaths = new Set(
+      [...nextAudio, ...nextAttachments, ...nextAssets]
+        .map((entry) => resolveWorkspaceCopy(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const retainedAttackTrailTexturePaths = new Set(
+      Object.values(nextTrails.bindings || {})
+        .flat()
+        .map((segment) => resolveWorkspaceCopy(root, segment?.texture?.path || ""))
+        .filter(Boolean),
+    );
+    const audioWorkspaceRoot = path.join(workspaceDir, "audio");
+    const attachmentsWorkspaceRoot = path.join(workspaceDir, "attachments");
+    const attackTrailWorkspaceRoot = path.join(workspaceDir, "attack_trails");
+    for (const binding of normalizeBindings(originals.frameAudio)) {
+      unlinkUnreferencedWorkspaceCopy(
+        binding.path,
+        audioWorkspaceRoot,
+        retainedWorkspaceCopyPaths,
+        root,
+        workspaceDir,
+      );
+    }
+    for (const binding of normalizeBindings(originals.frameImageAttachments)) {
+      unlinkUnreferencedWorkspaceCopy(
+        binding.path,
+        attachmentsWorkspaceRoot,
+        retainedWorkspaceCopyPaths,
+        root,
+        workspaceDir,
+      );
+    }
+    for (const asset of normalizeBindings(originals.attachmentAssets)) {
+      unlinkUnreferencedWorkspaceCopy(
+        asset.path,
+        workspaceDir,
+        retainedWorkspaceCopyPaths,
+        root,
+        workspaceDir,
+      );
+    }
+    for (const segment of Object.values(originals.attackTrails?.bindings || {}).flat()) {
+      unlinkUnreferencedWorkspaceCopy(
+        segment?.texture?.path || "",
+        attackTrailWorkspaceRoot,
+        retainedAttackTrailTexturePaths,
+        root,
+        workspaceDir,
+      );
+    }
+  }
   if (backupCreated) {
     try {
       fs.rmSync(backupDir, { recursive: true, force: true });
     } catch (error) {
       console.warn(`Could not remove import backup ${backupDir}: ${error.message}`);
     }
+  }
+  if (replacing && inPlace) {
+    unlinkUnreferencedInPlaceFrames(previousOwnedFramePaths, sourcePaths, targetDir);
   }
 
   return {
@@ -763,6 +909,49 @@ function reorganizeAnimation(options) {
     throw error;
   }
 
+  const attachmentAssets = projectStore.readJson(paths.attachmentAssets, []);
+  const retainedWorkspaceCopyPaths = new Set(
+    [...nextAudioBindings, ...nextImageAttachments, ...normalizeBindings(attachmentAssets)]
+      .map((entry) => resolveWorkspaceCopy(root, entry?.path || ""))
+      .filter(Boolean),
+  );
+  const retainedAttackTrailTexturePaths = new Set(
+    Object.values(nextAttackTrails.bindings || {})
+      .flat()
+      .map((segment) => resolveWorkspaceCopy(root, segment?.texture?.path || ""))
+      .filter(Boolean),
+  );
+  const audioWorkspaceRoot = path.join(workspaceDir, "audio");
+  const attachmentsWorkspaceRoot = path.join(workspaceDir, "attachments");
+  const attackTrailWorkspaceRoot = path.join(workspaceDir, "attack_trails");
+  for (const binding of normalizeBindings(originals.frameAudioBindings)) {
+    unlinkUnreferencedWorkspaceCopy(
+      binding.path,
+      audioWorkspaceRoot,
+      retainedWorkspaceCopyPaths,
+      root,
+      workspaceDir,
+    );
+  }
+  for (const binding of normalizeBindings(originals.frameImageAttachments)) {
+    unlinkUnreferencedWorkspaceCopy(
+      binding.path,
+      attachmentsWorkspaceRoot,
+      retainedWorkspaceCopyPaths,
+      root,
+      workspaceDir,
+    );
+  }
+  for (const segment of Object.values(originals.attackTrails?.bindings || {}).flat()) {
+    unlinkUnreferencedWorkspaceCopy(
+      segment?.texture?.path || "",
+      attackTrailWorkspaceRoot,
+      retainedAttackTrailTexturePaths,
+      root,
+      workspaceDir,
+    );
+  }
+
   return {
     manifest,
     tuning,
@@ -775,6 +964,7 @@ function reorganizeAnimation(options) {
 }
 
 module.exports = {
+  ANIMATION_TYPES,
   importAnimation,
   mirrorBoxes,
   remapBindings,
@@ -782,4 +972,7 @@ module.exports = {
   remapIndexedDictionary,
   remapReferenceFrame,
   reorganizeAnimation,
+  resolveAnimationType,
+  resolveImportedAnimationType,
+  unlinkUnreferencedInPlaceFrames,
 };

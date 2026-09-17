@@ -1,5 +1,11 @@
 "use strict";
+const path = require("node:path");
 const { loadDocuments, commitDocuments, clone, requireId } = require("./common");
+const {
+  unlinkUnreferencedWorkspaceCopy,
+  safeResolve,
+  normalizeBindings,
+} = require("../lib/animation_mutations");
 
 /** Interpolates authored attachment transforms between explicit keyframes in group space. */
 function createAttachmentInterpolation(context, revisions) {
@@ -79,6 +85,21 @@ function createAttachmentInterpolation(context, revisions) {
       ...generated,
     ];
     commitDocuments(paths, { frameImageAttachments: documents.frameImageAttachments });
+    const { root, projectStore } = context;
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const droppedPaths = bindings
+      .filter((binding) => binding.id === id && indexSet.has(binding.key))
+      .map((binding) => binding.path)
+      .filter(Boolean);
+    const retained = new Set(
+      [...documents.frameImageAttachments, ...normalizeBindings(documents.attachmentAssets)]
+        .map((entry) => safeResolve(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const allowedRoot = path.join(workspaceDir, "attachments");
+    for (const droppedPath of droppedPaths) {
+      unlinkUnreferencedWorkspaceCopy(droppedPath, allowedRoot, retained, root, workspaceDir);
+    }
     result.sync = context.synchronize(project, args.sync === true);
     return result;
   };

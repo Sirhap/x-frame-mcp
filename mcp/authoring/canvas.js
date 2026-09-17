@@ -1,36 +1,11 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
-const { frameIndexes, loadDocuments, commitDocuments } = require("./common");
+const { frameIndexes, loadDocuments, commitDocuments, translateAnnotations } = require("./common");
 const { decodePngRgba, encodePngRgba } = require("../xsxb_mcp_cutout");
 const { measureSpriteGeometry } = require("../xsxb_mcp_lock");
 const { canvasAnchor, renderContactSheet } = require("../xsxb_mcp_visual_qa");
 
-/** Moves persisted point coordinates by the same origin delta as their frame pixels. */
-function translateAnnotations(documents, key, dx, dy) {
-  const boxes = documents.tuning.frame_box_overrides?.[key];
-  for (const box of Object.values(boxes || {}))
-    if (box?.offset) {
-      box.offset.x = Number(box.offset.x || 0) + dx;
-      box.offset.y = Number(box.offset.y || 0) + dy;
-    }
-  for (const binding of documents.frameImageAttachments || [])
-    if ((binding.key || binding.frameKey) === key && binding.transform?.offset) {
-      binding.transform.offset.x += dx;
-      binding.transform.offset.y += dy;
-    }
-  const split = key.lastIndexOf(":"),
-    group = key.slice(0, split),
-    frame = Number(key.slice(split + 1));
-  for (const segment of documents.attackTrails.bindings?.[group] || [])
-    for (const stick of segment.sticks || [])
-      if (stick.frame === frame)
-        for (const name of ["top", "bottom"])
-          if (stick[name]) {
-            stick[name].x += dx;
-            stick[name].y += dy;
-          }
-}
 /** Builds shared canvases without interpolation; plans are previews by default. */
 function createCanvasTool(context, revisions) {
   return function resizeCanvas(args) {
@@ -175,4 +150,4 @@ function createCanvasTool(context, revisions) {
     return result;
   };
 }
-module.exports = { createCanvasTool };
+module.exports = { createCanvasTool, translateAnnotations };

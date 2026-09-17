@@ -13,17 +13,37 @@ const {
   stickCenterTravel,
   validateAttackTrails,
 } = require("./lib/attack_trails");
-const { deleteAnimation } = require("./lib/animation_mutations");
-const { frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
-const { importAnimation, reorganizeAnimation } = require("./lib/frame_organizer");
+const {
+  deleteAnimation,
+  normalizeBindings,
+  safeResolve,
+  unlinkUnreferencedWorkspaceCopy,
+} = require("./lib/animation_mutations");
+const { estimateFrameBoxes, frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator");
+const {
+  importAnimation,
+  reorganizeAnimation,
+  resolveImportedAnimationType,
+} = require("./lib/frame_organizer");
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
 const { shouldCommit } = require("./xsxb_mcp_commit");
-const { frameIndexes } = require("./authoring/common");
-const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
+const {
+  frameIndexes,
+  loadDocuments,
+  persistAnnotationDocuments,
+  translateAnnotations,
+} = require("./authoring/common");
+const {
+  GODOT_SYNC_ROOT,
+  findGodotProjectRoot,
+  forgetGodotImportCache,
+  syncGodotProject,
+  validGodotProjectRoot,
+} = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
-const { validateImport } = require("./lib/validate_import");
+const { gameLocalAuthoringStale, validateImport } = require("./lib/validate_import");
 const {
   ALPHA_VISIBLE,
   collectWorkbenchExtras,
@@ -41,6 +61,7 @@ const {
   findLoopInPngFiles,
   resolveExternalLoopFrames,
   analyzePngFiles,
+  chooseAnalyzeWindow,
 } = require("./xsxb_mcp_loop");
 const {
   describeGroupGrid,
@@ -60,7 +81,7 @@ const {
   placeImageOnTarget,
   measureAlphaBottom,
 } = require("./xsxb_mcp_place");
-const { compileSmearBrief } = require("./xsxb_mcp_smear_brief");
+const { planSmear } = require("./xsxb_mcp_paint_smear");
 const { compilePlaceBrief } = require("./xsxb_mcp_place_brief");
 const { detectRegions } = require("./xsxb_mcp_detect_regions");
 const { createFlorenceDetector } = require("./xsxb_mcp_florence");
@@ -73,7 +94,19 @@ const {
   observeFile,
   sha256,
 } = require("./xsxb_mcp_observation");
-const { successReceipt } = require("./xsxb_mcp_receipt");
+const { gateReceipt, successReceipt } = require("./xsxb_mcp_receipt");
+const { composeFrameDiff } = require("./xsxb_mcp_diff_frames");
+const {
+  assembleGodotValidation,
+  classifyInspectQa,
+  clipHasMeasurableSubject,
+  composeValidationEvidence,
+  describeGodotHandoff,
+  evaluateScaleContract,
+  isFxOrAirborne,
+  measureKeyedSubject,
+  pickValidationEvidenceFrameIndex,
+} = require("./xsxb_mcp_validate_godot");
 const {
   borderFloodKey,
   composeRbOverlay,
@@ -97,7 +130,7 @@ const {
   trailUsesHermiteMesh,
 } = require("./xsxb_mcp_plant");
 const { DEFAULT_PROFILE_ID, MCP_TOOL_NAMES, toolDefinitions } = require("./xsxb_mcp_tool_catalog");
-const { sliceSheet } = require("./xsxb_mcp_slice");
+const { clearNumberedPngs, sliceSheet } = require("./xsxb_mcp_slice");
 const {
   PNG_NAME,
   audioMimeType,
@@ -117,9 +150,75 @@ const {
   resolveImportSource,
   sliceExtractedFrames,
 } = require("./xsxb_mcp_arguments");
-const { createTestWav, encodeGifWithFfmpeg, extractVideoFrames } = require("./xsxb_mcp_processes");
+const {
+  createTestWav,
+  encodeGifWithFfmpeg,
+  extractVideoFrames,
+  probeVideoTiming,
+  resolveSourceDurationSec,
+  suggestGameFps,
+  suggestImportFps,
+} = require("./xsxb_mcp_processes");
 
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
+
+/**
+ * Forgets .godot/imported .ctex/.sample/.md5 for PNGs and audio under a project-id slice
+ * while .import sidecars still exist.
+ * @param {string} directory Slice directory under xsxb_frame_tuner/.../projects/<id>.
+ * @param {string} godotRoot Previous Godot root with project.godot.
+ * @returns {void}
+ */
+function forgetImportedPngCacheInDirectory(directory, godotRoot) {
+  if (!directory || !godotRoot || !fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      forgetImportedPngCacheInDirectory(fullPath, godotRoot);
+      continue;
+    }
+    if (!/\.(?:png|wav|ogg|mp3|flac|aac)(?:\.import)?$/i.test(entry.name)) continue;
+    const assetPath = /\.import$/i.test(fullPath) ? fullPath.replace(/\.import$/i, "") : fullPath;
+    forgetGodotImportCache(godotRoot, assetPath);
+  }
+}
+
+/**
+ * Forgets .godot/imported .ctex/.md5 after overwriting a kept PNG inside a Godot project.
+ * @param {string} pngPath Absolute path of the overwritten PNG.
+ * @returns {void}
+ */
+function forgetImportCacheIfInsideGodot(pngPath) {
+  const godotRoot = findGodotProjectRoot(path.dirname(String(pngPath || "")));
+  if (godotRoot) forgetGodotImportCache(godotRoot, path.resolve(pngPath));
+}
+
+/**
+ * Removes this project's generated Godot slices from a previous bind root.
+ * Shared runtime and attack_trails presets stay so other projects on that root keep working.
+ * @param {string} previousRoot Previous Godot project root.
+ * @param {string} nextRoot Newly bound Godot project root.
+ * @param {string} projectId Registry project id.
+ * @returns {void}
+ */
+function prunePreviousGodotProjectSlices(previousRoot, nextRoot, projectId) {
+  const previous = String(previousRoot || "").trim();
+  if (!previous) return;
+  const resolvedPrevious = path.resolve(previous);
+  const resolvedNext = path.resolve(String(nextRoot || ""));
+  if (resolvedPrevious === resolvedNext) return;
+  if (!fs.existsSync(resolvedPrevious) || !fs.statSync(resolvedPrevious).isDirectory()) return;
+  if (!fs.existsSync(path.join(resolvedPrevious, "project.godot"))) return;
+  const id = String(projectId || "");
+  if (!id || id.includes("..") || /[\\/]/.test(id) || path.basename(id) !== id) return;
+  for (const kind of ["data", "audio", "attachments", "attack_trails", "workspace"]) {
+    const slice = path.resolve(resolvedPrevious, GODOT_SYNC_ROOT, kind, "projects", id);
+    const parent = path.resolve(resolvedPrevious, GODOT_SYNC_ROOT, kind, "projects");
+    if (slice === parent || !slice.startsWith(`${parent}${path.sep}`)) continue;
+    forgetImportedPngCacheInDirectory(slice, resolvedPrevious);
+    fs.rmSync(slice, { recursive: true, force: true });
+  }
+}
 
 /**
  * Resolves group/frame visual_size for baking or GIF rematch.
@@ -190,6 +289,47 @@ function overlayGridOptions(args = {}) {
     grid_y: args.grid_y,
     grid_scope: args.grid_scope,
   };
+}
+
+/**
+ * Pads one RGBA frame onto a larger canvas without resampling.
+ * Placement matches `xsxb_resize_canvas` mode=pad (`preserve_origin` default):
+ * destination minus source `canvasAnchor`, integer origin only.
+ * @param {{data:Uint8ClampedArray|Uint8Array,width:number,height:number}} image Source frame.
+ * @param {number} width Destination width.
+ * @param {number} height Destination height.
+ * @param {string} [anchorMode] Animation anchor.
+ * @returns {{data:Uint8ClampedArray,width:number,height:number}} Padded frame.
+ */
+function padFramePreserveOrigin(image, width, height, anchorMode) {
+  const destWidth = Math.trunc(Number(width) || 0);
+  const destHeight = Math.trunc(Number(height) || 0);
+  if (destWidth < 1 || destHeight < 1) {
+    throw new Error("Canvas dimensions must be 1–4096 pixels.");
+  }
+  if (destWidth === image.width && destHeight === image.height) return image;
+  const srcAnchor = canvasAnchor(image.width, image.height, anchorMode);
+  const destAnchor = canvasAnchor(destWidth, destHeight, anchorMode);
+  const rawX = destAnchor.x - srcAnchor.x;
+  const rawY = destAnchor.y - srcAnchor.y;
+  if (!Number.isInteger(rawX) || !Number.isInteger(rawY)) {
+    throw new Error(
+      "Exact origin preservation requires matching width parity; choose an even/odd width matching source canvases.",
+    );
+  }
+  const dx = Math.round(rawX);
+  const dy = Math.round(rawY);
+  const data = new Uint8ClampedArray(destWidth * destHeight * 4);
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= destWidth || ny >= destHeight) continue;
+      const from = (y * image.width + x) * 4;
+      data.set(image.data.subarray(from, from + 4), (ny * destWidth + nx) * 4);
+    }
+  }
+  return { data, width: destWidth, height: destHeight };
 }
 
 /**
@@ -346,6 +486,7 @@ function createXsxbMcpService(options = {}) {
 
   /**
    * Copies a local file into the project workspace and returns the repo-relative path.
+   * Rewrites the content-addressed dest when it already exists but bytes have drifted.
    * @param {object} project Project record.
    * @param {string} subdir Workspace subdirectory.
    * @param {string} absolutePath Source file.
@@ -358,11 +499,18 @@ function createXsxbMcpService(options = {}) {
     const hash = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
     const extension = path.extname(absolutePath) || "";
     const destPath = path.join(destDir, `${hash}${extension}`);
-    if (!fs.existsSync(destPath)) fs.writeFileSync(destPath, buffer);
+    if (!fs.existsSync(destPath) || !fs.readFileSync(destPath).equals(buffer)) {
+      fs.writeFileSync(destPath, buffer);
+    }
     return reslash(path.relative(root, destPath));
   }
 
-  function registryProject(projectId, syncRequested = false) {
+  /**
+   * Resolves a registry project without changing the in-memory selection.
+   * @param {string} [projectId] Requested id, or the current context / active project.
+   * @returns {object} Registry project.
+   */
+  function lookupProject(projectId) {
     const registry = projectStore.readRegistry();
     const requested = String(projectId || context.projectId || "").trim();
     const project = requested
@@ -370,6 +518,11 @@ function createXsxbMcpService(options = {}) {
       : projectStore.resolveProject(registry);
     if (!project && requested) throw new Error(`XSXB project not found: ${requested}`);
     if (!project) throw new Error("No XSXB project is available.");
+    return project;
+  }
+
+  function registryProject(projectId, syncRequested = false) {
+    const project = lookupProject(projectId);
     if (syncRequested && !validGodotProjectRoot(project)) {
       const boundPath = project.projectRoot || "(empty)";
       throw new Error(
@@ -397,11 +550,19 @@ function createXsxbMcpService(options = {}) {
       : Object.entries(raw || {}).map(([key, value]) => ({ key, ...(value || {}) }));
   }
 
-  function animationFor(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+  /**
+   * Resolves project/profile/animation without changing the in-memory selection.
+   * @param {object} [args] Tool arguments.
+   * @returns {{project:object,manifest:object,profile:object,animation:object}}
+   */
+  function lookupAnimation(args = {}) {
+    const project = lookupProject(args.project_id || args.project);
     const manifest = manifestFor(project);
-    const profileId = String(args.profile_id || args.profile || context.profileId || "").trim();
-    const previousAnimation = profileId === context.profileId ? context.animationId : "";
+    const sameProject = !context.projectId || project.id === context.projectId;
+    const scopedProfileId = sameProject ? context.profileId : "";
+    const scopedAnimationId = sameProject ? context.animationId : "";
+    const profileId = String(args.profile_id || args.profile || scopedProfileId || "").trim();
+    const previousAnimation = profileId === scopedProfileId ? scopedAnimationId : "";
     const animationId = String(args.animation_id || args.animation || previousAnimation || "").trim();
     const profiles = Array.isArray(manifest.profiles) ? manifest.profiles : [];
     const profile = profileId ? profiles.find((entry) => entry.id === profileId) : profiles[0];
@@ -411,10 +572,27 @@ function createXsxbMcpService(options = {}) {
       ? animations.find((entry) => String(entry.id || entry.name) === animationId)
       : animations[0];
     if (!animation) throw new Error(`Animation not found: ${profile.id}/${animationId || "(default)"}`);
-    selectProject(project.id);
-    context.profileId = profile.id;
-    context.animationId = String(animation.id || animation.name);
     return { project, manifest, profile, animation };
+  }
+
+  function animationFor(args = {}) {
+    const selection = lookupAnimation(args);
+    selectProject(selection.project.id);
+    context.profileId = selection.profile.id;
+    context.animationId = String(selection.animation.id || selection.animation.name);
+    return selection;
+  }
+
+  /**
+   * Resolves the import profile: explicit args, then last context profile, else mcp_imports.
+   * @param {object} [args] Tool arguments.
+   * @returns {string} Slug profile id.
+   */
+  function resolveImportProfileId(args = {}) {
+    return slug(
+      args.profile_id || args.profile || context.profileId || DEFAULT_PROFILE_ID,
+      DEFAULT_PROFILE_ID,
+    );
   }
 
   /**
@@ -522,7 +700,7 @@ function createXsxbMcpService(options = {}) {
     const registry = projectStore.readRegistry();
     const requestedId = String(args.project_id || args.project || "").trim();
     const existing = requestedId ? registry.projects.find((entry) => entry.id === requestedId) : null;
-    const setActive = booleanFlag(args.set_active, true);
+    const setActive = existing ? booleanFlag(args.set_active, false) : booleanFlag(args.set_active, true);
     if (existing) {
       if (setActive) {
         projectStore.setActiveProject(existing.id);
@@ -580,7 +758,7 @@ function createXsxbMcpService(options = {}) {
     }
     const syncRequested = booleanFlag(args.sync);
     const project = registryProject(args.project_id || args.project, syncRequested);
-    const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+    const profileId = resolveImportProfileId(args);
     const manifest = manifestFor(project);
     const profile = (manifest.profiles || []).find((entry) => entry.id === profileId);
     const baseAnimationId = slug(
@@ -588,6 +766,9 @@ function createXsxbMcpService(options = {}) {
       "video_import",
     );
     const used = new Set((profile?.animations || []).map((entry) => String(entry.id || entry.name)));
+    const existingAnimation = (profile?.animations || []).find(
+      (entry) => String(entry.id || entry.name) === baseAnimationId,
+    );
     const replaced = booleanFlag(args.replace) && used.has(baseAnimationId);
     let animationId = baseAnimationId;
     if (!replaced) {
@@ -609,10 +790,24 @@ function createXsxbMcpService(options = {}) {
         args,
       );
       if (!extracted.paths.length) throw new Error("Video extraction produced no PNG frames.");
+      const probe = await probeVideoTiming(videoPath, args);
+      const sourceFrameCount = extracted.extractedCount;
+      const sourceDurationSec = resolveSourceDurationSec(args, probe);
+      const suggestedFps = suggestImportFps({
+        sourceFrameCount,
+        sourceDurationSec,
+        probedFps: probe.probedFps,
+      });
+      const fpsOmitted = args.fps === undefined || args.fps === null || args.fps === "";
+      const fps = fpsOmitted && suggestedFps !== undefined ? requireFps(suggestedFps) : requireFps(args.fps);
       const items = extracted.paths.map((framePath) => ({
         name: path.basename(framePath),
         sourcePath: framePath,
       }));
+      const animationType = resolveImportedAnimationType(
+        args.animation_type ?? args.animationType,
+        replaced ? existingAnimation?.type : undefined,
+      );
       const imported = importAnimation({
         root,
         projectStore,
@@ -621,8 +816,8 @@ function createXsxbMcpService(options = {}) {
         profileLabel: profileId,
         animationId,
         animationName: animationId,
-        animationType: "actor",
-        fps: requireFps(args.fps),
+        animationType,
+        fps,
         replace: replaced,
         items,
       });
@@ -633,12 +828,22 @@ function createXsxbMcpService(options = {}) {
       const validation = booleanFlag(args.validate)
         ? validateImport({ project: project.id }, { root, projectStore })
         : { requested: false, ok: null, errors: [], warnings: [], summary: {} };
+      const suggestedGameFps = suggestedFps === undefined ? undefined : suggestGameFps(suggestedFps);
       return {
         projectId: project.id,
         profileId,
         animationId,
+        animationType,
         sourceVideo: videoPath,
-        fps: requireFps(args.fps),
+        fps,
+        sourceFrameCount,
+        sourceDurationSec,
+        suggestedFps,
+        suggestedGameFps,
+        next:
+          suggestedGameFps === undefined
+            ? undefined
+            : `pass fps=${suggestedGameFps} (suggestedGameFps) to xsxb_export_gif for a game loop`,
         extractedFrameCount: extracted.extractedCount,
         importedFrameCount: imported.frameCount,
         startFrame: extracted.startFrame,
@@ -672,16 +877,15 @@ function createXsxbMcpService(options = {}) {
     if (!items.length) throw new Error(`No PNG frames provided for ${sourceLabel} import.`);
     const syncRequested = booleanFlag(args.sync);
     const project = registryProject(args.project_id || args.project, syncRequested);
-    const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+    const profileId = resolveImportProfileId(args);
     const requestedId = slug(
       args.animation_id || args.animation,
       sourceLabel === "png_sequence" ? "png_sequence" : "imported",
     );
-    const replaced =
-      booleanFlag(args.replace) &&
-      (manifestFor(project).profiles || [])
-        .find((entry) => entry.id === profileId)
-        ?.animations?.some((entry) => String(entry.id || entry.name) === requestedId);
+    const existingAnimation = (manifestFor(project).profiles || [])
+      .find((entry) => entry.id === profileId)
+      ?.animations?.find((entry) => String(entry.id || entry.name) === requestedId);
+    const replaced = booleanFlag(args.replace) && Boolean(existingAnimation);
     const animationId = uniqueAnimationId(
       project,
       profileId,
@@ -703,6 +907,11 @@ function createXsxbMcpService(options = {}) {
         );
       }
     }
+    const fps = requireFps(args.fps, replaced ? existingAnimation.fps : 12);
+    const animationType = resolveImportedAnimationType(
+      args.animation_type ?? args.animationType,
+      replaced ? existingAnimation.type : undefined,
+    );
     const imported = importAnimation({
       root,
       projectStore,
@@ -711,8 +920,8 @@ function createXsxbMcpService(options = {}) {
       profileLabel: profileId,
       animationId,
       animationName: String(args.animation_name || animationId),
-      animationType: "actor",
-      fps: requireFps(args.fps),
+      animationType,
+      fps,
       replace: replaced,
       inPlace,
       items: importItems,
@@ -744,7 +953,8 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       profileId,
       animationId,
-      fps: requireFps(args.fps),
+      animationType,
+      fps,
       importedFrameCount: imported.frameCount,
       replaced: Boolean(replaced),
       inPlace: Boolean(imported.inPlace),
@@ -810,9 +1020,23 @@ function createXsxbMcpService(options = {}) {
       const syncRequested = booleanFlag(args.sync);
       const project = registryProject(args.project_id || args.project, syncRequested);
       const projectRoot = validGodotProjectRoot(project) || path.dirname(filePath);
-      const animations = parseSpriteFrames(filePath, projectRoot);
-      if (!animations.length) throw new Error(`No PNG animations found in ${filePath}`);
-      const profileId = slug(args.profile_id || args.profile || DEFAULT_PROFILE_ID, DEFAULT_PROFILE_ID);
+      const parsed = parseSpriteFrames(filePath, projectRoot);
+      if (!parsed.length) throw new Error(`No PNG animations found in ${filePath}`);
+      const requestedId = args.animation_id || args.animation;
+      let animations = parsed;
+      if (requestedId && parsed.length > 1) {
+        const want = slug(requestedId);
+        animations = parsed.filter(
+          (animation) => slug(animation.id) === want || slug(animation.name) === want,
+        );
+        if (!animations.length) {
+          const available = parsed.map((animation) => animation.id).join(", ");
+          throw new Error(`No SpriteFrames clip matches "${requestedId}". Available: ${available}`);
+        }
+      }
+      const singleClipRename = Boolean(requestedId) && parsed.length === 1;
+      const profileId = resolveImportProfileId(args);
+      const fpsOmitted = args.fps === undefined || args.fps === null || args.fps === "";
       const imported = [];
       for (const animation of animations) {
         const sliced = sliceExtractedFrames(
@@ -820,14 +1044,20 @@ function createXsxbMcpService(options = {}) {
           args,
         );
         const items = sliced.paths;
+        const animationId = singleClipRename ? requestedId : animation.id;
+        const existingId = slug(animationId, animation.id);
+        const existingAnimation = (manifestFor(project).profiles || [])
+          .find((entry) => entry.id === profileId)
+          ?.animations?.find((entry) => String(entry.id || entry.name) === existingId);
+        const replacing = booleanFlag(args.replace) && Boolean(existingAnimation);
         imported.push(
           importPngItems(
             {
               ...args,
               profile_id: profileId,
-              animation_id: args.animation_id || animation.id,
+              animation_id: animationId,
               animation_name: args.animation_name || animation.name,
-              fps: args.fps || animation.fps,
+              fps: fpsOmitted ? (replacing ? undefined : animation.fps) : args.fps,
               sync: false,
               validate: false,
             },
@@ -885,11 +1115,12 @@ function createXsxbMcpService(options = {}) {
       loop_endpoint: args.loop_endpoint,
     };
     if (args.in_place !== undefined) importArgs.in_place = args.in_place;
+    if (args.animation_type !== undefined) importArgs.animation_type = args.animation_type;
     return { ...receipt, imported: await importUnified(importArgs) };
   }
 
   function projectSnapshot(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+    const project = lookupProject(args.project_id || args.project);
     const registry = projectStore.readRegistry();
     const manifest = manifestFor(project);
     const profiles = Array.isArray(manifest.profiles) ? manifest.profiles : [];
@@ -1310,6 +1541,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       force: booleanFlag(args.force),
       ...synchronize(project, true, { force: booleanFlag(args.force) }),
+      godot: describeGodotHandoff(project.projectRoot || "", project.id),
     };
   }
 
@@ -1399,7 +1631,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function getAnimation(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const result = animationResult(selection);
     const includeRaw = Array.isArray(args.include)
       ? args.include
@@ -1452,7 +1684,7 @@ function createXsxbMcpService(options = {}) {
     let filePaths = external?.filePaths || [];
     const payload = { source, applied: false };
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       const result = animationResult(selection);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
@@ -1497,7 +1729,7 @@ function createXsxbMcpService(options = {}) {
     let filePaths = external?.filePaths || [];
     const payload = { source, applied: false };
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
       payload.animationId = String(selection.animation.id || selection.animation.name);
@@ -1586,7 +1818,7 @@ function createXsxbMcpService(options = {}) {
     let filePaths = external?.filePaths || [];
     const payload = { source, applied: false };
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
       payload.animationId = String(selection.animation.id || selection.animation.name);
@@ -1626,10 +1858,9 @@ function createXsxbMcpService(options = {}) {
    * @returns {{kind:string,path:string,start:number,end:number,frameCount:number}} Preview receipt.
    */
   function writeAnalyzePreview(args, project, payload, analyzed, images) {
-    const loop = analyzed.loop.recommended;
-    const useLoop = Boolean(loop) && analyzed.loop.oneShotLikely !== true;
-    const start = useLoop ? loop.start : analyzed.motion.start;
-    const end = useLoop ? loop.end : analyzed.motion.end;
+    const window = chooseAnalyzeWindow(analyzed.loop, analyzed.motion);
+    const start = window.start;
+    const end = window.end;
     const selected = images.slice(start, end + 1);
     if (!selected.length) {
       throw new Error("Analyze preview has no frames in the recommended window.");
@@ -1653,7 +1884,7 @@ function createXsxbMcpService(options = {}) {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(sheet.data, sheet.width, sheet.height));
     return {
-      kind: useLoop ? "loop" : "motion",
+      kind: window.kind,
       path: outputPath,
       start,
       end,
@@ -1673,7 +1904,7 @@ function createXsxbMcpService(options = {}) {
     const payload = { source, applied: false };
     let project = null;
     if (!external) {
-      const selection = animationFor(args);
+      const selection = lookupAnimation(args);
       payload.projectId = selection.project.id;
       payload.profileId = selection.profile.id;
       payload.animationId = String(selection.animation.id || selection.animation.name);
@@ -1798,7 +2029,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Per-frame ruler.
    */
   function measureFrames(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const frames = collectFramePaths(project, animation).map((filePath, index) => {
       const image = decodePngRgba(filePath);
@@ -1910,6 +2141,7 @@ function createXsxbMcpService(options = {}) {
           transaction.writeFile(filePaths[index], encodePngRgba(placed.data, placed.width, placed.height));
         });
       });
+      for (const filePath of filePaths) forgetImportCacheIfInsideGodot(filePath);
     }
     const after = apply
       ? filePaths.map((filePath, index) => {
@@ -1937,10 +2169,10 @@ function createXsxbMcpService(options = {}) {
   /**
    * Exports a red/cyan overlay of two frames.
    * @param {object} args Tool arguments.
-   * @returns {object} Overlay receipt.
+   * @returns {object} Overlay receipt including `preview.path` for walk-lock visual QA.
    */
   function exportOverlay(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const frames = animation.frames || [];
     if (frames.length < 1) throw new Error("Cannot overlay an animation without frames.");
@@ -1988,6 +2220,7 @@ function createXsxbMcpService(options = {}) {
       mse: overlay.mse,
       legWidthA: overlay.legWidthA,
       legWidthB: overlay.legWidthB,
+      preview: { path: outputPath, width: overlay.width, height: overlay.height },
     };
   }
 
@@ -1997,11 +2230,24 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Copy receipt.
    */
   function exportPackSlot(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const { project, profile, animation } = selection;
     const dest = path.resolve(String(args.dest || ""));
     if (!dest) throw new Error("dest is required.");
     fs.mkdirSync(dest, { recursive: true });
+    const godotRoot = findGodotProjectRoot(dest);
+    if (godotRoot) {
+      for (const name of fs.readdirSync(dest)) {
+        const pngName = /^\d+\.png$/i.test(name)
+          ? name
+          : /^\d+\.png\.import$/i.test(name)
+            ? name.replace(/\.import$/i, "")
+            : "";
+        if (!pngName) continue;
+        forgetGodotImportCache(godotRoot, path.join(dest, pngName));
+      }
+    }
+    clearNumberedPngs(dest);
     const frames = animation.frames || [];
     const last = Math.max(0, frames.length - 1);
     const start = args.start_frame === undefined ? 0 : requireFrameIndex(args.start_frame, last);
@@ -2048,7 +2294,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function validateProject(args = {}) {
-    const project = registryProject(args.project_id || args.project, false);
+    const project = lookupProject(args.project_id || args.project);
     const raw = validateImport(
       {
         project: project.id,
@@ -2058,6 +2304,210 @@ function createXsxbMcpService(options = {}) {
       { root, projectStore },
     );
     return layerValidation({ ...raw, strict: args.strict === true }, args.layer || "all");
+  }
+
+  /**
+   * Writes a magenta change-map or red/cyan onion of two animation frames.
+   * @param {object} args Tool arguments.
+   * @returns {object} Diff receipt with a real preview PNG.
+   */
+  function diffFrames(args = {}) {
+    const selection = lookupAnimation(args);
+    const { project, profile, animation } = selection;
+    const frames = animation.frames || [];
+    if (frames.length < 1) throw new Error("Cannot diff an animation without frames.");
+    const last = frames.length - 1;
+    const frameA = args.frame_a === undefined ? 0 : requireFrameIndex(args.frame_a, last);
+    const frameB =
+      args.frame_b === undefined ? Math.min(frameA + 1, last) : requireFrameIndex(args.frame_b, last);
+    const pathA = resolveAnimationFramePath(project, frames[frameA].path, animation);
+    const pathB = resolveAnimationFramePath(project, frames[frameB].path, animation);
+    if (!pathA || !fs.existsSync(pathA) || !pathB || !fs.existsSync(pathB)) {
+      throw new Error("Both frames must exist on disk before xsxb_diff_frames.");
+    }
+    const imageA = decodePngRgba(pathA);
+    const imageB = decodePngRgba(pathB);
+    const composed = composeFrameDiff(imageA, imageB, { mode: args.mode || "diff" });
+    const animationId = String(animation.id || animation.name);
+    const outputPath = resolveMcpArtifactPath(args.output_path, {
+      root,
+      artifactDir: currentArtifactDir(project),
+      defaultName: `${profile.id}_${animationId}_${frameA}_${frameB}_${composed.mode}.png`,
+      extensionPattern: /\.png$/i,
+      extensionLabel: ".png",
+      allowOutsideRoot: true,
+    });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, encodePngRgba(composed.data, composed.width, composed.height));
+    const issues = Array.isArray(composed.issues) ? composed.issues : [];
+    const qa = composed.qa || classifyInspectQa({ changedPixelCount: composed.changedPixelCount });
+    return {
+      projectId: project.id,
+      profileId: profile.id,
+      animationId,
+      frameA,
+      frameB,
+      mode: composed.mode,
+      changedPixelCount: composed.changedPixelCount,
+      qa,
+      issues,
+      next:
+        qa === "warn"
+          ? issues[0]
+            ? `stop; ${issues[0]}`
+            : "stop; frames are identical — confirm the wrong pair was not selected"
+          : "open preview.path; import is not a visual pass",
+      preview: { path: outputPath, width: composed.width, height: composed.height },
+    };
+  }
+
+  /**
+   * Validates Godot handoff including gameplay wiring and the idle scale contract.
+   * When bound and standalone tuning, manifest identity, or frame PNG bytes
+   * diverge from game-local copies, syncs through the same `synchronize` path
+   * as `xsxb_sync_godot` first.
+   * Evidence `cells` lists each blit `{id, frame}` in sheet order for measurable clips.
+   * Clips with empty frames, zero decodable PNGs, or no measurable subject are listed in evidence `skipped`.
+   * @param {object} args Tool arguments.
+   * @returns {object} Gate payload; `ok` is the domain pass.
+   */
+  function validateForGodot(args = {}) {
+    const project = lookupProject(args.project_id || args.project);
+    const requireGameplay = booleanFlag(args.require_gameplay, true);
+    const strict = booleanFlag(args.strict, false);
+    if (validGodotProjectRoot(project) && gameLocalAuthoringStale(project, projectStore, root)) {
+      synchronize(project, true);
+    }
+    const raw = validateImport(
+      {
+        project: project.id,
+        strict,
+        "require-gameplay": requireGameplay,
+      },
+      { root, projectStore },
+    );
+    const manifest = manifestFor(project);
+    const paths = projectStore.projectPaths(project);
+    const overrides = projectStore.readJson(paths.tuning, EMPTY_TUNING).frame_box_overrides || {};
+    const evidenceFrames = [];
+    const evidenceCells = [];
+    const evidenceSkipped = [];
+    const clips = [];
+    for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
+      for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
+        const animationId = String(animation.id || animation.name);
+        const geos = [];
+        const clipFrames = [];
+        for (const [index, frame] of (animation.frames || []).entries()) {
+          const filePath = resolveAnimationFramePath(project, frame.path, animation);
+          if (!filePath || !fs.existsSync(filePath)) continue;
+          const image = decodePngRgba(filePath);
+          const stored = overrides[frameBoxKey(profile.id, animationId, index)];
+          let hitbox = stored && typeof stored === "object" ? stored.hitbox || null : null;
+          if (!hitbox) {
+            hitbox =
+              estimateFrameBoxes(filePath, {
+                animationId,
+                animationName: animation.name,
+                type: animation.type,
+              }).hitbox || null;
+          }
+          clipFrames.push({ image, hitbox });
+          geos.push(measureKeyedSubject(image));
+        }
+        if (clipFrames.length) {
+          if (clipHasMeasurableSubject(geos)) {
+            const picked = pickValidationEvidenceFrameIndex(
+              { id: animationId, name: animation.name },
+              clipFrames,
+            );
+            evidenceFrames.push(clipFrames[picked].image);
+            evidenceCells.push({ id: animationId, frame: picked });
+          } else {
+            evidenceSkipped.push({ id: animationId, reason: "unmeasurable_subject" });
+            if (!Array.isArray(raw.warnings)) raw.warnings = [];
+            raw.warnings.push(
+              `${animationId}: unmeasurable transparent subject; omitted from evidence.cells`,
+            );
+          }
+        } else if ((animation.frames || []).length > 0) {
+          evidenceSkipped.push({ id: animationId, reason: "zero_decodable_frames" });
+          if (!Array.isArray(raw.warnings)) raw.warnings = [];
+          raw.warnings.push(`${animationId}: zero decodable frames; omitted from evidence.cells`);
+        } else if (!(animation.frames || []).length) {
+          evidenceSkipped.push({ id: animationId, reason: "empty_manifest_frames" });
+          if (!Array.isArray(raw.warnings)) raw.warnings = [];
+          raw.warnings.push(`${animationId}: empty manifest frames; omitted from evidence.cells`);
+        }
+        if (!clipFrames.length || !clipHasMeasurableSubject(geos)) continue;
+        clips.push({
+          id: animationId,
+          kind: profile.kind || animation.type || "actor",
+          type: animation.type || "",
+          name: animation.name || animationId,
+          grounded: !isFxOrAirborne({
+            id: animationId,
+            name: animation.name,
+            type: animation.type,
+            kind: profile.kind,
+          }),
+          feetYs: geos.map((geometry) => geometry.feetY),
+          bodyHs: geos.map((geometry) => geometry.bodyH),
+          canvasWs: geos.map((geometry) => geometry.canvasW),
+          canvasHs: geos.map((geometry) => geometry.canvasH),
+        });
+      }
+    }
+    const scaleContract = evaluateScaleContract(clips);
+    const sheet = composeValidationEvidence(evidenceFrames);
+    const evidencePath = resolveMcpArtifactPath("", {
+      root,
+      artifactDir: currentArtifactDir(project),
+      defaultName: `${project.id}_godot_evidence.png`,
+      extensionPattern: /\.png$/i,
+      extensionLabel: ".png",
+    });
+    const summaryPath = resolveMcpArtifactPath("", {
+      root,
+      artifactDir: currentArtifactDir(project),
+      defaultName: `${project.id}_godot_run_summary.json`,
+      extensionPattern: /\.json$/i,
+      extensionLabel: ".json",
+    });
+    fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+    fs.writeFileSync(evidencePath, encodePngRgba(sheet.data, sheet.width, sheet.height));
+    const godot = describeGodotHandoff(project.projectRoot || "", project.id);
+    const assembled = assembleGodotValidation(
+      raw,
+      scaleContract,
+      {
+        path: evidencePath,
+        width: sheet.width,
+        height: sheet.height,
+        cells: evidenceCells,
+        skipped: evidenceSkipped,
+      },
+      { strict, godot, summaryPath },
+    );
+    fs.writeFileSync(
+      summaryPath,
+      `${JSON.stringify(
+        {
+          ok: assembled.ok,
+          qa: assembled.qa,
+          next: assembled.next,
+          projectId: project.id,
+          errors: assembled.errors,
+          warnings: assembled.warnings,
+          scale_contract: assembled.scale_contract,
+          godot,
+          evidence: assembled.evidence,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return assembled;
   }
 
   function setActiveProject(args = {}) {
@@ -2079,6 +2529,7 @@ function createXsxbMcpService(options = {}) {
     }
     const updated = projectStore.setProjectRoot(project.id, projectRoot).project;
     selectProject(updated.id);
+    prunePreviousGodotProjectSlices(previousRoot, projectRoot, updated.id);
     return {
       projectId: updated.id,
       projectRoot: updated.projectRoot,
@@ -2120,6 +2571,7 @@ function createXsxbMcpService(options = {}) {
       ? Math.max(8, Number(args.output_height || args.canvas || explicitCanvas))
       : undefined;
     const keyColor = args.key_color || args.color || undefined;
+    const keyMode = String(args.key_mode || "smart");
     const cutoutImpl = cutoutPngFileImpl || cutoutPngFile;
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     const receipt = await Promise.resolve(
@@ -2129,6 +2581,7 @@ function createXsxbMcpService(options = {}) {
         outputWidth,
         outputHeight,
         force: booleanFlag(args.force),
+        keyMode,
       }),
     );
     if (!fs.existsSync(outputPath)) {
@@ -2375,6 +2828,7 @@ function createXsxbMcpService(options = {}) {
         transaction.writeJson(paths.manifest, manifest);
         if (updatedTuning) transaction.writeJson(paths.tuning, updatedTuning);
       });
+      for (const job of stagedJobs) forgetImportCacheIfInsideGodot(job.sourcePath);
     } finally {
       fs.rmSync(staging, { recursive: true, force: true });
     }
@@ -2631,6 +3085,10 @@ function createXsxbMcpService(options = {}) {
     };
     if (args.before_stop_chase !== undefined) segment.beforeStopChaseMultiplier = args.before_stop_chase;
     if (args.after_stop_chase !== undefined) segment.afterStopChaseMultiplier = args.after_stop_chase;
+    const previousPaths = new Set();
+    for (const entry of trails.bindings[bindingKey] || []) {
+      if (entry && entry.id === segment.id && entry.texture?.path) previousPaths.add(entry.texture.path);
+    }
     trails.bindings[bindingKey] = [
       ...(trails.bindings[bindingKey] || []).filter((entry) => entry.id !== segment.id),
       segment,
@@ -2638,7 +3096,20 @@ function createXsxbMcpService(options = {}) {
     const normalized = normalizeAttackTrails(trails);
     const warnings = validateAttackTrails(normalized, selection.manifest);
     projectStore.writeJson(paths.attackTrails, normalized);
-    const written = normalized.bindings[bindingKey].find((entry) => entry.id === segment.id);
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const remainingTrails = normalizeAttackTrails(
+      projectStore.readJson(paths.attackTrails, EMPTY_ATTACK_TRAILS),
+    );
+    const retained = new Set();
+    for (const remaining of Object.values(remainingTrails.bindings || {}).flat()) {
+      const texturePath = safeResolve(root, remaining?.texture?.path || "");
+      if (texturePath) retained.add(texturePath);
+    }
+    const allowedRoot = path.join(workspaceDir, "attack_trails");
+    for (const oldPath of previousPaths) {
+      unlinkUnreferencedWorkspaceCopy(oldPath, allowedRoot, retained, root, workspaceDir);
+    }
+    const written = remainingTrails.bindings[bindingKey].find((entry) => entry.id === segment.id);
     return {
       projectId: project.id,
       bindingKey,
@@ -2694,6 +3165,7 @@ function createXsxbMcpService(options = {}) {
         : Number(requestedOrder);
     if (!Number.isFinite(layerOrder)) throw new Error("layer_order must be a finite number.");
     const attachmentImage = decodePngRgba(absolute);
+    const previousPaths = new Set();
     const added = [];
     let next = Array.isArray(bindings) ? bindings.slice() : [];
     for (const request of requests) {
@@ -2788,17 +3260,48 @@ function createXsxbMcpService(options = {}) {
             : {}),
         },
       };
+      for (const entry of next) {
+        const entryKey = String(entry?.key || entry?.frameKey || "");
+        if (entry && String(entry.id) === id && entryKey === key && entry.path) {
+          previousPaths.add(entry.path);
+        }
+      }
       next = next.filter((entry) => entry.id !== id || entry.key !== key);
       next.push(attachment);
       added.push(attachment);
     }
-    const relativePath = copyIntoWorkspace(
-      project,
-      path.join("attachments", profile.id, String(animation.id || animation.name)),
-      absolute,
-    );
+    const sourceBuffer = fs.readFileSync(absolute);
+    const hashFile = `${crypto.createHash("sha256").update(sourceBuffer).digest("hex").slice(0, 16)}${path.extname(absolute) || ""}`;
+    const sharedResolved = normalizeBindings(bindings)
+      .map((entry) =>
+        entry?.path && path.basename(String(entry.path)) === hashFile ? safeResolve(root, entry.path) : "",
+      )
+      .find((resolved) => resolved && fs.existsSync(resolved));
+    const sharedIntact =
+      sharedResolved && fs.readFileSync(sharedResolved).equals(sourceBuffer)
+        ? reslash(path.relative(root, sharedResolved))
+        : "";
+    const relativePath =
+      sharedIntact ||
+      copyIntoWorkspace(
+        project,
+        path.join("attachments", profile.id, String(animation.id || animation.name)),
+        absolute,
+      );
     for (const attachment of added) attachment.path = relativePath;
     projectStore.writeJson(paths.frameImageAttachments, next);
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const remainingAttachments = normalizeBindings(projectStore.readJson(paths.frameImageAttachments, []));
+    const remainingAssets = normalizeBindings(projectStore.readJson(paths.attachmentAssets, []));
+    const retained = new Set(
+      [...remainingAttachments, ...remainingAssets]
+        .map((entry) => safeResolve(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const allowedRoot = path.join(workspaceDir, "attachments");
+    for (const oldPath of previousPaths) {
+      unlinkUnreferencedWorkspaceCopy(oldPath, allowedRoot, retained, root, workspaceDir);
+    }
     const base = {
       projectId: project.id,
       bindingCount: next.length,
@@ -2827,6 +3330,12 @@ function createXsxbMcpService(options = {}) {
     const buffer = fs.readFileSync(absolute);
     const name = String(args.name || path.basename(absolute));
     const id = slug(args.id || path.basename(absolute, path.extname(absolute)), "sfx");
+    const previousPaths = new Set();
+    for (const entry of bindings) {
+      if (entry && String(entry.id) === id && String(entry.key) === key && entry.path) {
+        previousPaths.add(entry.path);
+      }
+    }
     const relativePath = copyIntoWorkspace(project, path.join("audio", profile.id), absolute);
     const binding = {
       id,
@@ -2844,6 +3353,16 @@ function createXsxbMcpService(options = {}) {
     };
     const next = [...bindings.filter((entry) => entry.key !== key || entry.id !== binding.id), binding];
     projectStore.writeJson(paths.frameAudio, next);
+    const workspaceDir = projectStore.projectWorkspaceDir(project);
+    const retained = new Set(
+      readSfxBindings(paths)
+        .map((entry) => safeResolve(root, entry?.path || ""))
+        .filter(Boolean),
+    );
+    const allowedRoot = path.join(workspaceDir, "audio");
+    for (const oldPath of previousPaths) {
+      unlinkUnreferencedWorkspaceCopy(oldPath, allowedRoot, retained, root, workspaceDir);
+    }
     return {
       projectId: project.id,
       binding: { ...binding, data: `[${mime} omitted]` },
@@ -2927,7 +3446,45 @@ function createXsxbMcpService(options = {}) {
       remainingCount = kept.length;
       write = () => projectStore.writeJson(file, kept);
     }
-    if (!dryRun) write();
+    if (!dryRun) {
+      write();
+      const workspaceDir = projectStore.projectWorkspaceDir(project);
+      const remainingAudio = readSfxBindings(paths);
+      const remainingAttachments = normalizeBindings(projectStore.readJson(paths.frameImageAttachments, []));
+      const remainingAssets = normalizeBindings(projectStore.readJson(paths.attachmentAssets, []));
+      const remainingTrails = normalizeAttackTrails(
+        projectStore.readJson(paths.attackTrails, EMPTY_ATTACK_TRAILS),
+      );
+      const retained = new Set(
+        [...remainingAudio, ...remainingAttachments, ...remainingAssets]
+          .map((entry) => safeResolve(root, entry?.path || ""))
+          .filter(Boolean),
+      );
+      for (const segment of Object.values(remainingTrails.bindings || {}).flat()) {
+        const texturePath = safeResolve(root, segment?.texture?.path || "");
+        if (texturePath) retained.add(texturePath);
+      }
+      let allowedRoot;
+      switch (kind) {
+        case "sfx":
+          allowedRoot = path.join(workspaceDir, "audio");
+          break;
+        case "attachment":
+          allowedRoot = path.join(workspaceDir, "attachments");
+          break;
+        case "trail":
+          allowedRoot = path.join(workspaceDir, "attack_trails");
+          break;
+        default: {
+          const unexpected = kind;
+          throw new Error(`unexpected binding kind: ${unexpected}`);
+        }
+      }
+      for (const entry of removed) {
+        const copyPath = kind === "trail" ? entry?.texture?.path : entry?.path;
+        unlinkUnreferencedWorkspaceCopy(copyPath, allowedRoot, retained, root, workspaceDir);
+      }
+    }
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -2946,7 +3503,8 @@ function createXsxbMcpService(options = {}) {
   async function reorganizeFrames(args = {}) {
     const { project, profile, animation } = animationFor(args);
     const frames = animation.frames || [];
-    const dryRun = booleanFlag(args.dry_run, true);
+    const hasOrder = Array.isArray(args.order) && args.order.length > 0;
+    const dryRun = !hasOrder || booleanFlag(args.dry_run);
     let order = Array.isArray(args.order) ? args.order.map(Number) : frames.map((_, index) => index);
     if (String(args.loop_endpoint || "none") === "duplicate_first" && frames.length) {
       order = [...order, 0];
@@ -2977,6 +3535,7 @@ function createXsxbMcpService(options = {}) {
       projectId: project.id,
       profileId: profile.id,
       animationId: String(animation.id || animation.name),
+      applied: !dryRun,
       dryRun,
       inputFrameCount: frames.length,
       outputFrameCount: result.frameCount,
@@ -3020,6 +3579,7 @@ function createXsxbMcpService(options = {}) {
     const tempPath = `${target}.tmp-${process.pid}`;
     fs.writeFileSync(tempPath, buffer);
     fs.renameSync(tempPath, target);
+    forgetImportCacheIfInsideGodot(target);
     const newSize = { width: info.width, height: info.height };
     const sizeChanged = newSize.width !== previousSize.width || newSize.height !== previousSize.height;
     if (sizeChanged) {
@@ -3057,6 +3617,10 @@ function createXsxbMcpService(options = {}) {
     if (!rawShifts.length) throw new Error("frames is required; each entry needs frame plus dx and/or dy.");
     const shifted = [];
     let sizeChanged = false;
+    let annotationsChanged = false;
+    const { paths, documents } = loadDocuments(projectStore, project);
+    const annotationKey = (index) => `${profile.id}/${animation.id || animation.name}:${index}`;
+    const writtenTargets = [];
     withFileTransaction((transaction) => {
       for (const entry of rawShifts) {
         if (!entry || typeof entry !== "object") continue;
@@ -3090,6 +3654,15 @@ function createXsxbMcpService(options = {}) {
         const outHeight = Math.max(image.height, destMaxY + 1);
         const next = shiftPlantedRgba(image.data, image.width, image.height, dx, dy, outHeight);
         transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
+        writtenTargets.push(target);
+        const oldAnchor = canvasAnchor(image.width, image.height, animation.anchorMode);
+        const newAnchor = canvasAnchor(image.width, outHeight, animation.anchorMode);
+        const shiftX = oldAnchor.x + dx - newAnchor.x;
+        const shiftY = oldAnchor.y + dy - newAnchor.y;
+        if (shiftX !== 0 || shiftY !== 0) {
+          translateAnnotations(documents, annotationKey(index), shiftX, shiftY);
+          annotationsChanged = true;
+        }
         if (
           Number(frames[index].width || 0) !== image.width ||
           Number(frames[index].height || 0) !== outHeight
@@ -3104,7 +3677,9 @@ function createXsxbMcpService(options = {}) {
       if (sizeChanged) {
         transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
       }
+      if (annotationsChanged) persistAnnotationDocuments(transaction, paths, documents);
     });
+    for (const target of writtenTargets) forgetImportCacheIfInsideGodot(target);
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3117,6 +3692,15 @@ function createXsxbMcpService(options = {}) {
 
   /**
    * Plants opaque soles onto a target group-Y. Translate only.
+   * When `reference_animation_id` is set, pads to at least that canvas first
+   * (same origin-preserving pad as `xsxb_resize_canvas`). If omitted on a
+   * grounded non-idle actor and the profile has an idle clip, that idle is
+   * the reference (pad + median sole). Idle itself stays y=-1 of its canvas.
+   * If `target_y` is omitted or -1, plants onto the reference clip's measured
+   * sole (median feetY of that clip, not the first hang-heavier frame). An
+   * explicit `target_y` other than -1 is honored after the pad. After apply
+   * plans every selected frame, pads all frames in this animation to the
+   * clip's on-disk max(width)×max(height) so canvases match for diff_frames.
    * @param {object} args Tool arguments.
    * @returns {object} Plant receipt.
    */
@@ -3135,8 +3719,71 @@ function createXsxbMcpService(options = {}) {
       indexes = args.frames.map((value) => requireFrameIndex(value, lastIndex));
     }
     const apply = shouldCommit(args);
+    const clipLooksIdle = (clip) =>
+      [clip?.id, clip?.name].some((value) =>
+        String(value || "")
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .includes("idle"),
+      );
+    let referenceAnimationId = "";
+    if (args.reference_animation_id !== undefined) {
+      referenceAnimationId = String(args.reference_animation_id || "").trim();
+    } else if (
+      !isFxOrAirborne({
+        id: animation.id,
+        name: animation.name,
+        type: animation.type,
+        kind: animation.kind || profile.kind,
+      }) &&
+      !clipLooksIdle(animation)
+    ) {
+      const idle = (profile.animations || []).find((entry) => clipLooksIdle(entry));
+      if (idle) referenceAnimationId = String(idle.id || idle.name);
+    }
+    let lockWidth = 0;
+    let lockHeight = 0;
+    let referenceSoleGroupY = Number.NaN;
+    if (referenceAnimationId) {
+      const reference = (profile.animations || []).find(
+        (entry) => String(entry.id || entry.name) === referenceAnimationId,
+      );
+      if (!reference) throw new Error(`Reference animation not found: ${referenceAnimationId}`);
+      const referenceImages = collectFramePaths(project, reference, "Reference frame").map((filePath) =>
+        decodePngRgba(filePath),
+      );
+      lockWidth = Math.max(0, ...referenceImages.map((image) => image.width));
+      lockHeight = Math.max(0, ...referenceImages.map((image) => image.height));
+      const anchorMode = reference.anchorMode || animation.anchorMode || "canvas_bottom_center";
+      const soleRows = [];
+      for (const image of referenceImages) {
+        const aligned =
+          image.width === lockWidth && image.height === lockHeight
+            ? image
+            : padFramePreserveOrigin(image, lockWidth, lockHeight, anchorMode);
+        const geometry = measureSpriteGeometry(aligned.data, aligned.width, aligned.height);
+        if (Number.isFinite(Number(geometry.feetY))) soleRows.push(Number(geometry.feetY));
+      }
+      if (soleRows.length) {
+        const sorted = soleRows.slice().sort((left, right) => left - right);
+        const referenceSoleCanvasY = sorted[Math.floor(sorted.length / 2)];
+        const origin = canvasAnchor(lockWidth, lockHeight, anchorMode);
+        referenceSoleGroupY = referenceSoleCanvasY - origin.y;
+      }
+    }
+    const rawTargetY = args.target_y;
+    const defaultPlantTarget =
+      rawTargetY === undefined || rawTargetY === null || rawTargetY === "" || Number(rawTargetY) === -1;
+    const targetY =
+      referenceAnimationId && defaultPlantTarget && Number.isFinite(referenceSoleGroupY)
+        ? referenceSoleGroupY
+        : rawTargetY;
     const receipts = [];
     let sizeChanged = false;
+    let annotationsChanged = false;
+    const { paths, documents } = loadDocuments(projectStore, project);
+    const annotationKey = (index) => `${profile.id}/${animation.id || animation.name}:${index}`;
+    const writtenTargets = [];
     withFileTransaction((transaction) => {
       for (const index of indexes) {
         const target = resolveAnimationFramePath(project, frames[index].path, animation);
@@ -3148,38 +3795,105 @@ function createXsxbMcpService(options = {}) {
         );
         if (!fs.existsSync(target)) throw new Error(`Plant refused missing on-disk frame ${index}.`);
         const image = decodePngRgba(transaction.readPath(target));
-        const planned = planPlantFeet(image.data, image.width, image.height, {
-          targetY: args.target_y,
+        const destWidth = Math.max(image.width, lockWidth);
+        const destHeight = Math.max(image.height, lockHeight);
+        const padded = padFramePreserveOrigin(image, destWidth, destHeight, animation.anchorMode);
+        const planned = planPlantFeet(padded.data, padded.width, padded.height, {
+          targetY,
           to: args.to,
-          ...writePointOptions(animation, frames[index], args, image),
+          ...writePointOptions(animation, frames[index], args, padded),
         });
-        const outHeight = Math.max(image.height, Number(planned.outHeight) || image.height);
-        if (apply && (planned.dy !== 0 || outHeight > image.height)) {
-          const next = shiftPlantedRgba(image.data, image.width, image.height, 0, planned.dy, outHeight);
-          transaction.writeFile(target, encodePngRgba(next, image.width, outHeight));
+        const outHeight = Math.max(padded.height, Number(planned.outHeight) || padded.height);
+        const outWidth = padded.width;
+        const grew =
+          planned.dy !== 0 ||
+          outHeight > padded.height ||
+          outWidth !== image.width ||
+          padded.height !== image.height;
+        if (apply && grew) {
+          const next = shiftPlantedRgba(padded.data, padded.width, padded.height, 0, planned.dy, outHeight);
+          transaction.writeFile(target, encodePngRgba(next, outWidth, outHeight));
+          writtenTargets.push(target);
         }
         if (apply) {
+          const oldAnchor = canvasAnchor(padded.width, padded.height, animation.anchorMode);
+          const newAnchor = canvasAnchor(outWidth, outHeight, animation.anchorMode);
+          const shiftX = oldAnchor.x - newAnchor.x;
+          const shiftY = oldAnchor.y + planned.dy - newAnchor.y;
+          if (shiftX !== 0 || shiftY !== 0) {
+            translateAnnotations(documents, annotationKey(index), shiftX, shiftY);
+            annotationsChanged = true;
+          }
           if (
-            Number(frames[index].width || 0) !== image.width ||
+            Number(frames[index].width || 0) !== outWidth ||
             Number(frames[index].height || 0) !== outHeight
           ) {
-            frames[index].width = image.width;
+            frames[index].width = outWidth;
             frames[index].height = outHeight;
             sizeChanged = true;
           }
         }
-        receipts.push({ index, feetY: planned.feetY, dy: planned.dy, targetY: planned.targetY });
+        receipts.push({
+          index,
+          feetY: planned.feetY,
+          dy: planned.dy,
+          targetY: planned.targetY,
+          width: outWidth,
+          height: outHeight,
+        });
+      }
+      if (apply && frames.length) {
+        const clipImages = [];
+        for (let index = 0; index < frames.length; index += 1) {
+          const target = resolveAnimationFramePath(project, frames[index].path, animation);
+          assertWritableAnimationFrame(
+            project,
+            animation,
+            target,
+            `Plant refused frame ${index} outside the project workspace.`,
+          );
+          if (!fs.existsSync(target)) throw new Error(`Plant refused missing on-disk frame ${index}.`);
+          clipImages.push({
+            index,
+            target,
+            image: decodePngRgba(transaction.readPath(target)),
+          });
+        }
+        const destWidth = Math.max(...clipImages.map((entry) => entry.image.width));
+        const destHeight = Math.max(...clipImages.map((entry) => entry.image.height));
+        for (const entry of clipImages) {
+          const padded = padFramePreserveOrigin(entry.image, destWidth, destHeight, animation.anchorMode);
+          if (padded.width !== entry.image.width || padded.height !== entry.image.height) {
+            transaction.writeFile(entry.target, encodePngRgba(padded.data, padded.width, padded.height));
+            writtenTargets.push(entry.target);
+          }
+          if (
+            Number(frames[entry.index].width || 0) !== destWidth ||
+            Number(frames[entry.index].height || 0) !== destHeight
+          ) {
+            frames[entry.index].width = destWidth;
+            frames[entry.index].height = destHeight;
+            sizeChanged = true;
+          }
+        }
+        for (const receipt of receipts) {
+          receipt.width = destWidth;
+          receipt.height = destHeight;
+        }
       }
       if (apply && sizeChanged) {
         transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
       }
+      if (apply && annotationsChanged) persistAnnotationDocuments(transaction, paths, documents);
     });
+    for (const target of writtenTargets) forgetImportCacheIfInsideGodot(target);
     return {
       projectId: project.id,
       profileId: profile.id,
       animationId: String(animation.id || animation.name),
       applied: apply,
       dryRun: booleanFlag(args.dry_run) || !apply,
+      referenceAnimationId: referenceAnimationId || undefined,
       frames: receipts,
       space: "group",
       sync: synchronize(project, apply ? booleanFlag(args.sync) : false),
@@ -3210,6 +3924,7 @@ function createXsxbMcpService(options = {}) {
         throw new Error(`Compress refused missing on-disk frame ${index}: ${rawPath || absolute}`);
       }
       const result = compressPngFile(absolute, { dryRun });
+      if (result.wrote) forgetImportCacheIfInsideGodot(absolute);
       receipts.push({
         index,
         path: reslash(path.relative(root, result.path)),
@@ -3237,7 +3952,7 @@ function createXsxbMcpService(options = {}) {
   }
 
   async function exportGif(args = {}) {
-    const { project, profile, animation } = animationFor(args);
+    const { project, profile, animation } = lookupAnimation(args);
     const frames = animation.frames || [];
     if (!frames.length) throw new Error("Cannot export an animation without frames.");
     const lastIndex = frames.length - 1;
@@ -3356,6 +4071,7 @@ function createXsxbMcpService(options = {}) {
     }
     if (!fs.existsSync(outputPath)) throw new Error("GIF export produced no output file.");
     const copyTo = copyIfRequested(outputPath, args.copy_to);
+    const suggestedGameFps = fps > 12 && fps <= 120 ? suggestGameFps(fps) : undefined;
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3368,6 +4084,11 @@ function createXsxbMcpService(options = {}) {
       startFrame,
       endFrame,
       fps,
+      suggestedGameFps,
+      next:
+        suggestedGameFps === undefined || suggestedGameFps === fps
+          ? undefined
+          : `pass fps=${suggestedGameFps} (suggestedGameFps) so the GIF is a game loop, not camera-rate flicker`,
       appliedVisual,
       bakedTrails,
       bakedAttachments,
@@ -3376,16 +4097,17 @@ function createXsxbMcpService(options = {}) {
       frameScales: appliedVisual ? selectedScales : undefined,
       totalDurationMs: Math.round(durations.reduce((sum, value) => sum + value, 0) * 1000),
       bytes: fs.statSync(outputPath).size,
+      preview: { path: outputPath },
     };
   }
 
   /**
    * Exports a contact sheet that scales every source canvas into a shared cell.
    * @param {object} args Tool arguments.
-   * @returns {object} Sheet receipt.
+   * @returns {object} Sheet receipt including `preview.path` for walk-lock visual QA.
    */
   async function exportSheet(args = {}) {
-    const { project, profile, animation } = animationFor(args);
+    const { project, profile, animation } = lookupAnimation(args);
     const frames = animation.frames || [];
     if (!frames.length) throw new Error("Cannot export a sheet without frames.");
     const lastIndex = frames.length - 1;
@@ -3513,6 +4235,7 @@ function createXsxbMcpService(options = {}) {
       pad,
       width: sheet.width,
       height: sheet.height,
+      preview: { path: outputPath, width: sheet.width, height: sheet.height },
       bytes: fs.statSync(outputPath).size,
       fps,
       bakedTrails: baked.bakedTrails === true,
@@ -3612,7 +4335,7 @@ function createXsxbMcpService(options = {}) {
         artifactDir: currentArtifactDir(),
       };
     }
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const filePaths = collectFramePaths(selection.project, selection.animation);
     const requestedFrame =
       args.frame === undefined ? null : requireFrameIndex(args.frame, filePaths.length - 1);
@@ -3659,7 +4382,7 @@ function createXsxbMcpService(options = {}) {
    * @returns {object} Content-addressed animation observation.
    */
   function animationObservation(args = {}) {
-    const selection = animationFor(args);
+    const selection = lookupAnimation(args);
     const filePaths = collectFramePaths(selection.project, selection.animation);
     const paths = projectStore.projectPaths(selection.project);
     const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);
@@ -3706,7 +4429,7 @@ function createXsxbMcpService(options = {}) {
   function overlayGrid(args = {}) {
     let artifactDir = currentArtifactDir();
     if (args.project_id) {
-      artifactDir = currentArtifactDir(registryProject(args.project_id, false));
+      artifactDir = currentArtifactDir(lookupProject(args.project_id));
     }
     return overlayGridImage(args, { root, artifactDir });
   }
@@ -3733,6 +4456,8 @@ function createXsxbMcpService(options = {}) {
     root,
     projectStore,
     animationFor,
+    lookupAnimation,
+    lookupProject,
     registryProject,
     currentArtifactDir,
     resolveAnimationFramePath,
@@ -3741,6 +4466,18 @@ function createXsxbMcpService(options = {}) {
     clearAnimationSelection() {
       context.profileId = "";
       context.animationId = "";
+    },
+    /**
+     * Points the in-memory session at a clip after a mutation that created or renamed it.
+     * @param {string} projectId Registry project id.
+     * @param {string} profileId Profile id.
+     * @param {string} animationId Clip id.
+     * @returns {void}
+     */
+    selectAnimation(projectId, profileId, animationId) {
+      selectProject(projectId);
+      context.profileId = profileId;
+      context.animationId = animationId;
     },
   });
 
@@ -3778,8 +4515,10 @@ function createXsxbMcpService(options = {}) {
     xsxb_plan_place: planPlace,
     xsxb_place_image: placeImage,
     xsxb_validate_project: validateProject,
+    xsxb_validate_for_godot: validateForGodot,
+    xsxb_diff_frames: diffFrames,
     xsxb_add_attack_trail: addAttackTrail,
-    xsxb_plan_smear: compileSmearBrief,
+    xsxb_plan_smear: (args) => planSmear(args, { root, artifactDir: currentArtifactDir() }),
     xsxb_add_attachment: addAttachment,
     xsxb_add_sfx: addSfx,
     xsxb_remove_binding: removeBinding,
@@ -3821,7 +4560,7 @@ function createXsxbMcpService(options = {}) {
   function receiptRoute(name, readOnly) {
     if (readOnly) return "domain_read";
     if (/export_|import_video|sync_godot/u.test(name)) return "external_process";
-    if (/place|plant|shift|register|measure|overlay/u.test(name)) return "geometry";
+    if (/place|plant|shift|register|measure|overlay|diff|smear/u.test(name)) return "geometry";
     return "domain_mutation";
   }
 
@@ -3840,6 +4579,9 @@ function createXsxbMcpService(options = {}) {
     };
     if (name === "xsxb_overlay_grid" && args.crop_from && !args.crop_from.overlay_id) {
       refuse("crop_from");
+    }
+    if (name === "xsxb_plan_smear" && String(args.target_path || "").trim() && !args.overlay_id) {
+      refuse("xsxb_plan_smear");
     }
     if (name !== "xsxb_place_image") return;
     for (const [label, anchor] of [
@@ -3985,14 +4727,18 @@ function createXsxbMcpService(options = {}) {
         evidence: ["geometric_only_visual_fit_unproven"],
       };
     }
-    return successReceipt(name, raw, {
+    const receiptOptions = {
       readOnly: definition?.annotations?.readOnlyHint === true && !metadata.execution,
       route: receiptRoute(name, definition?.annotations?.readOnlyHint === true),
       observation,
       execution,
       verification,
       escalation: metadata.escalation || null,
-    });
+    };
+    if (name === "xsxb_validate_for_godot" || name === "xsxb_validate_project") {
+      return gateReceipt(name, raw, receiptOptions);
+    }
+    return successReceipt(name, raw, receiptOptions);
   }
 
   let serviceCallQueue = Promise.resolve();

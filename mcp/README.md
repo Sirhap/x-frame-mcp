@@ -77,11 +77,11 @@ npm run mcp:start
 - **工程流程：** 开工先用一句话写下用户目标，再 `list`/`get` 选 playbook；多步用有序 todo；每步改盘后打开图（`preview.path` / overlay / gif）再勾掉，`confirmed` 不算完成；眼睛不过就停，不要接着走 playbook
 - 改数据前先 `xsxb_list_projects` 或 `xsxb_get_project`。没有项目时用 `xsxb_create_project`（`project_id` / `label` / `project_root` 均可选；已存在的 id 不重复建）。默认落在当前目录 `.x-frame/`；带 `project_root` 时落在那个目录的 `.x-frame/`
 - 同步前先 `xsxb_bind_godot`
-- 导入用 `xsxb_import_animation`（支持 `start_frame` / `end_frame` / `replace` / `in_place`）；`xsxb_import_video` 只是视频别名，可另传 `start_time` / `duration`（ffmpeg `-ss`/`-t` 放在 `-i` 后；省略则抽整段）。`in_place: true` 让 PNG 序列继续用源文件，不拷进 `workspace/assets`
+- 导入用 `xsxb_import_animation`（支持 `start_frame` / `end_frame` / `replace` / `in_place` / `animation_type`）；`xsxb_import_video` 只是视频别名，可另传 `start_time` / `duration`（ffmpeg `-ss`/`-t` 放在 `-i` 后；省略则抽整段）。`animation_type=vfx|prop` 会跳过待机脚底合同。`in_place: true` 让 PNG 序列继续用源文件，不拷进 `workspace/assets`
 - 切表用 `xsxb_slice_sheet`（packed sprite/contact sheet → PNG 序列）。走循环锁高锁脚仍用 `xsxb_measure_frames` / `xsxb_register_clip`，不要用切表当锁尺
 - 走循环锁尺：`xsxb_measure_frames`（相对待机看 `dBbox` / `dCx` / `dFx`）→ `xsxb_register_clip`（绕脚锁高锁脚锁左右，`equalize` 抹镜头远近，`shared_scale` 留姿势起伏）→ `xsxb_export_sheet normalize=feet|none` 和 `xsxb_export_overlay`（红/青叠）验收 → `xsxb_export_gif`（默认品红底，`output_path` 可出 XSXB 根）或 `xsxb_export_pack_slot` 拷进游戏仓。走循环不要用刀光 / `place_image`
 - 抠图用 `xsxb_cutout`（默认 `fit=none`、`receipt=short`；生成白底或黑底用 `key_mode=border_flood`；看回执 `preview.path` 洋红扁平成图，不要用默认种脚小格子表当「人还在」；网页同一套智能抠图和滑块；可传 `tolerance` / `feather` / `protected_colors` 等，省略则用共用智能档；已抠帧默认跳过，除非 `force`；回执带 `bodyHeight` / `nearWhite`，`metrics=false` 可关）
-- 视频做成循环动画：导入 → `xsxb_cutout`（省略滑块用共用智能档）→ `xsxb_analyze`（一次解码：去重 / 循环 / 动作窗，并写出推荐窗的 `grid=false` 预览 sheet）。看 `preview.path`，不要给每个候选单独 `xsxb_export_sheet`。`oneShotLikely` 表示长镜头里的短爆发，长镜头里的完整步态循环不是 one-shot。套用时 `xsxb_reorganize_frames` 传 `loop.recommended.order` 或 `motion.order`（`loop_endpoint=duplicate_first` 把第 0 帧拷成尾帧）。回执若带 `autoAdjustedThreshold`，不要直接套用 `duplicates.order`，除非传了 `auto_adjust`
+- 视频做成循环动画：导入 → `xsxb_cutout`（省略滑块用共用智能档）→ `xsxb_analyze`（一次解码：去重 / 循环 / 动作窗，并写出推荐窗的 `grid=false` 预览 sheet）。看 `preview.path`，不要给每个候选单独 `xsxb_export_sheet`。`oneShotLikely` 表示长镜头里的短爆发，长镜头里的完整步态循环不是 one-shot。套用时 `xsxb_reorganize_frames` 传 `applyOrder`（不要只传 `loop.recommended.order` 或 `motion.order`，那会索引整段导入并保留 rest hold；`loop_endpoint=duplicate_first` 把第 0 帧拷成尾帧）。回执若带 `autoAdjustedThreshold`，不要直接套用 `duplicates.order`，除非传了 `auto_adjust`
 - 循环段用 `xsxb_find_loop`（已导入动画、PNG 目录或 `file_paths`）；重复 hold 用 `xsxb_find_duplicates`；单次动作去头尾 hold 用 `xsxb_find_motion`；导入之后优先 `xsxb_analyze`。应用候选时再 `xsxb_reorganize_frames` 传 `order`
 - 统一角色大小主路径是 `xsxb_register_clip`。`xsxb_estimate_visual` 只估倍率（`equalize` / `metric=bbox|body` / `reference_frame`），不是锁脚。手填用 `xsxb_set_visual_transform`（可 `frames[]` + `clear_group`）。要把组/帧缩放写进像素时用 `xsxb_cutout apply_visual`
 - 预览用 `xsxb_export_gif`（尊重单帧时长和组/帧 `visual_size`；默认品红底，避免透明脚在黑底上跳；`output_path` / `copy_to` 可写到 `/tmp` 或游戏仓）或 `xsxb_export_sheet` 拼表。高度验收用 `normalize=none` 或 `feet`，不要用 `cell` 把矮帧拉满格子。格子带调参台组坐标网格，脚底 `0,0`，身体在负 y。`grid_density` 加密网格线；图上标的是与回执 `grid.cells[row][col]` 对应的行列号。组坐标由代码写在 JSON / `grid.legend` 里，**不要 OCR**。写回用 `grid.cells[row][col]`（row 0 是顶、col 0 是左，`x,y` 是该格左上角组坐标）。AI 按任务和画布大小填 `grid_density`（sparse/normal/dense）、`grid_divs`（如 `8x8`）或 `grid_x`/`grid_y`，以及 `grid_scope`（canvas|subject）；省略则用自动步长。源 PNG 不变
@@ -103,7 +103,9 @@ npm run mcp:start
 - 如实回报工具结果，不要编造成功
 - MCP 报错、缺能力、或必须离开 MCP 才能做完时：告诉用户，并提到 `X-Frame` 项目。带上工具名、参数、回执或错误、期望结果、实际结果。不要静默绕过缺口
 
-完整会话流程写在 `initialize.instructions`：走循环锁尺、视频成环、静图贴合、刀光各一行。硬约束（`preview.path`、`y=-1`、`overlay_id`、`grid=false`）在对应工具 description。Skill 侧见 `skills/xsxb-frame-tuner/SKILL.md` 的 MCP Feedback。
+完整会话流程写在 `initialize.instructions`：走循环锁尺、视频成环、静图贴合、刀光各一行。硬约束（`preview.path`、`y=-1`、`overlay_id`、`grid=false`）在对应工具 description。Playbook 拆在 `skills/x-frame-import`、`x-frame-cutout`、`x-frame-gameplay`、`x-frame-godot`。`xsxb-frame-tuner` 只做路由。
+
+Godot 编辑器操作（开场景、跑游戏、改节点）用独立的 Godot editor MCP，例如 [godot-mcp](https://github.com/Coding-Solo/godot-mcp) 或 [satelliteoflove/godot-mcp](https://github.com/satelliteoflove/godot-mcp)。本仓库不同化编辑器，也不内置 rembg/SAM。`xsxb_validate_for_godot` 只做数据与 gameplay 门闩，回执带 `qa`、`godot` 磁盘快照、`evidence.cells`（每格 clip id + 选中帧）和 `run_summary.path`；`xsxb_diff_frames` 写出可打开的对比 PNG（onion 会先抠底板）。`qa=warn` 必须停。导入或 sync 不是视觉验收。
 
 ## 当前工具
 
@@ -111,9 +113,9 @@ npm run mcp:start
 
 初始化下发自洽的 playbook 行；不提供 MCP prompts/resources。`ping` 不进入业务队列；`tools/list` 与 `tools/call` 仍串行。`tools/list` 不重复 v2 回执 envelope，每次 `tools/call` 的 `structuredContent` 才带信封。同步解码或哈希仍会占用主线程。
 
-`xsxb_register_clip`、`xsxb_plant_feet`、`xsxb_estimate_visual` 在省略两个开关时预览：`dry_run:true` 或 `apply:false` 优先保持预览，否则 `apply:true` 或 `dry_run:false` 提交。`xsxb_reorganize_frames` 和 `xsxb_compress_frames` 默认预览，提交必须传 `dry_run:false`。重排、挂件、音效、刀光和移除绑定均不再默认同步 Godot，需显式传 `sync:true`，或在本地验收后单独调用 `xsxb_sync_godot`。已有自动化若依赖旧默认写盘或同步行为，应补齐这些参数。
+`xsxb_register_clip`、`xsxb_plant_feet`、`xsxb_estimate_visual` 在省略两个开关时预览：`dry_run:true` 或 `apply:false` 优先保持预览，否则 `apply:true` 或 `dry_run:false` 提交。`xsxb_reorganize_frames` 非空 `order` 提交，省略 `order` 预览。`xsxb_compress_frames` 默认预览，提交必须传 `dry_run:false`。重排、挂件、音效、刀光和移除绑定均不再默认同步 Godot，需显式传 `sync:true`，或在本地验收后单独调用 `xsxb_sync_godot`。已有自动化若依赖旧默认写盘或同步行为，应补齐这些参数。
 
-`xsxb_list_projects` · `xsxb_get_project` · `xsxb_create_project` · `xsxb_set_active_project` · `xsxb_bind_godot` · `xsxb_import_animation` · `xsxb_import_video` · `xsxb_slice_sheet` · `xsxb_get_animation` · `xsxb_find_loop` · `xsxb_find_duplicates` · `xsxb_find_motion` · `xsxb_analyze` · `xsxb_cutout` · `xsxb_measure_frames` · `xsxb_register_clip` · `xsxb_estimate_visual` · `xsxb_set_visual_transform` · `xsxb_estimate_boxes` · `xsxb_update_frame_boxes` · `xsxb_update_timing` · `xsxb_replace_frame` · `xsxb_shift_frames` · `xsxb_plant_feet` · `xsxb_reorganize_frames` · `xsxb_add_attack_trail` · `xsxb_plan_smear` · `xsxb_add_attachment` · `xsxb_add_sfx` · `xsxb_remove_binding` · `xsxb_delete_animation` · `xsxb_sync_godot` · `xsxb_validate_project` · `xsxb_export_gif` · `xsxb_export_sheet` · `xsxb_export_overlay` · `xsxb_export_pack_slot` · `xsxb_measure_image` · `xsxb_detect_regions` · `xsxb_overlay_grid` · `xsxb_plan_place` · `xsxb_place_image`
+`xsxb_list_projects` · `xsxb_get_project` · `xsxb_create_project` · `xsxb_set_active_project` · `xsxb_bind_godot` · `xsxb_import_animation` · `xsxb_import_video` · `xsxb_slice_sheet` · `xsxb_get_animation` · `xsxb_find_loop` · `xsxb_find_duplicates` · `xsxb_find_motion` · `xsxb_analyze` · `xsxb_cutout` · `xsxb_measure_frames` · `xsxb_register_clip` · `xsxb_estimate_visual` · `xsxb_set_visual_transform` · `xsxb_estimate_boxes` · `xsxb_update_frame_boxes` · `xsxb_update_timing` · `xsxb_replace_frame` · `xsxb_shift_frames` · `xsxb_plant_feet` · `xsxb_reorganize_frames` · `xsxb_add_attack_trail` · `xsxb_plan_smear` · `xsxb_add_attachment` · `xsxb_add_sfx` · `xsxb_remove_binding` · `xsxb_delete_animation` · `xsxb_sync_godot` · `xsxb_validate_project` · `xsxb_validate_for_godot` · `xsxb_export_gif` · `xsxb_export_sheet` · `xsxb_export_overlay` · `xsxb_diff_frames` · `xsxb_export_pack_slot` · `xsxb_measure_image` · `xsxb_detect_regions` · `xsxb_overlay_grid` · `xsxb_plan_place` · `xsxb_place_image`
 
 工具只接受项目、角色、动画、帧等业务标识，不接受任意 Shell 或不受限文件路径。
 
