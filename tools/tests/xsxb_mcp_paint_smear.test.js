@@ -65,6 +65,21 @@ test("paintCrescentRgba fills a hollow arc and leaves the pivot empty", () => {
   assert.ok(above > 20 && below > 20, "arc must reach both sides of the blade");
 });
 
+test("a high inner_ratio is a thin ribbon, not a filled fan", () => {
+  const spec = {
+    pivot: { x: 20, y: 40 },
+    tip: { x: 62, y: 40 },
+    color: { r: 48, g: 196, b: 255 },
+    arcDegrees: 120,
+    outerScale: 1.12,
+  };
+  const filled = paintCrescentRgba(80, 80, { ...spec, innerRatio: 0.4 });
+  const thin = paintCrescentRgba(80, 80, { ...spec, innerRatio: 0.82 });
+  assert.ok(thin.painted < filled.painted * 0.6, `thin=${thin.painted} filled=${filled.painted}`);
+  const mid = thin.data[(40 * 80 + 40) * 4 + 3];
+  assert.ok(mid < 20, `mid-radius must stay hollow on a ribbon, alpha=${mid}`);
+});
+
 test("xsxb_plan_smear paints a crescent from cells; it does not take a smear PNG", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-paint-smear-"));
   const width = 64;

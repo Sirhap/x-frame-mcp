@@ -70,6 +70,20 @@ function smoothstep(edge0, edge1, value) {
 }
 
 /**
+ * Inward nick amount along a 0..1 arc. Two spikes read as a hollow sickle, not a fan.
+ * @param {number} along Arc parameter.
+ * @returns {number} 0..1 spike.
+ */
+function innerSpike(along) {
+  let spike = 0;
+  for (const center of [0.48, 0.72]) {
+    const fall = Math.max(0, 1 - Math.abs(along - center) / 0.08);
+    spike = Math.max(spike, fall * fall);
+  }
+  return spike;
+}
+
+/**
  * Paints a hollow ice crescent into a new RGBA buffer. Source pixels are not
  * copied; callers composite with layer=behind.
  * @param {number} width Canvas width.
@@ -83,11 +97,13 @@ function paintCrescentRgba(width, height, spec) {
   const color = spec.color;
   const rTip = Math.hypot(tip.x - pivot.x, tip.y - pivot.y);
   if (!(rTip > 8)) throw new Error("pivot and tip must be more than 8 pixels apart.");
-  const innerRatio = Math.min(0.85, Math.max(0.12, Number(spec.innerRatio) || 0.42));
+  const innerRatio = Math.min(0.9, Math.max(0.12, Number(spec.innerRatio) || 0.42));
   const outerScale = Math.min(1.6, Math.max(1.02, Number(spec.outerScale) || 1.12));
   const arcDegrees = Math.min(170, Math.max(40, Number(spec.arcDegrees) || 120));
   const rInner = rTip * innerRatio;
   const rOuter = rTip * outerScale;
+  const rMid = (rInner + rOuter) / 2;
+  const halfW0 = (rOuter - rInner) / 2;
   const thetaTip = Math.atan2(tip.y - pivot.y, tip.x - pivot.x);
   const halfArc = (arcDegrees * Math.PI) / 180 / 2;
   let theta0 = thetaTip - halfArc;
@@ -109,23 +125,30 @@ function paintCrescentRgba(width, height, spec) {
       const dx = x + 0.5 - pivot.x;
       const dy = y + 0.5 - pivot.y;
       const radius = Math.hypot(dx, dy);
-      if (radius > rOuter + 1.5 || radius < rInner * 0.55) continue;
+      if (radius > rOuter + 2 || radius < rInner * 0.35) continue;
       const from0 = wrapDelta(Math.atan2(dy, dx) - theta0);
       const along = from0 / span;
       if (along < 0 || along > 1) continue;
-      const bin = Math.floor((((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * 64) % 64);
-      const notch = 0.7 + 0.3 * unitHash(bin);
-      const inner = rInner * notch;
-      if (radius < inner) continue;
-      const radial = (radius - inner) / Math.max(1, rOuter - inner);
-      if (radial > 1.05) continue;
-      const body = smoothstep(0.04, 0.28, radial) * (1 - smoothstep(0.86, 1.02, radial));
-      const rim = smoothstep(0.76, 0.9, radial) * (1 - smoothstep(0.96, 1.05, radial));
-      const shard = unitHash(bin + 17) > 0.82 && radial > 0.55 && radial < 0.98 ? 0.35 : 0;
-      const angular = smoothstep(0, 0.1, along) * (1 - smoothstep(0.88, 1, along));
-      const alpha = Math.min(1, (body * 0.82 + rim * 0.95 + shard) * Math.max(0.15, angular));
-      if (alpha <= 0.02) continue;
-      const highlight = Math.min(1, rim * 0.7 + shard);
+      const taper = Math.sin(along * Math.PI) ** 1.25;
+      if (taper < 0.05) continue;
+      const bin = Math.floor((((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * 72) % 72);
+      const spike = innerSpike(along);
+      const halfW = halfW0 * (0.16 + 0.84 * taper);
+      const innerEdge = rMid - halfW - spike * halfW0 * 0.9;
+      const outerEdge = rMid + halfW * (1 + 0.05 * unitHash(bin));
+      if (radius < innerEdge || radius > outerEdge + 1.2) continue;
+      const across = (radius - innerEdge) / Math.max(1, outerEdge - innerEdge);
+      if (across < 0 || across > 1.05) continue;
+      const body = smoothstep(0.05, 0.3, across) * (1 - smoothstep(0.7, 0.97, across));
+      const rim = smoothstep(0.68, 0.84, across) * (1 - smoothstep(0.93, 1.04, across));
+      const ice = 0.62 + 0.38 * unitHash(bin) * unitHash((Math.floor(radius / 2) ^ bin) + 9);
+      const sparkle =
+        unitHash(Math.imul(x + 3, 374761393) ^ Math.imul(y + 1, 668265263)) > 0.987 && across > 0.55
+          ? 0.7
+          : 0;
+      const alpha = Math.min(1, (body * 0.78 * ice + rim * 0.98 + sparkle) * taper);
+      if (alpha <= 0.03) continue;
+      const highlight = Math.min(1, rim * 0.75 + sparkle);
       const off = (y * width + x) * 4;
       data[off] = Math.round(color.r + (255 - color.r) * highlight);
       data[off + 1] = Math.round(color.g + (255 - color.g) * highlight);
