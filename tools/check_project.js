@@ -95,6 +95,7 @@ function formatFiles(files) {
     if (parts[0] === "mcp") {
       return (
         parts.length === 2 ||
+        parts[1] === "authoring" ||
         (parts[1] === "lib" &&
           parts.length === 3 &&
           (maintainedLib.has(parts[2]) || parts[2] === "README.md"))

@@ -77,6 +77,115 @@ function digest(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
+/**
+ * Writes the same source frames in each supported on-disk import format.
+ * @param {string} game Temporary Godot project root.
+ * @param {Buffer[]} frames PNG bytes.
+ * @returns {{directory:string,files:string[],spriteframes:string}} Import paths.
+ */
+function writeImportSources(game, frames) {
+  const directory = path.join(game, "sprites");
+  fs.mkdirSync(directory, { recursive: true });
+  const files = frames.map((bytes, index) => {
+    const file = path.join(directory, `frame_${index}.png`);
+    fs.writeFileSync(file, bytes);
+    return file;
+  });
+  const spriteframes = path.join(game, "walk.spriteframes.tres");
+  fs.writeFileSync(
+    spriteframes,
+    files
+      .map(
+        (file, index) =>
+          `[ext_resource type="Texture2D" path="res://sprites/${path.basename(file)}" id="${index}"]`,
+      )
+      .join("\n") +
+      `\n[resource]\nanimations = [{"frames": [` +
+      files.map((_, index) => `{"duration": 1.0, "texture": ExtResource("${index}")}`).join(",") +
+      `], "loop": true, "name": &"walk", "speed": 24.0}]\n`,
+  );
+  return { directory, files, spriteframes };
+}
+
+/**
+ * Chooses public import arguments for the generated on-disk sources.
+ * @param {string} source Import kind.
+ * @param {object} paths Source fixture paths.
+ * @returns {object} Public tool arguments.
+ */
+function pathImportArguments(source, paths) {
+  if (source === "png_sequence") return { source, directory: paths.directory };
+  if (source === "items") return { source, items: paths.files.map((file) => ({ path: file })) };
+  return { source, file_path: paths.spriteframes };
+}
+
+for (const source of ["png_sequence", "items", "spriteframes"]) {
+  for (const inPlace of [false, true]) {
+    test(`${source} path import avoids base64 and preserves selected bytes (in_place=${inPlace})`, async () => {
+      await withVideoProject(async ({ call, game, frames }) => {
+        const paths = writeImportSources(game, frames);
+        const toString = Buffer.prototype.toString;
+        Buffer.prototype.toString = function (encoding, ...args) {
+          if (encoding === "base64" && this.length >= 8 && this[0] === 137 && this[1] === 80) {
+            throw new Error("unnecessary PNG base64 encoding");
+          }
+          return toString.call(this, encoding, ...args);
+        };
+        try {
+          const result = await call("xsxb_import_animation", {
+            ...pathImportArguments(source, paths),
+            animation_id: "walk",
+            in_place: inPlace,
+            start_frame: 1,
+            end_frame: 2,
+            fps: 24,
+            sync: true,
+          });
+          assert.equal(result.importedFrameCount, 2);
+          assert.equal(result.sync.ok, true);
+        } finally {
+          Buffer.prototype.toString = toString;
+        }
+        const current = await call("xsxb_get_animation", { animation_id: "walk" });
+        assert.equal(current.animation.fps, 24);
+        assert.deepEqual(
+          current.animation.frames.map((frame) => digest(fs.readFileSync(frame.absolutePath))),
+          frames.slice(1).map(digest),
+        );
+        for (const [index, frame] of current.animation.frames.entries()) {
+          assert.equal(frame.absolutePath === paths.files[index + 1], inPlace);
+        }
+      });
+    });
+  }
+}
+
+for (const source of ["png_sequence", "items", "spriteframes"]) {
+  test(`corrupt later ${source} frame preserves existing animation and cleans staged imports`, async () => {
+    await withVideoProject(async ({ call, game, frames, paths }) => {
+      const sources = writeImportSources(game, frames);
+      const args = { ...pathImportArguments(source, sources), animation_id: "keep" };
+      await call("xsxb_import_animation", args);
+      await call("xsxb_update_timing", { frame: 0, duration: 2 });
+      const current = await call("xsxb_get_animation");
+      const files = [
+        ...current.animation.frames.map((frame) => frame.absolutePath),
+        paths.manifest,
+        paths.tuning,
+      ];
+      const originals = files.map((file) => fs.readFileSync(file));
+      fs.writeFileSync(sources.files[1], "not a PNG");
+      await assert.rejects(call("xsxb_import_animation", { ...args, replace: true }));
+      files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), originals[index]));
+      const parent = path.dirname(path.dirname(files[0]));
+      assert.equal(
+        fs.readdirSync(parent).some((name) => /\.(import|backup)-/.test(name)),
+        false,
+      );
+    });
+  });
+}
+
 test("video frame import does not encode PNG bytes as base64", async () => {
   await withVideoProject(async ({ call, video }) => {
     const toString = Buffer.prototype.toString;

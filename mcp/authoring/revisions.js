@@ -47,6 +47,7 @@ function createRevisionStore(context) {
         target: file,
         external: false,
       });
+    const knownTargets = new Set(files.map((entry) => entry.target));
     for (const profile of manifest.profiles || [])
       for (const animation of profile.animations || [])
         for (const frame of animation.frames || []) {
@@ -55,8 +56,10 @@ function createRevisionStore(context) {
             if (tolerateMissing) continue;
             throw new Error(`Snapshot requires every frame to exist: ${frame.path}`);
           }
-          if (!files.some((entry) => entry.target === file))
+          if (!knownTargets.has(file)) {
             files.push({ key: `external/${digest(file)}`, target: file, external: true });
+            knownTargets.add(file);
+          }
         }
     return files.filter((entry) => fs.existsSync(entry.target)).sort((a, b) => a.key.localeCompare(b.key));
   }
@@ -190,8 +193,15 @@ function createRevisionStore(context) {
     const changes = [...new Set([...l.keys(), ...r.keys()])]
       .filter((key) => l.get(key)?.hash !== r.get(key)?.hash)
       .map((key) => ({ key, status: !l.has(key) ? "added" : !r.has(key) ? "removed" : "changed" }));
+    const imageChanges = changes
+      .filter((change) =>
+        [l.get(change.key), r.get(change.key)].some(
+          (entry) => entry && /\.png$/i.test(entry.external ? entry.target : entry.key),
+        ),
+      )
+      .slice(0, 8);
     const images = [];
-    for (const change of changes.filter((c) => c.key.endsWith(".png")).slice(0, 8))
+    for (const change of imageChanges)
       for (const [snapshot, entries] of [
         [left, l],
         [right, r],
@@ -221,7 +231,7 @@ function createRevisionStore(context) {
       preview = {
         path: output,
         order: "left=before, right=after; empty checkerboard means missing file",
-        files: changes.filter((c) => c.key.endsWith(".png")).slice(0, 8),
+        files: imageChanges,
       };
     }
     return {

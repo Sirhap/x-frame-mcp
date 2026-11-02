@@ -62,26 +62,41 @@ async function extractVideoFrames(videoPath, outputDirectory, options = {}) {
 }
 
 /**
+ * Rounds each GIF duration independently to the nearest centisecond (minimum
+ * 10 ms). Rejects delays that cannot fit in GIF's unsigned 16-bit delay field.
+ * @param {number[]} durations Requested frame durations in seconds.
+ * @returns {number[]} Quantized frame durations in seconds.
+ */
+function quantizeGifDurations(durations) {
+  return durations.map((value, index) => {
+    const duration = Number(value);
+    if (!Number.isFinite(duration)) {
+      throw new Error(`GIF duration is missing for frame ${index + 1}.`);
+    }
+    const delay = Math.max(1, Math.round(duration * 100));
+    if (delay > 65535) throw new Error(`GIF duration exceeds 655.35 seconds for frame ${index + 1}.`);
+    return delay / 100;
+  });
+}
+
+/**
  * Encodes an animated GIF from PNG frames with per-frame durations via FFmpeg.
  * @param {{framePaths:string[],durations:number[],outputPath:string,ffmpegBinary?:string}} job Encode job.
  * @returns {Promise<void>}
  */
 async function encodeGifWithFfmpeg(job) {
+  if (!Array.isArray(job.framePaths) || !job.framePaths.length) {
+    throw new Error("GIF export requires at least one frame.");
+  }
   const escapePath = (filePath) => filePath.replace(/'/g, "'\\''");
   const lines = ["ffconcat version 1.0"];
+  const durations = quantizeGifDurations(job.framePaths.map((_, index) => job.durations?.[index]));
   job.framePaths.forEach((framePath, index) => {
-    const duration = Number(job.durations?.[index]);
-    if (!Number.isFinite(duration)) {
-      throw new Error(`GIF duration is missing for frame ${index + 1}.`);
-    }
     lines.push(`file '${escapePath(framePath)}'`);
     // A 1/100s image timebase matches GIF delay resolution; the default 1/25 rounds delays to 40ms.
     lines.push("option framerate 100");
-    lines.push(`duration ${Math.max(0.001, duration).toFixed(6)}`);
+    lines.push(`duration ${durations[index].toFixed(2)}`);
   });
-  // The concat demuxer ignores the trailing duration unless the last frame repeats.
-  lines.push(`file '${escapePath(job.framePaths[job.framePaths.length - 1])}'`);
-  lines.push("option framerate 100");
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-gif-"));
   const concatPath = path.join(tempDir, "frames.ffconcat");
   try {
@@ -101,6 +116,12 @@ async function encodeGifWithFfmpeg(job) {
         concatPath,
         "-filter_complex",
         "[0:v]split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128",
+        "-vsync",
+        "0",
+        // Set the final GIF delay explicitly; repeating the last concat entry
+        // would encode an extra frame and extend every loop by 10 ms.
+        "-final_delay",
+        String(Math.round(durations[durations.length - 1] * 100)),
         "-loop",
         "0",
         job.outputPath,
@@ -152,5 +173,6 @@ module.exports = {
   createTestWav,
   encodeGifWithFfmpeg,
   extractVideoFrames,
+  quantizeGifDurations,
   videoExtractFfmpegArgs,
 };

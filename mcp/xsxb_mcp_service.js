@@ -18,6 +18,7 @@ const { frameBoxKey, upsertEstimatedFrameBoxes } = require("./lib/box_estimator"
 const { importAnimation, reorganizeAnimation } = require("./lib/frame_organizer");
 const { withFileTransaction } = require("./lib/file_transaction");
 const { createAuthoringTools } = require("./authoring");
+const { assertExportDestinations } = require("./xsxb_mcp_export_guard");
 const { shouldCommit } = require("./xsxb_mcp_commit");
 const { frameIndexes } = require("./authoring/common");
 const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
@@ -117,7 +118,12 @@ const {
   resolveImportSource,
   sliceExtractedFrames,
 } = require("./xsxb_mcp_arguments");
-const { createTestWav, encodeGifWithFfmpeg, extractVideoFrames } = require("./xsxb_mcp_processes");
+const {
+  createTestWav,
+  encodeGifWithFfmpeg,
+  extractVideoFrames,
+  quantizeGifDurations,
+} = require("./xsxb_mcp_processes");
 
 const BOX_NAMES = Object.freeze(["hurtbox", "collisionbox", "hitbox"]);
 
@@ -282,17 +288,37 @@ function createXsxbMcpService(options = {}) {
   }
 
   /**
-   * Copies an artifact to an extra destination when copy_to is set.
-   * @param {string} source Written file.
-   * @param {unknown} requested Extra destination.
-   * @returns {string|undefined} Absolute copy path.
+   * Protects registered frame sources and project metadata before exporting artifacts.
+   * @param {object} project Selected project.
+   * @param {string[]} targets All destinations written by the export.
+   * @param {string[]} [sourceFiles] Additional external inputs.
+   * @returns {void}
    */
-  function copyIfRequested(source, requested) {
-    if (!requested) return undefined;
-    const target = path.resolve(String(requested));
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(source, target);
-    return target;
+  function protectExport(project, targets, sourceFiles = []) {
+    const files = [projectStore.path, ...sourceFiles];
+    const directories = [];
+    if (project) {
+      const paths = projectStore.projectPaths(project);
+      files.push(
+        ...Object.entries(paths)
+          .filter(([key]) => !["dataDir", "workspaceDir"].includes(key))
+          .map(([, value]) => value),
+      );
+      directories.push(
+        paths.dataDir,
+        ...["assets", "attachments", "audio", "attack_trails"].map((name) =>
+          path.join(paths.workspaceDir, name),
+        ),
+      );
+      for (const profile of manifestFor(project).profiles || []) {
+        for (const animation of profile.animations || []) {
+          for (const frame of animation.frames || []) {
+            files.push(resolveAnimationFramePath(project, frame.path, animation));
+          }
+        }
+      }
+    }
+    assertExportDestinations(targets, { files, directories });
   }
 
   /**
@@ -1623,9 +1649,10 @@ function createXsxbMcpService(options = {}) {
    * @param {{profileId?:string,animationId?:string}} payload Identity fields.
    * @param {object} analyzed Compact analysis.
    * @param {Array<{data:Uint8ClampedArray,width:number,height:number}>} images Decoded frames.
+   * @param {string[]} filePaths Source PNG paths protected from export overwrite.
    * @returns {{kind:string,path:string,start:number,end:number,frameCount:number}} Preview receipt.
    */
-  function writeAnalyzePreview(args, project, payload, analyzed, images) {
+  function writeAnalyzePreview(args, project, payload, analyzed, images, filePaths) {
     const loop = analyzed.loop.recommended;
     const useLoop = Boolean(loop) && analyzed.loop.oneShotLikely !== true;
     const start = useLoop ? loop.start : analyzed.motion.start;
@@ -1650,6 +1677,7 @@ function createXsxbMcpService(options = {}) {
       extensionPattern: /\.png$/i,
       extensionLabel: ".png",
     });
+    protectExport(project, [outputPath], filePaths);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(sheet.data, sheet.width, sheet.height));
     return {
@@ -1700,7 +1728,7 @@ function createXsxbMcpService(options = {}) {
     const images = analyzed.images;
     delete analyzed.images;
     const preview = booleanFlag(args.preview, true)
-      ? writeAnalyzePreview(args, project, payload, analyzed, images)
+      ? writeAnalyzePreview(args, project, payload, analyzed, images, filePaths)
       : { skipped: true };
     return { ...payload, ...analyzed, preview };
   }
@@ -1976,6 +2004,7 @@ function createXsxbMcpService(options = {}) {
       extensionLabel: ".png",
       allowOutsideRoot: true,
     });
+    protectExport(project, [outputPath]);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(overlay.data, overlay.width, overlay.height));
     return {
@@ -2006,6 +2035,10 @@ function createXsxbMcpService(options = {}) {
     const last = Math.max(0, frames.length - 1);
     const start = args.start_frame === undefined ? 0 : requireFrameIndex(args.start_frame, last);
     const end = args.end_frame === undefined ? last : requireFrameIndex(args.end_frame, last);
+    protectExport(
+      project,
+      Array.from({ length: Math.max(0, end - start + 1) }, (_, index) => path.join(dest, `${index}.png`)),
+    );
     const copied = [];
     for (let index = start; index <= end; index += 1) {
       const source = resolveAnimationFramePath(project, frames[index].path, animation);
@@ -3285,6 +3318,8 @@ function createXsxbMcpService(options = {}) {
       extensionLabel: ".gif",
       allowOutsideRoot: true,
     });
+    const gifDurations = quantizeGifDurations(durations);
+    protectExport(project, [outputPath, args.copy_to]);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     const appliedVisual = selectedScales.some((scale) => scale !== 1);
     let encodePaths = framePaths;
@@ -3306,11 +3341,19 @@ function createXsxbMcpService(options = {}) {
     try {
       if (appliedVisual) {
         visualTemp = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-gif-visual-"));
-        const decoded = framePaths.map((filePath) => decodePngRgba(filePath));
-        const placed = placeFramesOnCanvas(decoded, decoded[0].width, decoded[0].height, {
-          frameScales: selectedScales,
-        });
-        encodePaths = placed.map((frame, index) => {
+        let canvasWidth;
+        let canvasHeight;
+        // Keep the first selected frame's canvas for every output, while
+        // releasing each decoded source and placed frame before the next one.
+        encodePaths = framePaths.map((sourcePath, index) => {
+          const decoded = decodePngRgba(sourcePath);
+          if (index === 0) {
+            canvasWidth = decoded.width;
+            canvasHeight = decoded.height;
+          }
+          const [frame] = placeFramesOnCanvas([decoded], canvasWidth, canvasHeight, {
+            frameScales: [selectedScales[index]],
+          });
           const filePath = path.join(visualTemp, `frame_${String(index + 1).padStart(4, "0")}.png`);
           fs.writeFileSync(filePath, encodePngRgba(frame.data, frame.width, frame.height));
           return filePath;
@@ -3344,7 +3387,7 @@ function createXsxbMcpService(options = {}) {
       }
       await encodeGifImpl({
         framePaths: encodePaths,
-        durations,
+        durations: gifDurations,
         fps,
         outputPath,
         background: args.background,
@@ -3374,7 +3417,7 @@ function createXsxbMcpService(options = {}) {
       trailIds,
       attachmentIds,
       frameScales: appliedVisual ? selectedScales : undefined,
-      totalDurationMs: Math.round(durations.reduce((sum, value) => sum + value, 0) * 1000),
+      totalDurationMs: Math.round(gifDurations.reduce((sum, value) => sum + value, 0) * 1000),
       bytes: fs.statSync(outputPath).size,
     };
   }
@@ -3479,6 +3522,7 @@ function createXsxbMcpService(options = {}) {
       extensionLabel: ".png",
       allowOutsideRoot: true,
     });
+    protectExport(project, [outputPath, outputPath.replace(/\.png$/i, ".sheet.json"), args.copy_to]);
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, encodePngRgba(sheet.data, sheet.width, sheet.height));
     const rows = Math.ceil(selected.length / columns);
@@ -3893,8 +3937,8 @@ function createXsxbMcpService(options = {}) {
    */
   async function callMcpUnlocked(name, args = {}) {
     const callArgs = callArguments(name, args);
-    // Cache the expensive full-frame digest for this request. Observation
-    // checks and receipt assembly should share one pass over all PNG frames.
+    // Share the preflight digest between argument checks only. A result must
+    // independently reobserve its sources to detect external edits during work.
     let cachedAnimationObservation;
     const getAnimationObservation = () => {
       if (!cachedAnimationObservation) cachedAnimationObservation = animationObservation(callArgs);
@@ -3931,7 +3975,6 @@ function createXsxbMcpService(options = {}) {
       observationTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths
         ? getAnimationObservation()
         : null;
-    const readOnlyObservation = Boolean(beforeObservation);
     const checkpoint = authoring.checkpoint(name, callArgs);
     let raw;
     let revisionId;
@@ -3958,14 +4001,12 @@ function createXsxbMcpService(options = {}) {
       // observation after the handler has committed its changes.
       cachedAnimationObservation = undefined;
       observation = getAnimationObservation();
-    } else if (!observation && beforeObservation) {
-      if (!readOnlyObservation) {
-        const afterObservation = getAnimationObservation();
-        assertObservation(beforeObservation.snapshotId, afterObservation, `${name} observation`);
-      }
-      observation = beforeObservation;
+    } else if (beforeObservation) {
+      const afterObservation = animationObservation(callArgs);
+      assertObservation(beforeObservation.snapshotId, afterObservation, `${name} observation`);
+      observation = observation || beforeObservation;
     }
-    if (observation && typeof metadata.revalidate === "function" && !readOnlyObservation) {
+    if (observation && typeof metadata.revalidate === "function") {
       assertObservation(observation.snapshotId, metadata.revalidate(), `${name} observation`);
     }
     let verification = metadata.verification || null;

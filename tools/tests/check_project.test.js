@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { sourceFiles, testFiles, checkSyntax } = require("../check_project");
+const { sourceFiles, testFiles, checkSyntax, formatFiles } = require("../check_project");
 
 test("syntax checks reject an invalid second source file", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-check-"));
@@ -32,4 +32,16 @@ test("new test files and the overlay demo are discovered without a script list",
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+/** Authoring code must stay inside the same format gate as the service. */
+test("format discovery includes maintained authoring modules and excludes vendored algorithms", () => {
+  const files = sourceFiles(path.resolve(__dirname, "../.."));
+  const authored = files.filter(
+    (file) => file.startsWith(`mcp${path.sep}authoring${path.sep}`) && file.endsWith(".js"),
+  );
+  assert.ok(authored.length > 0);
+  const formatted = new Set(formatFiles(files));
+  for (const file of authored) assert.ok(formatted.has(file), file);
+  assert.equal(formatted.has(path.join("mcp", "lib", "attack_trails.js")), false);
 });

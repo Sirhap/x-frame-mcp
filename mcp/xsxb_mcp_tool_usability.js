@@ -1128,7 +1128,7 @@ animations = [{
       exported.fps !== 12 ||
       !exported.outputPath.endsWith(".gif") ||
       !fs.existsSync(exported.outputPath) ||
-      jobs[0].durations[0].toFixed(3) !== "0.083" ||
+      jobs[0].durations[0].toFixed(3) !== "0.080" ||
       jobs[0].durations[1].toFixed(3) !== "0.500"
     ) {
       return verdict("xsxb_export_gif", "fail", JSON.stringify({ exported, jobs }));

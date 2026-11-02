@@ -187,15 +187,15 @@ function boxFromGroupCorners(patch) {
 }
 
 /**
- * Converts a local PNG file into the organizer import item shape.
+ * References a local PNG so the organizer reads one frame at a time.
+ * Inline data URLs remain supported by the separate caller-supplied data path.
  * @param {string} filePath Absolute PNG path.
- * @returns {{name:string,data:string,sourcePath:string}} Import item.
+ * @returns {{name:string,sourcePath:string}} Import item without encoded bytes.
  */
 function pngFileToItem(filePath) {
   const resolved = path.resolve(filePath);
   return {
     name: path.basename(resolved),
-    data: `data:image/png;base64,${fs.readFileSync(resolved).toString("base64")}`,
     sourcePath: resolved,
   };
 }

@@ -116,17 +116,28 @@ function fileContentHash(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-function sourcePathForFrame(root, projectRoot, framePath) {
+/**
+ * Resolves existing sources, including paths inside an explicitly owned workspace.
+ * @param {string} root MCP host root.
+ * @param {string} projectRoot Bound Godot directory.
+ * @param {string} framePath Stored source path.
+ * @param {string} [workspaceRoot] Explicit project workspace allowed outside the host.
+ * @returns {string} Existing source path or an empty string.
+ */
+function sourcePathForFrame(root, projectRoot, framePath, workspaceRoot = "") {
   const raw = String(framePath || "");
   if (!raw) return "";
   if (raw.startsWith("res://")) {
-    const local = path.join(projectRoot, raw.slice("res://".length));
-    if (fs.existsSync(local)) return local;
+    const local = safeResolve(projectRoot, raw.slice("res://".length));
+    if (local && fs.existsSync(local)) return local;
     return "";
   }
   if (path.isAbsolute(raw)) return fs.existsSync(raw) ? raw : "";
   const fromTuner = safeResolve(root, raw);
   if (fromTuner && fs.existsSync(fromTuner)) return fromTuner;
+  const fromWorkspace = path.resolve(root, raw);
+  if (workspaceRoot && isInside(fromWorkspace, workspaceRoot) && fs.existsSync(fromWorkspace))
+    return fromWorkspace;
   const fromProject = path.resolve(projectRoot, raw);
   if (isInside(fromProject, projectRoot) && fs.existsSync(fromProject)) return fromProject;
   return "";
@@ -153,19 +164,27 @@ function syncManifest(root, projectStore, project, manifestInput = null, options
   let copiedFrames = 0;
   let frameCount = 0;
   let invalidatedImports = 0;
+  const workspaceRoot = projectStore.projectWorkspaceDir(project);
 
   for (const profile of Array.isArray(manifest.profiles) ? manifest.profiles : []) {
     for (const animation of Array.isArray(profile.animations) ? profile.animations : []) {
       const frames = Array.isArray(animation.frames) ? animation.frames : [];
       if (animation.source) animation.source = localFrameRelPath(animation.source, "assets");
       for (const frame of frames) {
-        const source = sourcePathForFrame(root, projectRoot, frame.path);
-        const nextRel = localFrameRelPath(frame.path, frame.name || "frame.png");
+        const source = sourcePathForFrame(root, projectRoot, frame.path, workspaceRoot);
+        if (!source || path.extname(source).toLowerCase() !== ".png" || !fs.statSync(source).isFile())
+          throw new Error(`Godot sync requires an existing PNG frame: ${frame.path}`);
+        // External workspaces need stable ownership folders; basename fallback
+        // would overwrite equally named frames belonging to different animations.
+        const ownedPath =
+          !isInside(source, root) && isInside(source, workspaceRoot)
+            ? path.join("workspace", "projects", project.id, path.relative(workspaceRoot, source))
+            : frame.path;
+        const nextRel = localFrameRelPath(ownedPath, frame.name || "frame.png");
         const target = path.join(projectRoot, nextRel);
         frame.path = nextRel;
         frameCount += 1;
         if (!isInside(target, path.join(projectRoot, GODOT_SYNC_ROOT))) continue;
-        if (!source || path.extname(source).toLowerCase() !== ".png") continue;
         if (copyFileIfChanged(source, target, options.force === true)) copiedFrames += 1;
         if (fs.existsSync(target)) invalidatedImports += invalidateGodotImport(projectRoot, target);
       }

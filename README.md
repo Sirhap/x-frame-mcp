@@ -77,6 +77,8 @@ The usability audit (`node mcp/xsxb_mcp_tool_usability.js`) exercises public JSO
 
 See [the measured performance baseline](docs/performance/mcp-baseline-2026-09-05.md) for scope, numbers, and next steps.
 
+See [the 2026-11-02 reproduction and fix report](docs/validation/optimization-regressions-2026-11-02.md) for snapshot consistency, PNG import and GIF memory fixes, and corrected busy-ping measurements.
+
 See [authoring tools](mcp/authoring/README.md) for checkpoints/undo, animation copy/split/merge/rename, selective cutout, canvas edits, quality reports, and attachment interpolation.
 
 ## Layout

@@ -436,6 +436,31 @@ test("MCP GIF defaults and relative exports land in the project .xsxb folder, no
   }
 });
 
+test("export_gif reports the same centisecond durations sent to the encoder", async () => {
+  const jobs = [];
+  const current = fixture({
+    encodeGifImpl: async (job) => {
+      jobs.push(job);
+      fs.writeFileSync(job.outputPath, Buffer.from("GIF89a-fake"));
+    },
+  });
+  try {
+    await importWalk(current);
+    await current.service.call("xsxb_update_timing", {
+      frames: [
+        { frame: 0, duration_ms: 14 },
+        { frame: 1, duration_ms: 27 },
+      ],
+    });
+    const exported = await current.service.call("xsxb_export_gif", {});
+    assert.deepEqual(jobs[0].durations, [0.01, 0.03]);
+    assert.equal(exported.frameCount, 2);
+    assert.equal(exported.totalDurationMs, 40);
+  } finally {
+    current.cleanup();
+  }
+});
+
 test("export_gif honors timing, skips disabled frames, and validates the output path", async () => {
   const jobs = [];
   const current = fixture({
