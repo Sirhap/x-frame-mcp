@@ -293,7 +293,7 @@ func _apply_frame_visual() -> void:
 		render_facing_value,
 	)
 	_apply_attack_trail_transform(frame_size, anchor, transform, runtime_scale, render_facing_value)
-	_update_attack_trails()
+	_update_attack_trails(frame_size.y)
 	if visual_state_key == _last_visual_state_key:
 		return
 	_last_visual_state_key = visual_state_key
@@ -308,6 +308,9 @@ func _apply_frame_visual() -> void:
 	_frame_sprite.centered = true
 	_frame_sprite.visible = true
 
+	# Attachment offsets use the same bottom-center coordinates as MCP previews.
+	_attachments_below.position.y = frame_size.y * 0.5
+	_attachments_above.position.y = frame_size.y * 0.5
 	_apply_frame_image_attachments(frame_key)
 	if use_frame_boxes:
 		_apply_frame_collision_box(frame_key, transform, runtime_scale)
@@ -322,12 +325,13 @@ func _configure_attack_trails() -> void:
 		_attack_trails_front.call("configure", self, _attack_trail_bindings, "front")
 
 
-func _update_attack_trails() -> void:
+func _update_attack_trails(canvas_height: float) -> void:
 	var elapsed := current_animation_elapsed()
+	var sweep_time := _trail_hold_time if _animation_finished and not loop_animation else elapsed
 	if _attack_trails_behind != null and _attack_trails_behind.has_method("update_for_animation"):
-		_attack_trails_behind.call("update_for_animation", _current_animation, elapsed)
+		_attack_trails_behind.call("update_for_animation", _current_animation, elapsed, canvas_height, sweep_time)
 	if _attack_trails_front != null and _attack_trails_front.has_method("update_for_animation"):
-		_attack_trails_front.call("update_for_animation", _current_animation, elapsed)
+		_attack_trails_front.call("update_for_animation", _current_animation, elapsed, canvas_height, sweep_time)
 
 
 func _apply_attack_trail_transform(

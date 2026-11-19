@@ -35,6 +35,7 @@ var _attack_trail_bindings: Dictionary = {}
 var _texture_cache: Dictionary = {}
 var _current_animation: String = ""
 var _current_frame: int = 0
+var _trail_hold_time: float = 0.0
 var _frame_clock: float = 0.0
 var _runtime_ready: bool = false
 var _animation_finished: bool = false
@@ -69,6 +70,8 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not _runtime_ready or _current_animation == "":
 		return
+	if _animation_finished and not loop_animation:
+		_trail_hold_time += delta
 	_frame_clock += delta
 	while _frame_clock >= _current_frame_duration():
 		_frame_clock -= _current_frame_duration()
@@ -80,6 +83,7 @@ func _process(delta: float) -> void:
 			else:
 				_current_frame = max(0, frames.size() - 1)
 				if not _animation_finished:
+					_trail_hold_time = animation_duration(_current_animation) + _frame_clock
 					_animation_finished = true
 					animation_finished.emit(_current_animation)
 		_frame_visit_serial += 1

@@ -242,6 +242,12 @@ function receiptSummary(receipt) {
       const saved = receipt.error.details?.localChangesSaved ? "local changes saved; " : "";
       return `${summary}; ${saved}retry xsxb_sync_godot only`;
     }
+    if (receipt?.error?.code === "xsxb_invalid_arguments" || receipt?.tool === "xsxb_add_attack_trail") {
+      const message = String(receipt.error?.message || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (message) return `${summary} — ${message.slice(0, 240)}`;
+    }
     return summary;
   }
   const effect = receipt.execution?.effect;
@@ -249,6 +255,32 @@ function receiptSummary(receipt) {
   const snapshotId = receipt.observation?.snapshotId;
   if (typeof snapshotId === "string" && snapshotId.startsWith("obs_v1_")) parts.push(snapshotId);
   const data = receipt.data && typeof receipt.data === "object" ? receipt.data : null;
+  if (receipt.tool === "xsxb_add_attack_trail" && data?.segment) {
+    const kind = data.crescentFraming
+      ? "crescent"
+      : data.useMesh
+        ? "textured brush"
+        : data.renderMode === "sweep"
+          ? "fading sweep"
+          : "stored guides";
+    parts.push(`${String(data.segment.id).slice(0, 80)} (${kind}, ${data.segment.sticks.length} poses).`);
+    if (data.crescentFraming) {
+      const { frame, requestedScale, appliedScale, overflowPx } = data.crescentFraming;
+      const overflow = Object.entries(overflowPx)
+        .filter(([, px]) => px > 0)
+        .map(([edge, px]) => `${edge} ${px}px`);
+      if (overflow.length)
+        parts.push(`Frame ${frame} mesh exceeds canvas: ${overflow.join(", ")}. Use crescent_fit=shrink.`);
+      else if (appliedScale < requestedScale - 1e-8)
+        parts.push(`Scaled to ${appliedScale.toFixed(2)}x to fit.`);
+      parts.push("Inspect the strike frame with data.previewCall.");
+    } else if (!data.preview) parts.push("Preview with xsxb_export_gif.");
+  }
+  if (receipt.tool === "xsxb_add_attack_trail") {
+    if (data?.hits) parts.push(data.hits.map((hit) => hit.id).join(", "));
+    if (data?.preview) parts.push(`Strike frames: ${data.preview.frames.join(", ")} (PNG).`);
+    for (const warning of data?.warnings || []) if (warning.startsWith("Strokes saved.")) parts.push(warning);
+  }
   const artifactPath = data?.preview?.path || data?.outputPath || receipt.execution?.artifacts?.[0]?.path;
   if (typeof artifactPath === "string" && artifactPath) {
     const base = artifactPath.replace(/\\/g, "/").split("/").pop();

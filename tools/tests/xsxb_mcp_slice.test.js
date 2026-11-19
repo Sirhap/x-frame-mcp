@@ -310,3 +310,69 @@ test("wrong path, non-png, and zero columns throw clearly", async () => {
     current.cleanup();
   }
 });
+
+test("reslicing publishes only owned cells and preserves earlier outputs on a failed commit", async (t) => {
+  const current = fixture();
+  t.after(current.cleanup);
+  const dest = path.join(current.root, "cells");
+  const args = { file_path: path.join(current.root, "sheet.png"), columns: 2, rows: 1, dest };
+  const slice = () => current.service.callMcp("xsxb_slice_sheet", args);
+  writeRowSheet(args.file_path, [RED, GREEN]);
+  await slice();
+  fs.copyFileSync(args.file_path, path.join(dest, "98.png"));
+  writeRowSheet(args.file_path, [BLUE, YELLOW]);
+
+  const rename = fs.renameSync;
+  const inject = t.mock.method(fs, "renameSync", (from, to) => {
+    if (from.includes(".tmp-") && to === path.join(dest, "1.png")) throw new Error("test commit failure");
+    return rename(from, to);
+  });
+  await assert.rejects(slice, /test commit failure/);
+  inject.mock.restore();
+  assert.deepEqual(pixelAt(path.join(dest, "0.png"), 0, 0), RED);
+  assert.deepEqual(pixelAt(path.join(dest, "1.png"), 0, 0), GREEN);
+
+  writeColorSheet(args.file_path, [BLUE, null, BLUE, null]);
+  await slice();
+  assert.deepEqual(pixelAt(path.join(dest, "0.png"), 0, 0), BLUE);
+  assert.equal(fs.existsSync(path.join(dest, "1.png")), false);
+  assert.deepEqual(pixelAt(path.join(dest, "98.png"), 0, 0), RED);
+  await assert.rejects(
+    () => current.service.callMcp("xsxb_slice_sheet", { ...args, start_index: 98 }),
+    /already exists/,
+  );
+  assert.deepEqual(pixelAt(path.join(dest, "98.png"), 0, 0), RED);
+  assert.deepEqual(pixelAt(path.join(dest, "0.png"), 0, 0), BLUE);
+});
+
+for (const inPlace of [false, true]) {
+  test(`public slice import preserves the pre-replacement animation for undo (in_place=${inPlace})`, async (t) => {
+    const current = fixture();
+    t.after(current.cleanup);
+    const args = { file_path: path.join(current.root, "sheet.png"), columns: 2, rows: 1, in_place: inPlace };
+    const call = async (name, inputs = {}) => (await current.service.callMcp(name, inputs)).data;
+    writeRowSheet(args.file_path, [RED, GREEN]);
+    const plain = await call("xsxb_slice_sheet", args);
+    assert.equal(plain.revisionId, undefined);
+    assert.equal((await call("xsxb_list_revisions")).revisions.length, 0);
+    await call("xsxb_slice_sheet", { ...args, animation_id: "walk" });
+    const previous = (await call("xsxb_get_animation")).animation.frames.map((frame) =>
+      fs.readFileSync(frame.absolutePath),
+    );
+    writeRowSheet(args.file_path, [BLUE, YELLOW]);
+    const replacement = await call("xsxb_slice_sheet", { ...args, animation_id: "walk", replace: true });
+    assert.ok(replacement.revisionId);
+    assert.equal(replacement.imported.replaced, true);
+    const newFrame = (await call("xsxb_get_animation")).animation.frames[0];
+    assert.deepEqual(pixelAt(newFrame.absolutePath, 0, 0), BLUE);
+    await call("xsxb_restore_revision", {
+      revision_id: replacement.revisionId,
+      dry_run: false,
+      restore_external: inPlace,
+    });
+    const restored = (await call("xsxb_get_animation")).animation.frames.map((frame) =>
+      fs.readFileSync(frame.absolutePath),
+    );
+    assert.deepEqual(restored, previous);
+  });
+}

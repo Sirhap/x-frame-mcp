@@ -5,6 +5,7 @@ const zlib = require("node:zlib");
 const { reslash } = require("./project_store");
 const { MAX_INFLATED_BYTES, MAX_PNG_PIXELS } = require("./attachment_sequence_analysis");
 
+const BUNDLED_TRAIL_TEXTURE = path.join(__dirname, "animation_tuner/public/presets/attack_trails/dynamic_trail_luma.png");
 const DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE = Object.freeze({
   path: "tools/animation_tuner/public/presets/attack_trails/dynamic_trail_luma.png",
   assetHash: "e2b855cdb3c59db8b4ed33f400b03bafd4af7df2636f3fd4d3eb68603763da90",
@@ -270,6 +271,10 @@ function normalizeSegment(value, index, bindingKey, sourceSchema = 6) {
     String(segment.pathKind || segment.path_kind || "smooth_arc") === "polyline" ? "polyline" : "smooth_arc";
   return {
     id: slug(segment.id, `trail_${index + 1}`),
+    ...(segment.autoHistory === true && segment.brushSource?.startsWith?.("motion:") ? {autoHistory:true} : {}),
+      ...(typeof segment.brushSource === "string" ? { brushSource: segment.brushSource } : {}),
+    ...(segment.brushSource?.startsWith?.("pixel_") ? { pixelFacing: segment.pixelFacing === "left" ? "left" : "right" } : {}),
+    ...(segment.brushSource === "crescent" && segment.crescentOptions ? { crescentOptions: segment.crescentOptions } : {}),
     name: String(segment.name || `Trail ${index + 1}`),
     profileId: String(segment.profileId || profileId),
     animationId: String(segment.animationId || animationId),
@@ -471,6 +476,7 @@ function validateAttackTrails(data, manifest) {
 }
 
 module.exports = {
+  BUNDLED_TRAIL_TEXTURE,
   DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE,
   DEFAULT_BEFORE_CHASE_MULTIPLIER,
   DEFAULT_TRAIL_SMEAR_PX,
@@ -480,6 +486,7 @@ module.exports = {
   bladeEdgeTravel,
   clone,
   normalizeAttackTrails,
+  normalizeTrailId: slug,
   pngInfo,
   saveAttackTrailTexture,
   stickCenterTravel,

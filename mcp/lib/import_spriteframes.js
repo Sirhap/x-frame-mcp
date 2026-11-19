@@ -81,8 +81,15 @@ function resolveGodotPath(rawPath, projectRoot, ownerFile) {
 }
 
 function getPngSize(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") return { width: 0, height: 0 };
+  const buffer = Buffer.alloc(24);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    if (fs.readSync(fd, buffer, 0, buffer.length, 0) !== buffer.length ||
+        buffer.readUInt32BE(0) !== 0x89504e47 || buffer.readUInt32BE(4) !== 0x0d0a1a0a ||
+        buffer.toString("ascii", 12, 16) !== "IHDR") return { width: 0, height: 0 };
+  } finally {
+    fs.closeSync(fd);
+  }
   return {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
@@ -100,7 +107,8 @@ function initialAnchorModeForBatch(_animations) {
   return "canvas_bottom_center";
 }
 
-function parseSpriteFrames(filePath, projectRoot) {
+/** Reads PNG-backed animations. Direct edits require complete, root-contained frame references. */
+function parseSpriteFrames(filePath, projectRoot, { strict = false, animationId } = {}) {
   const text = fs.readFileSync(filePath, "utf8");
   const resources = new Map();
   const extRegex = /\[ext_resource[^\]]*path="([^"]+)"[^\]]*id="([^"]+)"[^\]]*\]/g;
@@ -115,17 +123,28 @@ function parseSpriteFrames(filePath, projectRoot) {
   let animationMatch;
   while ((animationMatch = animationRegex.exec(text)) !== null) {
     const [, frameBody, name, speed] = animationMatch;
+    if (animationId && animationId !== name && animationId !== slug(name)) continue;
     const frames = [];
     const frameRegex = /\{\s*"duration"\s*:\s*([-\d.]+),\s*"texture"\s*:\s*ExtResource\("([^"]+)"\)\s*\}/g;
     let frameMatch;
     while ((frameMatch = frameRegex.exec(frameBody)) !== null) {
       const source = resources.get(frameMatch[2]);
-      if (!source || !fs.existsSync(source) || path.extname(source).toLowerCase() !== ".png") continue;
+      if (!source || !fs.existsSync(source) || path.extname(source).toLowerCase() !== ".png") {
+        if (strict) throw new Error(`Missing or unsupported PNG texture in SpriteFrames animation ${name}.`);
+        continue;
+      }
+      if (strict) {
+        const relative = path.relative(fs.realpathSync(projectRoot), fs.realpathSync(source));
+        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+          throw new Error(`SpriteFrames texture outside the Godot project: ${source}`);
+      }
       frames.push({
         source,
         duration: Number(frameMatch[1] || 1),
       });
     }
+    if (strict && frameBody.replace(frameRegex, "").replace(/[\s,]/g, ""))
+      throw new Error(`SpriteFrames animation ${name} contains unsupported texture entries.`);
     if (frames.length) {
       animations.push({ id: slug(name), name, fps: sanitizeFps(speed), frames });
     }
@@ -399,6 +418,7 @@ if (require.main === module) {
 
 module.exports = {
   parseSpriteFrames,
+  getPngSize,
   importSpriteFrames,
   commitImportTransaction,
   resolveGodotPath,

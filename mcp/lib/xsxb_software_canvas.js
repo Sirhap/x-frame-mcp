@@ -509,10 +509,12 @@ class SoftwareContext {
         const user = apply(inverse, x + 0.5, y + 0.5);
         const u = (user.x - dx) * scaleX;
         const v = (user.y - dy) * scaleY;
-        if (u < -0.5 || v < -0.5 || u >= source.width + 0.5 || v >= source.height + 0.5) continue;
+        if (u < 0 || v < 0 || u >= source.width || v >= source.height) continue;
+        // Canvas coordinates address pixel edges; the sampler indexes pixel centers.
+        const nearest = (Math.floor(v) * source.width + Math.floor(u)) * 4;
         const sample = this.imageSmoothingEnabled
-          ? sampleBilinear(pixels, source.width, source.height, u, v)
-          : sampleBilinear(pixels, source.width, source.height, Math.floor(u) + 0.5, Math.floor(v) + 0.5);
+          ? sampleBilinear(pixels, source.width, source.height, u - 0.5, v - 0.5)
+          : pixels.slice(nearest, nearest + 4);
         this._put(x, y, sample);
       }
     }

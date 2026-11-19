@@ -9,6 +9,7 @@ const {
   EMPTY_ATTACK_TRAILS,
   bladeEdgeTravel,
   normalizeAttackTrails,
+  normalizeTrailId,
   pngInfo,
   stickCenterTravel,
   validateAttackTrails,
@@ -24,6 +25,7 @@ const { frameIndexes } = require("./authoring/common");
 const { syncGodotProject, validGodotProjectRoot } = require("./lib/godot_sync");
 const { parseSpriteFrames } = require("./lib/import_spriteframes");
 const { createProjectStore, EMPTY_TUNING, reslash, slug } = require("./lib/project_store");
+const { resolveMcpHostRoot } = require("./lib/xsxb_root");
 const { validateImport } = require("./lib/validate_import");
 const {
   ALPHA_VISIBLE,
@@ -71,6 +73,7 @@ const {
   canonicalValue,
   containsCellToken,
   createObservation,
+  createAnimationObservation,
   observeFile,
   sha256,
 } = require("./xsxb_mcp_observation");
@@ -87,7 +90,11 @@ const {
   scaleAboutFeet,
 } = require("./xsxb_mcp_lock");
 const { validateToolArguments } = require("./xsxb_mcp_schema");
-const { compositeAttackTrails } = require("./xsxb_mcp_trail_preview");
+const { INLINE_TRAIL_PNG, selectWeapon, identifyHit, strikeSheet } = require("./xsxb_mcp_trail_hits");
+const { attachmentFrames, compositeAttackTrails } = require("./xsxb_mcp_trail_preview");
+const { PIXEL_PRESETS, pixelSlashBrush, pixelSlashSticks } = require("./xsxb_mcp_pixel_slash");
+const { planCrescent, crescentBrush } = require("./xsxb_mcp_crescent");
+const { weaponTrailSticks, motionBrush, reviewSwing } = require("./xsxb_mcp_weapon_trail");
 const { assertSweepSticks } = require("./xsxb_mcp_sweep");
 const {
   cellIdToken,
@@ -98,6 +105,7 @@ const {
   trailUsesHermiteMesh,
 } = require("./xsxb_mcp_plant");
 const { DEFAULT_PROFILE_ID, MCP_TOOL_NAMES, toolDefinitions } = require("./xsxb_mcp_tool_catalog");
+const { editTarget } = require("./xsxb_mcp_edit_target");
 const { sliceSheet } = require("./xsxb_mcp_slice");
 const {
   PNG_NAME,
@@ -255,7 +263,7 @@ function resolveBoxPatch(patch, animation, frameRecord, args, image) {
  * @returns {{tools:object[],call:(name:string,args?:object)=>Promise<object>}} MCP-facing service.
  */
 function createXsxbMcpService(options = {}) {
-  const root = path.resolve(options.root || process.env.XSXB_ROOT || process.cwd());
+  const root = resolveMcpHostRoot(options.root);
   const projectStore = createProjectStore(root);
   const extractVideoFramesImpl = options.extractVideoFramesImpl || extractVideoFrames;
   const encodeGifImpl = options.encodeGifImpl || encodeGifWithFfmpeg;
@@ -894,9 +902,6 @@ function createXsxbMcpService(options = {}) {
     const receipt = sliceSheet(args);
     const animationId = args.animation_id || args.animation;
     if (!animationId) return receipt;
-    if (!receipt.paths.length) {
-      throw new Error("No cells to import (all skipped or empty sheet).");
-    }
     const importArgs = {
       source: "items",
       items: receipt.paths.map((filePath) => ({ path: filePath })),
@@ -1137,8 +1142,10 @@ function createXsxbMcpService(options = {}) {
         };
       });
       target.fps = fps;
-      projectStore.writeJson(paths.manifest, manifest);
-      projectStore.writeJson(paths.tuning, tuning);
+      withFileTransaction((transaction) => {
+        transaction.writeJson(paths.manifest, manifest);
+        transaction.writeJson(paths.tuning, tuning);
+      });
       if (batch) playbackUpdates = applied;
       else playback = applied[0];
     } else {
@@ -2553,6 +2560,146 @@ function createXsxbMcpService(options = {}) {
     const paths = projectStore.projectPaths(project);
     const trails = normalizeAttackTrails(projectStore.readJson(paths.attackTrails, EMPTY_ATTACK_TRAILS));
     const bindingKey = `${profile.id}/${animation.id || animation.name}`;
+    const batch = args.hits !== undefined;
+    if (batch && [args.id, args.start_frame, args.end_frame, args.sticks].some((v) => v !== undefined))
+      throw new Error(
+        "With hits, put id and frame ranges inside each hit. Manual sticks use a single-stroke call.",
+      );
+    const inputs = batch ? args.hits.map((hit) => ({ ...args, ...hit })) : [args];
+    const bindings = projectStore.readJson(paths.frameImageAttachments, []);
+    const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);
+    const job = {
+      selection,
+      bindingKey,
+      textures: new Map(),
+      axes: new Map(),
+      byFrame: attachmentFrames(bindings, bindingKey, { strictProfile: true }),
+      tuning,
+      durations: playbackDurations(
+        tuning,
+        profile.id,
+        String(animation.id || animation.name),
+        animation.frames || [],
+        resolveExportFps(animation),
+      ),
+    };
+    const writtenIds = new Set();
+    const strokes = [];
+    const previous = trails.bindings[bindingKey] || [];
+    const segments = new Map(previous.map((entry) => [entry.id, entry]));
+    for (const input of inputs) {
+      const stroke = prepareAttackStroke({ ...input }, job, [...segments.values()]);
+      if (writtenIds.has(stroke.segment.id))
+        throw new Error(`Two hits target ${stroke.segment.id}. Use distinct stroke ids.`);
+      writtenIds.add(stroke.segment.id);
+      segments.set(stroke.segment.id, stroke.segment);
+      strokes.push(stroke);
+    }
+    trails.bindings[bindingKey] = [...segments.values()];
+    const normalized = normalizeAttackTrails(trails);
+    const warnings = validateAttackTrails(normalized, selection.manifest);
+    withFileTransaction((transaction) => {
+      for (const [dest, bytes] of job.textures) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        transaction.writeFile(dest, bytes);
+      }
+      fs.mkdirSync(path.dirname(paths.attackTrails), { recursive: true });
+      transaction.writeJson(paths.attackTrails, normalized);
+    });
+    const hits = strokes.map(({ segment, attachmentId, crescentFraming, arcReview }) => {
+      const written = normalized.bindings[bindingKey].find((s) => s.id === segment.id);
+      if (crescentFraming && Object.values(crescentFraming.overflowPx).some((px) => px > 0))
+        warnings.push(
+          `${written.id} exceeds the strike-frame canvas. Use crescent_fit=shrink; see crescentFraming.overflowPx.`,
+        );
+      return {
+        id: written.id,
+        ...(attachmentId ? { attachmentId } : {}),
+        ...(arcReview ? { arcReview } : {}),
+        segment: written,
+        pathKind: written.pathKind,
+        renderMode: written.renderMode,
+        useMesh: written.renderMode === "mesh" && trailUsesHermiteMesh(written),
+        ...summarizeAttackTrailSticks(written.sticks),
+        ...(crescentFraming
+          ? {
+              crescentFraming,
+              previewCall: {
+                name: "xsxb_export_sheet",
+                arguments: {
+                  project_id: project.id,
+                  profile_id: profile.id,
+                  animation_id: String(animation.id || animation.name),
+                  start_frame: crescentFraming.frame,
+                  end_frame: crescentFraming.frame,
+                  grid: false,
+                  normalize: "none",
+                },
+              },
+            }
+          : {}),
+      };
+    });
+    const result = {
+      projectId: project.id,
+      bindingKey,
+      ...(batch ? { hits } : hits[0]),
+      warnings,
+      sync: synchronize(project, booleanFlag(args.sync)),
+    };
+    if (
+      args.preview ??
+      (batch ||
+        hits.some(
+          (hit) => hit.attachmentId || hit.crescentFraming || PIXEL_PRESETS.includes(hit.segment.brushSource),
+        ))
+    ) {
+      // A renderer failure after a successful edit is a preview warning, never an invitation to repeat the edit.
+      try {
+        result.preview = await renderStrikePreview(
+          job,
+          hits.map((hit) => hit.segment.sticks.at(-1).frame),
+        );
+      } catch (error) {
+        warnings.push(`Strokes saved. Strike preview failed: ${error.message}. Retry xsxb_export_sheet.`);
+      }
+    }
+    return result;
+  }
+
+  /** Bake just the requested strike frames using the same compositor and timing as GIF export. */
+  async function renderStrikePreview({ selection, durations }, frames) {
+    const { project, animation } = selection;
+    const fps = resolveExportFps(animation);
+    const baked = await bakeTrailsOnto(
+      selection,
+      frames.map((i) => resolveAnimationFramePath(project, animation.frames[i].path, animation)),
+      frames,
+      durations,
+      fps,
+    );
+    try {
+      const png = strikeSheet(baked.framePaths, frames);
+      const dir = currentArtifactDir(project);
+      fs.mkdirSync(dir, { recursive: true });
+      const dest = path.join(
+        dir,
+        `trail-strikes-${crypto.createHash("sha256").update(png).digest("hex").slice(0, 16)}.png`,
+      );
+      fs.writeFileSync(dest, png);
+      return { path: dest, frames, [INLINE_TRAIL_PNG]: png };
+    } finally {
+      if (baked.tempDir) fs.rmSync(baked.tempDir, { recursive: true, force: true });
+    }
+  }
+
+  /** Prepare one stroke in memory so an invalid later hit leaves earlier hits untouched. */
+  function prepareAttackStroke(
+    args,
+    { selection, bindingKey, byFrame, axes, tuning, durations, textures },
+    existing,
+  ) {
+    const { project, profile, animation } = selection;
     const frames = animation.frames || [];
     if (!frames.length) throw new Error("Cannot add an attack trail to an animation without frames.");
     const lastFrame = frames.length - 1;
@@ -2563,7 +2710,41 @@ function createXsxbMcpService(options = {}) {
     ) {
       throw new Error('render_mode must be "mesh" or "sweep".');
     }
-    if (renderMode === "sweep") assertSweepSticks(args.sticks);
+    const target = args.id && existing.find((s) => s.id === normalizeTrailId(args.id, ""));
+    if (
+      target?.brushSource &&
+      args.sticks === undefined &&
+      args.attachment_id === undefined &&
+      args.brush_preset === undefined &&
+      renderMode === "mesh"
+    ) {
+      if (target.brushSource === "crescent" || PIXEL_PRESETS.includes(target.brushSource))
+        args.brush_preset = target.brushSource;
+      else if (target.brushSource.startsWith("motion:")) {
+        args.brush_preset = "weapon_motion";
+        args.attachment_id = target.brushSource.slice("motion:".length);
+      } else if (target.brushSource.startsWith("attachment:"))
+        args.attachment_id = target.brushSource.slice("attachment:".length);
+    }
+    const crescent = args.brush_preset === "crescent";
+    const pixel = PIXEL_PRESETS.includes(args.brush_preset);
+    const motion = args.brush_preset === "weapon_motion";
+    if (
+      motion &&
+      (args.start_frame === undefined ||
+        args.end_frame === undefined ||
+        args.sticks !== undefined ||
+        renderMode !== "mesh" ||
+        args.texture_path ||
+        (args.color_mode && args.color_mode !== "original") ||
+        args.before_stop_chase !== undefined ||
+        args.after_stop_chase !== undefined)
+    )
+      throw new Error(
+        "weapon_motion needs a bound blade on every visible frame and start_frame/end_frame. Use color and trail_duration_ms to style its history.",
+      );
+    if (renderMode === "sweep" && !pixel && !crescent && args.attachment_id === undefined)
+      assertSweepSticks(args.sticks);
     const trailDurationMs = Number(args.trail_duration_ms ?? 150);
     if (!Number.isFinite(trailDurationMs) || trailDurationMs < 1 || trailDurationMs > 5000) {
       throw new Error("trail_duration_ms must be between 1 and 5000.");
@@ -2580,30 +2761,153 @@ function createXsxbMcpService(options = {}) {
     const endFrame = Number.isInteger(Number(args.end_frame))
       ? Math.min(lastFrame, Math.max(startFrame, Number(args.end_frame)))
       : lastFrame;
-    let texture = DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE;
-    if (args.texture_path) {
-      const absolute = requireExistingFile(args.texture_path, "Trail texture");
-      const buffer = fs.readFileSync(absolute);
-      const info = pngInfo(buffer);
-      const hash = crypto.createHash("sha256").update(buffer).digest("hex");
-      const destDir = path.join(
-        projectStore.projectWorkspaceDir(project),
-        "attack_trails",
-        profile.id,
-        String(animation.id || animation.name),
+    let inputSticks = args.sticks;
+    let crescentFraming;
+    if (inputSticks !== undefined && inputSticks.length === 0)
+      throw new Error("Supply two blade-edge sticks, or omit sticks to follow a bound weapon.");
+    const timed = args.start_frame !== undefined || args.end_frame !== undefined;
+    if (
+      !crescent &&
+      !pixel &&
+      renderMode === "mesh" &&
+      args.sticks === undefined &&
+      args.attachment_id === undefined &&
+      timed
+    ) {
+      if (args.start_frame === undefined || args.end_frame === undefined)
+        throw new Error("Supply both start_frame and end_frame for a weapon brush.");
+      args.attachment_id = selectWeapon(
+        byFrame,
+        requireFrameIndex(args.start_frame, lastFrame),
+        requireFrameIndex(args.end_frame, lastFrame),
       );
-      fs.mkdirSync(destDir, { recursive: true });
-      const destPath = path.join(destDir, `${hash}.png`);
-      fs.writeFileSync(destPath, buffer);
-      texture = {
-        path: reslash(path.relative(root, destPath)),
-        assetHash: hash,
-        name: path.basename(absolute),
-        type: "image/png",
-        width: info.width,
-        height: info.height,
-        hasEffectiveAlpha: info.hasEffectiveAlpha,
-      };
+    }
+    const source = motion
+      ? `motion:${args.attachment_id}`
+      : crescent || pixel
+        ? args.brush_preset
+        : args.attachment_id
+          ? `attachment:${args.attachment_id}`
+          : null;
+    const hitId = source ? identifyHit(existing, args, source) : null;
+    const prior = hitId ? existing.find((s) => s.id === hitId) : null;
+    const color =
+      args.color ??
+      (pixel && prior?.brushSource !== source ? undefined : prior?.color) ??
+      (motion ? "#70bdde" : pixel ? "#d578b9" : crescent ? "#ff7337" : "#d9364a");
+    const pixelFacing = args.pixel_facing ?? prior?.pixelFacing ?? "right";
+    if (!pixel && args.pixel_facing !== undefined)
+      throw new Error("pixel_facing requires a pixel brush_preset.");
+    const priorOptions =
+      args.id || prior?.sticks[0]?.frame !== startFrame || prior?.sticks.at(-1)?.frame !== endFrame
+        ? prior?.crescentOptions
+        : null;
+    const crescentOptions = crescent
+      ? {
+          scale: args.crescent_scale ?? priorOptions?.scale ?? 1,
+          fit: args.crescent_fit ?? priorOptions?.fit ?? "keep",
+          facing: args.crescent_facing ?? priorOptions?.facing ?? "right",
+          direction: args.crescent_direction ?? priorOptions?.direction ?? "down",
+        }
+      : null;
+    if (crescent) {
+      if (
+        args.attachment_id !== undefined ||
+        args.sticks !== undefined ||
+        renderMode !== "mesh" ||
+        (args.path_kind && args.path_kind !== "smooth_arc") ||
+        args.texture_path ||
+        (args.color_mode && args.color_mode !== "original")
+      )
+        throw new Error(
+          "The crescent preset supplies its own mesh, endpoint sticks and original-color brush. Use color to tint its rim.",
+        );
+      if (
+        args.start_frame === undefined ||
+        args.end_frame === undefined ||
+        args.start_frame >= args.end_frame
+      )
+        throw new Error("Crescent needs start_frame and a later end_frame where the full slash appears.");
+      const start = requireFrameIndex(args.start_frame, lastFrame),
+        end = requireFrameIndex(args.end_frame, lastFrame);
+      const timing = tuning.frame_playback_overrides || {};
+      for (const index of [start, end]) {
+        if (timing[`${bindingKey}:${index}`]?.disabled === true)
+          throw new Error(`Crescent endpoint frame ${index} is disabled. Choose a visible endpoint.`);
+      }
+      const plan = planCrescent({
+        ...crescentOptions,
+        firstPath: resolveAnimationFramePath(project, frames[start].path, animation),
+        lastPath: resolveAnimationFramePath(project, frames[end].path, animation),
+        start,
+        end,
+      });
+      inputSticks = plan.sticks;
+      crescentFraming = plan.framing;
+    } else if (
+      args.crescent_facing ||
+      args.crescent_direction ||
+      args.crescent_scale !== undefined ||
+      args.crescent_fit
+    ) {
+      throw new Error("Crescent options require brush_preset=crescent.");
+    }
+    if (pixel) {
+      if (
+        args.attachment_id !== undefined ||
+        inputSticks !== undefined ||
+        renderMode !== "mesh" ||
+        args.texture_path ||
+        (args.color_mode && args.color_mode !== "original") ||
+        (args.path_kind && args.path_kind !== "smooth_arc")
+      )
+        throw new Error(
+          "Pixel presets supply their own mesh and texture. Specify the frame range, color and pixel_facing.",
+        );
+      if (
+        args.start_frame === undefined ||
+        args.end_frame === undefined ||
+        args.start_frame >= args.end_frame
+      )
+        throw new Error("Pixel presets need start_frame and a later end_frame for the full silhouette.");
+      const start = requireFrameIndex(args.start_frame, lastFrame),
+        end = requireFrameIndex(args.end_frame, lastFrame);
+      if (!durations[start] || !durations[end])
+        throw new Error("Choose enabled pixel slash endpoint frames.");
+      inputSticks = pixelSlashSticks({
+        preset: source,
+        start,
+        end,
+        facing: pixelFacing,
+        file: resolveAnimationFramePath(project, frames[end].path, animation),
+      });
+    }
+    if (args.attachment_id !== undefined) {
+      if (
+        !args.attachment_id.trim() ||
+        inputSticks !== undefined ||
+        renderMode !== "mesh" ||
+        (args.path_kind && args.path_kind !== "smooth_arc")
+      ) {
+        throw new Error(
+          "attachment_id builds a smooth mesh brush. Supply a weapon id and a frame range, or use explicit sticks.",
+        );
+      }
+      if (args.start_frame === undefined || args.end_frame === undefined)
+        throw new Error("Supply both start_frame and end_frame for the bound weapon.");
+      const start = requireFrameIndex(args.start_frame, lastFrame);
+      const end = requireFrameIndex(args.end_frame, lastFrame);
+      inputSticks = weaponTrailSticks({
+        motion,
+        root,
+        byFrame,
+        axes,
+        bindingKey,
+        attachmentId: args.attachment_id,
+        start,
+        end,
+        durations,
+      });
     }
     const defaultSticks = [
       {
@@ -2617,7 +2921,7 @@ function createXsxbMcpService(options = {}) {
         bottom: { x: -width * 0.15, y: height * 0.1 },
       },
     ];
-    const sticks = (Array.isArray(args.sticks) && args.sticks.length ? args.sticks : defaultSticks).map(
+    const sticks = (Array.isArray(inputSticks) && inputSticks.length ? inputSticks : defaultSticks).map(
       (stick, index) => {
         if (!stick || typeof stick !== "object") return stick;
         const stickFrame = Number.isInteger(Number(stick.frame))
@@ -2641,53 +2945,101 @@ function createXsxbMcpService(options = {}) {
     );
     const pathKind = normalizeTrailPathKind(args.path_kind);
     if (renderMode === "sweep") assertSweepSticks(sticks);
-    const segmentId = slug(
-      args.id ||
-        (args.texture_path ? path.basename(args.texture_path, path.extname(args.texture_path)) : "trail"),
+    let texture =
+      prior?.brushSource && prior.brushSource !== source
+        ? DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE
+        : prior?.texture || DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE;
+    if (args.texture_path || crescent || pixel || motion) {
+      const buffer = motion
+        ? motionBrush(color)
+        : pixel
+          ? pixelSlashBrush(source, color)
+          : crescent
+            ? crescentBrush(color)
+            : fs.readFileSync(requireExistingFile(args.texture_path, "Trail texture"));
+      const info = pngInfo(buffer);
+      const hash = crypto.createHash("sha256").update(buffer).digest("hex");
+      const destDir = path.join(
+        projectStore.projectWorkspaceDir(project),
+        "attack_trails",
+        profile.id,
+        String(animation.id || animation.name),
+      );
+      const destPath = path.join(destDir, `${hash}.png`);
+      textures.set(destPath, buffer);
+      texture = {
+        path: reslash(path.relative(root, destPath)),
+        assetHash: hash,
+        name: motion
+          ? "weapon_motion.png"
+          : pixel
+            ? `${source}.png`
+            : crescent
+              ? "crescent.png"
+              : path.basename(args.texture_path),
+        type: "image/png",
+        width: info.width,
+        height: info.height,
+        hasEffectiveAlpha: info.hasEffectiveAlpha,
+      };
+    }
+    const segmentId = normalizeTrailId(
+      slug(
+        hitId ||
+          args.id ||
+          (args.texture_path ? path.basename(args.texture_path, path.extname(args.texture_path)) : "trail"),
+        "trail",
+      ),
       "trail",
     );
+    const arcReview = motion ? reviewSwing(sticks, durations) : null;
+    const existingMotion = motion && prior?.brushSource === source;
+    const autoHistory =
+      motion && args.trail_duration_ms === undefined && (!existingMotion || prior.autoHistory === true);
     const segment = {
+      ...prior,
+      autoHistory,
       id: segmentId,
-      name: String(args.name || segmentId),
+      ...(source ? { brushSource: source } : {}),
+      ...(crescent ? { crescentOptions } : {}),
+      ...(pixel ? { pixelFacing } : {}),
+      name: String(args.name || prior?.name || segmentId),
       profileId: profile.id,
       animationId: String(animation.id || animation.name),
       texture,
-      colorMode: args.color_mode || args.colorMode || "solid",
-      color: args.color || "#d9364a",
+      colorMode:
+        crescent || pixel || motion
+          ? "original"
+          : args.color_mode || args.colorMode || prior?.colorMode || "solid",
+      color,
+      ...(crescent || pixel
+        ? {
+            beforeStopChaseMultiplier: 0,
+            afterStopChaseMultiplier: pixel ? 4 : 2.8,
+            tailFadeStart: 0.94,
+            pathColumns: 38,
+          }
+        : {}),
+      ...(motion
+        ? { beforeStopChaseMultiplier: 0, tailFadeStart: 0.83, pathColumns: 32, headCurvature: 0 }
+        : {}),
       renderMode,
-      trailDurationMs,
+      trailDurationMs: autoHistory
+        ? arcReview.suggestedHistoryMs
+        : args.trail_duration_ms === undefined && existingMotion
+          ? prior.trailDurationMs
+          : trailDurationMs,
       opacity,
       pathKind,
       generated: renderMode === "sweep" || pathKind !== "polyline",
-      ...(renderMode === "sweep" ? { layer: String(sticks[0].layer || "behind") } : {}),
+      ...(crescent || pixel || motion || renderMode === "sweep"
+        ? { layer: String(sticks[0].layer || "behind") }
+        : {}),
       sticks,
     };
     if (args.before_stop_chase !== undefined) segment.beforeStopChaseMultiplier = args.before_stop_chase;
     if (args.after_stop_chase !== undefined) segment.afterStopChaseMultiplier = args.after_stop_chase;
-    trails.bindings[bindingKey] = [
-      ...(trails.bindings[bindingKey] || []).filter((entry) => entry.id !== segment.id),
-      segment,
-    ];
-    const normalized = normalizeAttackTrails(trails);
-    const warnings = validateAttackTrails(normalized, selection.manifest);
-    projectStore.writeJson(paths.attackTrails, normalized);
-    const written = normalized.bindings[bindingKey].find((entry) => entry.id === segment.id);
-    return {
-      projectId: project.id,
-      bindingKey,
-      segment: written,
-      pathKind: written?.pathKind || pathKind,
-      renderMode: written?.renderMode || renderMode,
-      useMesh: (written?.renderMode || renderMode) === "mesh" && trailUsesHermiteMesh(written || segment),
-      ...summarizeAttackTrailSticks(written?.sticks || []),
-      warnings: [
-        ...warnings,
-        ...(renderMode === "sweep" && booleanFlag(args.sync)
-          ? ["render_mode=sweep is baked by MCP exports; the Godot runtime currently uses its mesh fallback."]
-          : []),
-      ],
-      sync: synchronize(project, booleanFlag(args.sync)),
-    };
+    return { segment, attachmentId: args.attachment_id, crescentFraming, arcReview };
   }
 
   async function addAttachment(args = {}) {
@@ -3050,16 +3402,16 @@ function createXsxbMcpService(options = {}) {
       height: Number(frames[frame].height || 0),
     };
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    const tempPath = `${target}.tmp-${process.pid}`;
-    fs.writeFileSync(tempPath, buffer);
-    fs.renameSync(tempPath, target);
     const newSize = { width: info.width, height: info.height };
     const sizeChanged = newSize.width !== previousSize.width || newSize.height !== previousSize.height;
-    if (sizeChanged) {
-      frames[frame].width = newSize.width;
-      frames[frame].height = newSize.height;
-      projectStore.writeJson(projectStore.projectPaths(project).manifest, manifest);
-    }
+    withFileTransaction((transaction) => {
+      transaction.writeFile(target, buffer);
+      if (sizeChanged) {
+        frames[frame].width = newSize.width;
+        frames[frame].height = newSize.height;
+        transaction.writeJson(projectStore.projectPaths(project).manifest, manifest);
+      }
+    });
     return {
       projectId: project.id,
       profileId: profile.id,
@@ -3700,14 +4052,14 @@ function createXsxbMcpService(options = {}) {
   /**
    * Hashes the complete current animation basis used by observation-derived writes.
    * @param {object} args Animation selector.
-   * @returns {object} Content-addressed animation observation.
+   * @returns {Promise<object>} Content-addressed animation observation.
    */
   function animationObservation(args = {}) {
     const selection = animationFor(args);
     const filePaths = collectFramePaths(selection.project, selection.animation);
     const paths = projectStore.projectPaths(selection.project);
     const tuning = projectStore.readJson(paths.tuning, EMPTY_TUNING);
-    return createObservation({
+    return createAnimationObservation({
       scope: {
         kind: "animation",
         projectId: selection.project.id,
@@ -3790,6 +4142,7 @@ function createXsxbMcpService(options = {}) {
 
   const handlers = {
     ...authoring.handlers,
+    xsxb_edit_target: editTarget,
     xsxb_list_projects: listProjects,
     xsxb_get_project: projectSnapshot,
     xsxb_create_project: createProject,
@@ -3946,11 +4299,11 @@ function createXsxbMcpService(options = {}) {
     };
     requireStillOverlayBasis(name, callArgs);
     if (name === "xsxb_reorganize_frames" && Array.isArray(callArgs.order)) {
-      assertObservation(callArgs.basis_snapshot_id, getAnimationObservation(), "frame reorganization");
+      assertObservation(callArgs.basis_snapshot_id, await getAnimationObservation(), "frame reorganization");
     }
     const animationWriteTools = new Set(["xsxb_cutout"]);
     if (animationWriteTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths) {
-      assertObservation(callArgs.basis_snapshot_id, getAnimationObservation(), `${name} observation`);
+      assertObservation(callArgs.basis_snapshot_id, await getAnimationObservation(), `${name} observation`);
     }
     const cellDerivedTools = new Set([
       "xsxb_update_frame_boxes",
@@ -3960,7 +4313,11 @@ function createXsxbMcpService(options = {}) {
       "xsxb_add_attachment",
     ]);
     if (cellDerivedTools.has(name) && containsCellToken(cellCoordinateArguments(name, callArgs))) {
-      assertObservation(callArgs.basis_snapshot_id, getAnimationObservation(), `${name} cell coordinates`);
+      assertObservation(
+        callArgs.basis_snapshot_id,
+        await getAnimationObservation(),
+        `${name} cell coordinates`,
+      );
     }
     const observationTools = new Set([
       "xsxb_get_animation",
@@ -3973,7 +4330,7 @@ function createXsxbMcpService(options = {}) {
     ]);
     const beforeObservation =
       observationTools.has(name) && !callArgs.file_path && !callArgs.directory && !callArgs.file_paths
-        ? getAnimationObservation()
+        ? await getAnimationObservation()
         : null;
     const checkpoint = authoring.checkpoint(name, callArgs);
     let raw;
@@ -4000,9 +4357,9 @@ function createXsxbMcpService(options = {}) {
       // Mutations invalidate the preflight digest; compute a fresh receipt
       // observation after the handler has committed its changes.
       cachedAnimationObservation = undefined;
-      observation = getAnimationObservation();
+      observation = await getAnimationObservation();
     } else if (beforeObservation) {
-      const afterObservation = animationObservation(callArgs);
+      const afterObservation = await animationObservation(callArgs);
       assertObservation(beforeObservation.snapshotId, afterObservation, `${name} observation`);
       observation = observation || beforeObservation;
     }
@@ -4027,8 +4384,9 @@ function createXsxbMcpService(options = {}) {
       };
     }
     return successReceipt(name, raw, {
-      readOnly: definition?.annotations?.readOnlyHint === true && !metadata.execution,
-      route: receiptRoute(name, definition?.annotations?.readOnlyHint === true),
+      readOnly:
+        (definition?.annotations?.readOnlyHint === true || metadata.readOnly === true) && !metadata.execution,
+      route: metadata.route || receiptRoute(name, definition?.annotations?.readOnlyHint === true),
       observation,
       execution,
       verification,

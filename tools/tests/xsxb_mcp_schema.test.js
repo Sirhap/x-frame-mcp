@@ -117,15 +117,15 @@ test("a valid argument set passes", () => {
 test("attack-trail catalog keeps its purpose, motion constraint, and stick interface", () => {
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_add_attack_trail");
   const stick = tool.inputSchema.properties.sticks.items;
-  assert.match(tool.description, /attack-trail/i);
+  assert.match(tool.description, /brush stroke/i);
   assert.match(tool.description, /blade-edge/i);
-  assert.match(tool.description, /smooth_arc only for truly curved motion/);
-  assert.match(tool.description, /pixel-layer crescents belong to place_image/);
+  assert.match(tool.description, /attachment_id/);
+  assert.match(tool.description, /two blade-edge sticks/);
   assert.deepEqual(tool.inputSchema.properties.path_kind.enum, ["polyline", "smooth_arc"]);
   assert.equal(stick.type, "object");
   assert.equal(stick.properties.frame.type, "integer");
   assert.match(stick.properties.top.description, /blade tip/i);
-  assert.match(stick.properties.bottom.description, /blade grip/i);
+  assert.match(stick.properties.bottom.description, /inner blade edge/i);
   assert.deepEqual(stick.properties.layer.enum, ["behind", "front"]);
   assert.equal(stick.properties.reverseDirection.type, "boolean");
 });
@@ -271,6 +271,8 @@ test("every declared tool schema is one this validator understands", () => {
     "additionalProperties",
     "enum",
     "items",
+    "minItems",
+    "maxItems",
     "minimum",
     "maximum",
     "exclusiveMinimum",

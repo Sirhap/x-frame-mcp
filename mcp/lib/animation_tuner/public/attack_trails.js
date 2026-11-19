@@ -1670,9 +1670,20 @@
         return;
       }
       const state = this._pathState(segment);
-      const local = this.hooks.animationElapsed() - state.timing.absolute[0];
-      if (local < 0) return;
+      const followBlade = segment.brushSource?.startsWith("motion:");
+      const pixelArt = segment.brushSource?.startsWith("pixel_") || followBlade;
+      let now = this.hooks.animationElapsed();
       const duration = state.timing.times.at(-1);
+      if (pixelArt && now >= this.hooks.frameArrival(segment.sticks.at(-1).frame, 1)) return;
+      // The equipped sprite changes on frame boundaries. Hold the head on that exact pose throughout the frame.
+      if (followBlade) {
+        const frameTime = state.timing.absolute.findLast((time) => time <= now + 1e-8);
+        if (frameTime === undefined) return;
+        now = frameTime;
+      }
+      const elapsed = now - state.timing.absolute[0];
+      const local = pixelArt ? Math.min(elapsed, duration) : elapsed;
+      if (local < 0) return;
       const motionTime = Math.min(local, duration);
       const currentDistance = this._distanceAtTime(state, motionTime);
       const catchElapsed = Math.max(0, local - duration);
@@ -1690,7 +1701,9 @@
       const forcedPhase = clamp((local - duration) / Math.max(0.0001, forcedFinishLocal - duration), 0, 1, 0);
       const forcedDistance = currentDistance * forcedPhase * forcedPhase * (3 - 2 * forcedPhase);
       const averageFrontSpeed = state.total / Math.max(0.0001, duration);
-      const tails = this._tailDistances(
+      const historyStart = followBlade ? this._distanceAtTime(state, Math.max(0, motionTime - segment.trailDurationMs / 1000)) : 0;
+      if (followBlade && currentDistance - historyStart < 0.05) return;
+      const tails = followBlade ? state.speeds.map(() => historyStart) : this._tailDistances(
         state,
         segment,
         currentDistance,
@@ -1713,6 +1726,15 @@
       const rows = Math.max(TRAIL_MESH_WIDTH_ROWS, tails.length);
       const currentPathTime = this._timeAtDistance(state, currentDistance);
       const currentPose = this._pose(segment.sticks, state.timing.times, currentPathTime);
+      // A turning sword sweeps around its moving hilt. Carry the older portion of the ribbon
+      // with that pivot, while straight translations retain their full world-space history.
+      let carry = 0;
+      if (followBlade) {
+        const tail = this._pose(segment.sticks, state.timing.times, this._timeAtDistance(state, historyStart));
+        const ta = Math.atan2(tail.top.y-tail.bottom.y,tail.top.x-tail.bottom.x);
+        const ha = Math.atan2(currentPose.top.y-currentPose.bottom.y,currentPose.top.x-currentPose.bottom.x);
+        carry = 0.85 * Math.min(1, 4 * (1 - Math.cos(ha-ta)));
+      }
       const headDirection = this._directionAtTime(segment.sticks, state.timing.times, currentPathTime);
       const headHalfWidth =
         Math.hypot(currentPose.bottom.x - currentPose.top.x, currentPose.bottom.y - currentPose.top.y) * 0.5;
@@ -1745,6 +1767,12 @@
             x: pose.top.x + (pose.bottom.x - pose.top.x) * v,
             y: pose.top.y + (pose.bottom.y - pose.top.y) * v,
           };
+          if (carry) {
+            // top and bottom are at 100% and 48% of blade length; extrapolate to the hilt.
+            const pivot = 1 / 0.52;
+            localPoint.x += carry * ((1-pivot)*(currentPose.top.x-pose.top.x) + pivot*(currentPose.bottom.x-pose.bottom.x));
+            localPoint.y += carry * ((1-pivot)*(currentPose.top.y-pose.top.y) + pivot*(currentPose.bottom.y-pose.bottom.y));
+          }
           const headProfile = this._headCurveProfile(v) * this._headCurveBlend(u);
           const bulge = segment.headCurvature * headHalfWidth * headProfile;
           localPoint.x -= headDirection.x * bulge;
@@ -1850,9 +1878,9 @@
               continue;
             cellVisible = true;
             this._fillTriangle(maskCtx, triangle.target);
-            this._drawTriangle(meshCtx, texture, triangle.source, triangle.target);
+            this._drawTriangle(meshCtx, texture, triangle.source, triangle.target, !pixelArt);
           }
-          if (cellVisible) {
+          if (cellVisible && !pixelArt) {
             this._strokeSeam(seamCtx, grid[row][column], grid[row + 1][column + 1]);
             if (column > 0) this._strokeSeam(seamCtx, grid[row][column], grid[row + 1][column]);
             if (row > 0) this._strokeSeam(seamCtx, grid[row][column], grid[row][column + 1]);
@@ -1861,6 +1889,14 @@
       meshCtx.globalCompositeOperation = "destination-in";
       meshCtx.drawImage(this.meshMaskCanvas, 0, 0);
       meshCtx.globalCompositeOperation = "source-over";
+      if (pixelArt) {
+        // The expanded triangles already cover shared edges. Blurred seam repair muddies hard sprite edges.
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(this.meshCanvas, 0, 0);
+        ctx.restore();
+        return;
+      }
       const repairCtx = this.meshRepairContext;
       repairCtx.setTransform(1, 0, 0, 1, 0, 0);
       repairCtx.globalCompositeOperation = "source-over";
@@ -2069,7 +2105,7 @@
       }
     }
 
-    _gpuTexture(source) {
+    _gpuTexture(source, pixelArt) {
       const renderer = this.gpuRenderer;
       if (!renderer) return null;
       const cached = this.gpuTextures.get(source);
@@ -2078,14 +2114,13 @@
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-      // Canvas images use a top-left origin while WebGL textures use a
-      // bottom-left origin. Flip on upload so mesh v=0 remains the authored
-      // stick top and v=1 remains the stick bottom (the rotation-center side).
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      // Pixel silhouettes are authored in screen coordinates (v=0 is the top row).
+      // Retain the legacy material orientation for existing brush textures.
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, !pixelArt);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, pixelArt ? gl.NEAREST : gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, pixelArt ? gl.NEAREST : gl.LINEAR);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
       this.gpuTextures.set(source, texture);
       return texture;
@@ -2151,7 +2186,7 @@
           );
         }
       }
-      const gpuTexture = this._gpuTexture(textureSource);
+      const gpuTexture = this._gpuTexture(textureSource, segment.brushSource?.startsWith("pixel_") || segment.brushSource?.startsWith("motion:"));
       if (!gpuTexture) return false;
       const { gl } = renderer;
       gl.viewport(0, 0, width, height);
@@ -2198,7 +2233,7 @@
     }
 
     _processedTexture(image, segment) {
-      const key = `${segment.texture.assetHash}:${segment.colorMode}:${segment.color}:${JSON.stringify(segment.gradientStops)}:${segment.tailFadeStart}`;
+      const key = `${segment.brushSource || ""}:${segment.texture.assetHash}:${segment.colorMode}:${segment.color}:${JSON.stringify(segment.gradientStops)}:${segment.tailFadeStart}`;
       if (this.processed.has(key)) return this.processed.get(key);
       const canvas = document.createElement("canvas");
       canvas.width = image.width;
@@ -2242,7 +2277,7 @@
       return canvas;
     }
 
-    _drawTriangle(context, image, source, target) {
+    _drawTriangle(context, image, source, target, smooth = true) {
       const [s0, s1, s2] = source,
         [d0, d1, d2] = target;
       const denominator = s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
@@ -2271,7 +2306,7 @@
           d2.y * (s0.x * s1.y - s1.x * s0.y)) /
         denominator;
       context.save();
-      context.imageSmoothingEnabled = true;
+      context.imageSmoothingEnabled = smooth;
       context.imageSmoothingQuality = "high";
       context.beginPath();
       context.moveTo(c0.x, c0.y);
@@ -2303,11 +2338,16 @@
       const color = normalizeColor(value.color);
       const segment = {
         id: String(value.id || `trail_${index + 1}`),
+        ...(value.autoHistory === true && value.brushSource?.startsWith?.("motion:") ? {autoHistory:true} : {}),
+      ...(typeof value.brushSource === "string" ? { brushSource: value.brushSource } : {}),
+        ...(value.brushSource?.startsWith?.("pixel_") ? { pixelFacing: value.pixelFacing === "left" ? "left" : "right" } : {}),
+        ...(value.brushSource === "crescent" && value.crescentOptions ? { crescentOptions: clone(value.crescentOptions) } : {}),
         name: String(value.name || `Trail ${index + 1}`),
         profileId: String(value.profileId || profileId),
         animationId: String(value.animationId || animationId),
         enabled: true,
         generated: value.generated !== false,
+        trailDurationMs: clamp(value.trailDurationMs, 1, 5000, 150),
         presetOnly: value.presetOnly === true && (!Array.isArray(value.sticks) || value.sticks.length === 0),
         coordinateSpace: "group",
         layer: segmentLayer,

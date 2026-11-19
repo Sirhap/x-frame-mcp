@@ -21,11 +21,12 @@ const execFileAsync = promisify(execFile);
  * Omit start_time and duration to extract the whole file.
  * @param {string} videoPath Absolute input video path.
  * @param {string} outputPattern Output PNG pattern.
- * @param {{start_time?:unknown,duration?:unknown}} [options] Optional time window.
+ * @param {{start_time?:unknown,duration?:unknown,streamIndex?:number}} [options] Optional time window.
  * @returns {string[]} ffmpeg argv.
  */
 function videoExtractFfmpegArgs(videoPath, outputPattern, options = {}) {
-  const args = ["-hide_banner", "-loglevel", "error", "-i", videoPath, "-map", "0:v:0", "-vsync", "0"];
+  const stream = Number.isInteger(options.streamIndex) ? `0:${options.streamIndex}` : "0:v:0";
+  const args = ["-hide_banner", "-loglevel", "error", "-i", videoPath, "-map", stream, "-vsync", "0"];
   if (options.start_time !== undefined && options.start_time !== null && options.start_time !== "") {
     args.push("-ss", String(options.start_time));
   }
@@ -40,7 +41,7 @@ function videoExtractFfmpegArgs(videoPath, outputPattern, options = {}) {
  * Extracts every source video frame without changing the source frame rate.
  * @param {string} videoPath Absolute input video path.
  * @param {string} outputDirectory Temporary output directory.
- * @param {{ffmpegBinary?:string,start_time?:unknown,duration?:unknown}} [options] Optional binary override and time window.
+ * @param {{ffmpegBinary?:string,start_time?:unknown,duration?:unknown,streamIndex?:number}} [options] Optional binary override and time window.
  * @returns {Promise<string[]>} Ordered PNG frame paths.
  */
 async function extractVideoFrames(videoPath, outputDirectory, options = {}) {

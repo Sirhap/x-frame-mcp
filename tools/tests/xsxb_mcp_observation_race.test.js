@@ -35,12 +35,12 @@ for (const tool of ["xsxb_get_animation", "xsxb_measure_frames", "xsxb_export_sh
     await withAnimation(async ({ service, file, pixels }) => {
       for (let index = 0; index < pixels.length; index += 4) pixels.set([0, 255, 0, 255], index);
       const replacement = encodePngRgba(pixels, 8, 8);
-      const readFile = fs.readFileSync;
+      const readFile = fs.promises.readFile;
       let changed = false;
       // Replace after returning the original bytes to the preflight digest.
       // This deterministically models an external writer during the request.
-      fs.readFileSync = (target, ...args) => {
-        const bytes = readFile(target, ...args);
+      fs.promises.readFile = async (target, ...args) => {
+        const bytes = await readFile(target, ...args);
         if (target === file && !changed) {
           changed = true;
           fs.writeFileSync(file, replacement);
@@ -54,7 +54,7 @@ for (const tool of ["xsxb_get_animation", "xsxb_measure_frames", "xsxb_export_sh
           service,
         );
       } finally {
-        fs.readFileSync = readFile;
+        fs.promises.readFile = readFile;
       }
       assert.equal(changed, true, "the request must exercise the injected external write");
       assert.equal(response.result.isError, true);

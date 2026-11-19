@@ -2,6 +2,9 @@
 
 const { stickPose } = require("./lib/attack_trails");
 
+// Match the mesh subdivision in the shipped Godot sweep renderer.
+const SWEEP_SAMPLES_PER_SECOND = 180;
+
 /** Returns a finite number clamped to an inclusive range. */
 function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Number(value) || 0));
@@ -99,7 +102,7 @@ function sampleTimes(arrivals, start, end) {
   for (let index = 1; index < points.length; index += 1) {
     const left = points[index - 1];
     const right = points[index];
-    const steps = Math.max(1, Math.ceil((right - left) * 60));
+    const steps = Math.max(1, Math.ceil((right - left) * SWEEP_SAMPLES_PER_SECOND));
     for (let step = 0; step < steps; step += 1) samples.push(left + ((right - left) * step) / steps);
   }
   samples.push(end);

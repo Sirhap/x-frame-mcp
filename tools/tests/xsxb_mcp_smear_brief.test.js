@@ -155,9 +155,9 @@ test("xsxb_plan_smear is a catalog tool that returns the compiled brief", async 
   assert.ok(MCP_TOOL_NAMES.includes("xsxb_plan_smear"));
   const tool = toolDefinitions().find((entry) => entry.name === "xsxb_plan_smear");
   assert.ok(tool);
-  assert.match(tool.description, /clip-specific/);
-  assert.match(tool.description, /receipt\.brief/);
-  assert.match(tool.description, /skeleton/);
+  assert.match(tool.description, /observed weapon positions/);
+  assert.match(tool.description, /data\.brief/);
+  assert.match(tool.description, /xsxb_add_attack_trail/);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-plan-smear-"));
   try {
     const service = createXsxbMcpService({ root });

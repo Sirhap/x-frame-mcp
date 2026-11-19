@@ -10,6 +10,8 @@ const path = require("node:path");
 const { booleanFlag, PNG_NAME, requireExistingFile } = require("./xsxb_mcp_arguments");
 const { decodePngRgba, encodePngRgba } = require("./xsxb_mcp_cutout");
 
+const { withFileTransaction } = require("./lib/file_transaction");
+
 const NUMBERED_PNG = /^\d+\.png$/i;
 
 /**
@@ -187,16 +189,40 @@ function cellIsEmpty(rgba) {
 }
 
 /**
- * Removes previous numbered slice outputs so a re-run cannot poison a sequence import.
- * @param {string} dest Output directory.
- * @returns {void}
+ * Reads the shared output ledger so two sheets using the same directory cannot
+ * claim the same numbered file. A legacy directory starts with no known owners.
+ * @param {string} manifestPath Ledger in the destination directory.
+ * @returns {Map<string,string>} Filename to relative source path.
  */
-function clearNumberedPngs(dest) {
-  if (!fs.existsSync(dest)) return;
-  for (const name of fs.readdirSync(dest)) {
-    if (!NUMBERED_PNG.test(name)) continue;
-    const filePath = path.join(dest, name);
-    if (fs.statSync(filePath).isFile()) fs.unlinkSync(filePath);
+function readSliceOwners(manifestPath) {
+  const stat = fs.lstatSync(manifestPath, { throwIfNoEntry: false });
+  if (!stat) return new Map();
+  if (stat.isFile()) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (
+      manifest?.kind === "xsxb_slice_outputs" &&
+      manifest.files &&
+      typeof manifest.files === "object" &&
+      !Array.isArray(manifest.files)
+    ) {
+      const entries = Object.entries(manifest.files);
+      if (entries.every(([name, owner]) => NUMBERED_PNG.test(name) && typeof owner === "string")) {
+        return new Map(entries);
+      }
+    }
+  }
+  throw new Error(`Invalid slice output manifest: ${manifestPath}`);
+}
+
+/** Yields cells in row-major order, keeping only one cell buffer in memory. */
+function* sliceCells(image, grid) {
+  for (let row = 0; row < grid.rows; row += 1) {
+    for (let column = 0; column < grid.columns; column += 1) {
+      const x = column * (grid.cellW + grid.pad);
+      const y = row * (grid.cellH + grid.pad);
+      const rgba = blitCell(image.data, image.width, image.height, x, y, grid.cellW, grid.cellH);
+      yield { column, row, rgba };
+    }
   }
 }
 
@@ -329,7 +355,11 @@ function sliceSheet(args = {}) {
   const startIndexRaw = args.start_index;
   const startIndex =
     startIndexRaw === undefined || startIndexRaw === null || startIndexRaw === "" ? 0 : Number(startIndexRaw);
-  if (!Number.isInteger(startIndex) || startIndex < 0) {
+  if (
+    !Number.isSafeInteger(startIndex + (grid.rows * grid.columns - 1)) ||
+    !Number.isSafeInteger(startIndex) ||
+    startIndex < 0
+  ) {
     throw new Error(`start_index must be an integer >= 0. Received: ${startIndexRaw}`);
   }
   const skipEmpty = booleanFlag(args.skip_empty, true);
@@ -341,25 +371,50 @@ function sliceSheet(args = {}) {
     throw new Error("dest must be a directory, not the sheet PNG.");
   }
   fs.mkdirSync(dest, { recursive: true });
-  clearNumberedPngs(dest);
   const paths = [];
   const skipped = [];
-  let nextName = startIndex;
-  for (let row = 0; row < grid.rows; row += 1) {
-    for (let column = 0; column < grid.columns; column += 1) {
-      const index = row * grid.columns + column;
-      const x0 = column * (grid.cellW + grid.pad);
-      const y0 = row * (grid.cellH + grid.pad);
-      const rgba = blitCell(image.data, image.width, image.height, x0, y0, grid.cellW, grid.cellH);
-      if (skipEmpty && cellIsEmpty(rgba)) {
-        skipped.push({ index, column, row });
-        continue;
-      }
-      const outputPath = path.join(dest, `${nextName}.png`);
-      fs.writeFileSync(outputPath, encodePngRgba(rgba, grid.cellW, grid.cellH));
-      paths.push(outputPath);
-      nextName += 1;
+  const owner = path.relative(fs.realpathSync(dest), fs.realpathSync(absolute));
+  const manifestPath = path.join(dest, "xsxb-slice-outputs.json");
+  const lockPath = path.join(dest, ".xsxb-slice.lock");
+  // Serialize publishers sharing this directory across local MCP processes.
+  fs.mkdirSync(lockPath);
+  try {
+    const owners = readSliceOwners(manifestPath);
+    const stale = new Set();
+    for (const [name, source] of owners) {
+      if (source === owner) stale.add(name);
     }
+    withFileTransaction((transaction) => {
+      for (const { column, row, rgba } of sliceCells(image, grid)) {
+        if (skipEmpty && cellIsEmpty(rgba)) {
+          skipped.push({ index: row * grid.columns + column, column, row });
+          continue;
+        }
+        const name = `${startIndex + paths.length}.png`;
+        const outputPath = path.join(dest, name);
+        const existing = fs.lstatSync(outputPath, { throwIfNoEntry: false });
+        if (existing && (owners.get(name) !== owner || !existing.isFile())) {
+          throw new Error(
+            `Slice output already exists and cannot be replaced: ${outputPath}. Choose another dest or start_index.`,
+          );
+        }
+        transaction.writeFile(outputPath, encodePngRgba(rgba, grid.cellW, grid.cellH));
+        paths.push(outputPath);
+        owners.set(name, owner);
+        stale.delete(name);
+      }
+      if ((args.animation_id || args.animation) && !paths.length) {
+        throw new Error("No cells to import (all skipped or empty sheet).");
+      }
+      for (const name of stale) {
+        const file = path.join(dest, name);
+        if (fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()) transaction.removeFile(file);
+        owners.delete(name);
+      }
+      transaction.writeJson(manifestPath, { kind: "xsxb_slice_outputs", files: Object.fromEntries(owners) });
+    });
+  } finally {
+    fs.rmdirSync(lockPath);
   }
   const square = grid.cellW === grid.cellH;
   return {

@@ -226,6 +226,13 @@ async function isolate(tool, probe, serviceOptions) {
 
 const PROBES = {
   ...authoringProbes(importSequence),
+  async xsxb_edit_target(fixture) {
+    const image = path.join(fixture.root, "target.png");
+    fs.writeFileSync(image, ONE_PIXEL_PNG);
+    const result = await fixture.call("xsxb_edit_target", { file_path: image, operation: "inspect" });
+    assert.equal(result.animations[0].frames[0].width, 1);
+    return verdict("xsxb_edit_target", "ready", "inspected an unregistered PNG");
+  },
 
   async xsxb_list_projects(fixture) {
     const listed = await fixture.call("xsxb_list_projects");

@@ -86,3 +86,103 @@ test("sweep tool bakes linear blade history and expires by elapsed time", async 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("synced Godot sweep tracks blade coordinates and fades on a held final frame", async (t) => {
+  const { spawnSync } = require("node:child_process");
+  if (spawnSync("godot", ["--version"]).error?.code === "ENOENT") {
+    t.skip("Godot executable unavailable");
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-godot-sweep-"));
+  const game = path.join(root, "game");
+  const service = createXsxbMcpService({ root, florenceDetectImpl: null });
+  t.after(() => {
+    service.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  fs.mkdirSync(game);
+  fs.writeFileSync(
+    path.join(game, "project.godot"),
+    'config_version=5\n[application]\nconfig/name="Sweep test"\n',
+  );
+  const png = path.join(root, "frame.png");
+  fs.writeFileSync(png, encodePngRgba(new Uint8ClampedArray(64 * 64 * 4), 64, 64));
+  await service.callMcp("xsxb_create_project", { project_id: "qa" });
+  await service.callMcp("xsxb_import_animation", {
+    source: "items",
+    items: [{ path: png }, { path: png }],
+    animation_id: "slash",
+    fps: 10,
+  });
+  await service.callMcp("xsxb_bind_godot", { project_root: game });
+  await service.callMcp("xsxb_add_attachment", { file_path: png, frame: 1, offset_x: 3, offset_y: -10 });
+  const result = await service.callMcp("xsxb_add_attack_trail", {
+    sync: true,
+    render_mode: "sweep",
+    trail_duration_ms: 150,
+    sticks: [
+      { frame: 0, top: { x: -20, y: -40 }, bottom: { x: -20, y: -20 }, layer: "front" },
+      { frame: 1, top: { x: 20, y: -40 }, bottom: { x: 20, y: -20 }, layer: "front" },
+    ],
+  });
+  assert.equal(result.data.sync.ok, true);
+  fs.writeFileSync(
+    path.join(game, "check.gd"),
+    `extends SceneTree
+func _initialize() -> void:
+	call_deferred("check")
+func check() -> void:
+	var actor = load("res://xsxb_frame_tuner/runtime/xsxb_frame_actor.tscn").instantiate()
+	root.add_child(actor)
+	actor.set_process(false)
+	actor.restart_frame_animation("slash", false)
+	actor._process(0.15)
+	var front = actor.get_node("AttackTrailsFront")
+	var behind = actor.get_node("AttackTrailsBehind")
+	if front.get_child_count() != 1 or behind.get_child_count() != 0:
+		quit(1)
+		return
+	var ribbon = front.get_child(0)
+	if not ribbon.visible or ribbon.material != null or ribbon.mesh.get_surface_count() != 1:
+		quit(2)
+		return
+	var points = ribbon.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var attachment = actor.get_node("VisualOwner/AttachmentsAbove").get_child(0)
+	var sprite = actor.get_node("VisualOwner/FrameSprite")
+	var grip = sprite.to_local(attachment.global_position)
+	var head = sprite.to_local(ribbon.to_global(points[-1]))
+	if not grip.is_equal_approx(Vector2(3,22)) or not head.is_equal_approx(Vector2(10,-8)):
+		quit(3)
+		return
+	actor._process(0.09)
+	if not ribbon.visible:
+		quit(4)
+		return
+	actor._process(0.2)
+	if ribbon.visible:
+		quit(5)
+		return
+	print("sweep passed")
+	quit()
+`,
+  );
+  const run = spawnSync(
+    "godot",
+    ["--headless", "--path", game, "--script", "check.gd", "--quit-after", "30"],
+    { encoding: "utf8", timeout: 15000 },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.doesNotMatch(run.stderr, /SCRIPT ERROR|^ERROR:/m);
+  assert.match(run.stdout, /sweep passed/);
+});
+
+test("drawing a pixel sprite at its native size preserves individual texels", () => {
+  const { SoftwareCanvas } = require("../../mcp/lib/xsxb_software_canvas");
+  const data = new Uint8ClampedArray([16, 200, 90, 255, 237, 18, 222, 255]);
+  for (const smooth of [false, true]) {
+    const ctx = new SoftwareCanvas(2, 1).getContext("2d");
+    ctx.imageSmoothingEnabled = smooth;
+    ctx.drawImage({ data, width: 2, height: 1 }, 0, 0);
+    assert.deepEqual(ctx.getImageData(0, 0, 2, 1).data, data);
+  }
+});

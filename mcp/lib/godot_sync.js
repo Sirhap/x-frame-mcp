@@ -3,7 +3,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { EMPTY_MANIFEST, EMPTY_TUNING, reslash, writeJson } = require("./project_store");
 const { ensureGodotRuntime } = require("./godot_runtime");
-const { EMPTY_ATTACK_TRAILS, clone: cloneAttackTrails, normalizeAttackTrails } = require("./attack_trails");
+const { BUNDLED_TRAIL_TEXTURE, DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE, EMPTY_ATTACK_TRAILS, clone: cloneAttackTrails, normalizeAttackTrails } = require("./attack_trails");
 
 const GODOT_SYNC_ROOT = "xsxb_frame_tuner";
 
@@ -374,7 +374,10 @@ function syncAttackTrails(root, projectStore, project, trailsInput = null) {
   const retainedProjectTextures = new Set();
   let attackTrailCount = 0;
   let copiedAttackTrailTextures = 0;
-  const presetSource = sourcePathForFrame(root, projectRoot, local.presetTexture?.path);
+  const workspace = projectStore.projectWorkspaceDir(project);
+  const textureSource = (texture) => sourcePathForFrame(root, projectRoot, texture?.path, workspace) ||
+    (texture?.path === DEFAULT_ATTACK_TRAIL_PRESET_TEXTURE.path ? BUNDLED_TRAIL_TEXTURE : "");
+  const presetSource = textureSource(local.presetTexture);
   if (presetSource && path.extname(presetSource).toLowerCase() === ".png") {
     const presetHash = String(local.presetTexture.assetHash || fileContentHash(presetSource));
     const presetRel = godotProjectRelPath("attack_trails", "presets", `${presetHash}.png`);
@@ -386,7 +389,7 @@ function syncAttackTrails(root, projectStore, project, trailsInput = null) {
   for (const [bindingKey, segments] of Object.entries(local.bindings)) {
     for (const segment of segments) {
       attackTrailCount += 1;
-      const source = sourcePathForFrame(root, projectRoot, segment.texture?.path);
+      const source = textureSource(segment.texture);
       if (!source || path.extname(source).toLowerCase() !== ".png") continue;
       const hash = String(segment.texture.assetHash || fileContentHash(source));
       const [profileId = "profile", animationId = "animation"] = bindingKey.split("/");

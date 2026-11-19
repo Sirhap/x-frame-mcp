@@ -19,13 +19,13 @@ function createRevisionStore(context) {
   /** Returns the private revision directory outside the workspace being captured. */
   const directory = (project) => path.join(store.projectPaths(project).dataDir, "revisions");
   /** Lists snapshot-owned files, including explicit in-place frame sources. */
-  function currentFiles(project, tolerateMissing = false) {
+  function currentFiles(project, { allowMissingFrames = false, allowUnreadableManifest = false } = {}) {
     const paths = store.projectPaths(project);
     let manifest;
     try {
       manifest = store.readJson(paths.manifest, { profiles: [] });
     } catch (error) {
-      if (!tolerateMissing) throw error;
+      if (!allowUnreadableManifest) throw error;
       manifest = { profiles: [] };
     }
     const workspace = store.projectWorkspaceDir(project);
@@ -53,7 +53,7 @@ function createRevisionStore(context) {
         for (const frame of animation.frames || []) {
           const file = resolveFrame(project, frame.path, animation);
           if (!file || !fs.existsSync(file)) {
-            if (tolerateMissing) continue;
+            if (allowMissingFrames) continue;
             throw new Error(`Snapshot requires every frame to exist: ${frame.path}`);
           }
           if (!knownTargets.has(file)) {
@@ -78,7 +78,10 @@ function createRevisionStore(context) {
       destination = path.join(base, id);
     fs.mkdirSync(staging, { recursive: true });
     try {
-      const files = currentFiles(project, tolerateMissing).map((entry) => {
+      const files = currentFiles(project, {
+        allowMissingFrames: tolerateMissing,
+        allowUnreadableManifest: tolerateMissing,
+      }).map((entry) => {
         const bytes = fs.readFileSync(entry.target),
           hash = digest(bytes);
         const blob = path.join(staging, hash);
@@ -187,7 +190,12 @@ function createRevisionStore(context) {
     const left = read(project, args.revision_id);
     const right = args.other_revision_id
       ? read(project, args.other_revision_id)
-      : { files: currentFiles(project).map((f) => ({ ...f, hash: digest(fs.readFileSync(f.target)) })) };
+      : {
+          files: currentFiles(project, { allowMissingFrames: true }).map((f) => ({
+            ...f,
+            hash: digest(fs.readFileSync(f.target)),
+          })),
+        };
     const l = new Map(left.files.map((f) => [f.key, f])),
       r = new Map(right.files.map((f) => [f.key, f]));
     const changes = [...new Set([...l.keys(), ...r.keys()])]
@@ -250,7 +258,7 @@ function createRevisionStore(context) {
       bytes: bytesFor(project, snapshot, entry),
     }));
     const retained = new Set(jobs.map((job) => job.target));
-    const removed = currentFiles(project, true).filter(
+    const removed = currentFiles(project, { allowMissingFrames: true, allowUnreadableManifest: true }).filter(
       (entry) => !entry.external && !retained.has(entry.target),
     );
     const result = {
@@ -282,7 +290,7 @@ function createRevisionStore(context) {
     const snapshot = read(project, id);
     if (!snapshot.automatic || snapshot.purpose !== "pre_edit" || snapshot.protection?.retained !== false)
       return false;
-    const current = currentFiles(project, true);
+    const current = currentFiles(project, { allowMissingFrames: true, allowUnreadableManifest: true });
     if (current.length !== snapshot.files.length) return false;
     const byKey = new Map(current.map((entry) => [entry.key, entry]));
     if (

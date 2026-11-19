@@ -53,11 +53,21 @@ To operate an existing Tuner workspace (same `data/projects` and frames):
 }
 ```
 
-Without `XSXB_ROOT`, authoring files go in the current working directory’s `.x-frame/` folder (the project the agent is in). Pass `project_root` to store under another folder’s `.x-frame/`.
+Without `XSXB_ROOT`, authoring files go in the MCP process’s current working directory under `.x-frame/`. If a desktop client starts the process at the filesystem root (such as `/` on macOS), the service uses `~/.x-frame/`. Set `XSXB_ROOT` to select a shared workspace explicitly. Pass `project_root` when creating a project to store that project’s files under another folder’s `.x-frame/`.
 
 Reload the `x-frame` MCP server after pulling. Confirm with `xsxb_list_projects`.
 
 See [`mcp/README.md`](mcp/README.md) for the tool playbook.
+
+## Direct media editing
+
+Call `xsxb_edit_target` with a local PNG, video, PNG directory, SpriteFrames resource, or ordered PNG items. It works in a fresh directory without creating a project. For example, this writes the flipped frames back to their original paths:
+
+```json
+{ "operation": "flip_horizontal", "directory": "/path/to/walk", "dry_run": false }
+```
+
+Use `inspect` for dimensions and frame information, `analyze` for motion, duplicates and loop candidates, and `cutout` to remove the background. Edit operations preview by default. Videos use FFmpeg and its companion ffprobe. Project authoring, revision history and Godot synchronization remain available through the project tools.
 
 ## Commands
 

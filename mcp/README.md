@@ -10,7 +10,11 @@
 - `xsxb_detect_regions` 的每个候选都带 `{region_id,basis_snapshot_id}`。这个内容寻址引用可直接交给 `xsxb_place_image` 的 anchor/occlusion，或 `xsxb_add_attachment.hand`；源图改变、引用到另一张图或快照不一致都会拒绝，不会退回到手填像素。
 - `targetStatus` 按请求目标分别报告 `geometry` 和 `semantic`。任意一个模型标签不会再把未确认的手、武器、特效或文字标成完成。
 - 静图挂武器优先用 `xsxb_place_image` 的 `layer: "under_target"` 加目标手部 region：武器保留在人物上方，只有检测出的手部像素遮住剑柄。`behind` 仍表示整个人物遮挡。
-- `xsxb_add_attachment` 用 `hand` + `t` 时会计入 attachment 的 `scale` 和 `rotation`；`xsxb_add_attack_trail render_mode:"sweep"` 用至少两帧明确 blade-edge sticks 在 MCP 的 GIF/sheet 导出中烘焙时间衰减拖影。Godot/Tuner 对该模式仍使用现有 mesh 路径。
+- `xsxb_add_attachment` 用 `hand` + `t` 时会计入 attachment 的 `scale` 和 `rotation`；`xsxb_add_attack_trail render_mode:"sweep"` 用至少两帧明确 blade-edge sticks 在 MCP 的 GIF/sheet 导出中烘焙时间衰减拖影。同步后的 Godot 运行时按相同的刀刃轨迹和寿命实时渲染。Tuner 预览仍使用 mesh。
+- 连续笔刷刀光：`xsxb_add_attack_trail {"start_frame":3,"end_frame":7}` 自动沿首尾帧唯一的共同挂件画一笔。多个候选时按回执传 `attachment_id`。连击一次传 `hits`，例如 `{"hits":[{"start_frame":3,"end_frame":7},{"start_frame":11,"end_frame":17},{"start_frame":21,"end_frame":27}]}`。回执附带各刀结束帧拼图和稳定 `id`，单独提交该 `id` 和新范围即可调整一刀。只改一端且匹配唯一时可省略 ID。已有刀画在人物图里时用两个 `sticks`。
+- 根据武器动作生成弧光：用 `xsxb_add_attack_trail {"brush_preset":"weapon_motion","start_frame":3,"end_frame":8}`。工具读取区间内每个可见帧的武器姿势，刀光和武器同时换帧，新刀光按命中前最后一段同向转动的实际时长保留拖影，直线动作默认最多保留 150 毫秒。连击可在各自的 `hits[]` 中传 `trail_duration_ms`。回执的 `arcReview` 给出转角、时长和变向所在帧。改过源动作的姿势或播放时长后，以原刀光 ID 重建。
+- 固定剪影的双色像素刀光：`xsxb_add_attack_trail {"brush_preset":"pixel_spin","start_frame":21,"end_frame":27}` 在结束帧形成中空回旋斩。`pixel_cross` 横扫，`pixel_overhead` 掠过头顶。三连击可在 `hits` 里逐击指定预设，`pixel_facing:"left"` 可镜像。
+- 大月牙斩：用 `xsxb_add_attack_trail {"brush_preset":"crescent","start_frame":3,"end_frame":7}`，结束帧显示完整月牙。默认向右鼓出、从上向下挥。用 `crescent_facing:"left"` 镜像或 `crescent_direction:"up"` 上挑。亮芯与刷痕沿现有 mesh 渲染，Godot 同步时附带纹理。用 `crescent_scale` 调整大小（默认 1）；想让月牙完整落在命中帧画布内，传 `crescent_fit:"shrink"`。默认保留尺寸；回执的 `data.crescentFraming.overflowPx` 估算网格超出各边的像素数。执行 `data.previewCall` 查看该帧。
 - Florence 是可选兜底：`npm run mcp:perception:install` 显式安装原生 Transformers 版 `florence-community/Florence-2-base-ft`，`npm run mcp:perception:doctor` 检查。模型提交与 safetensors 哈希固定；普通安装和 MCP 启动不会下载模型或执行远程代码。
 - `xsxb_reorganize_frames order=...` 和 A1 cell 派生写入必须传观察回执中的 `basis_snapshot_id`；动画 `xsxb_cutout` 经 MCP 同样要带快照，成功后回执是抠完后的新 id。静图 crop/place 必须传对应 `overlay_id`。
 - `xsxb_detect_regions` 的 `output_path` 不得指向源 PNG。
@@ -62,7 +66,7 @@ Cursor **不会**展开 `${workspaceFolder}`。`args` 必须是指向 `mcp/xsxb_
 }
 ```
 
-省略 `XSXB_ROOT` 时，作者文件写在**当前工作目录**的 `.x-frame/`（和 AI 平时操作的项目目录一致，不必是 Godot）。`xsxb_create_project` 带 `project_root` 时，写到那个目录的 `.x-frame/`。创作位置由注册表的 `authoringRoot` 保持稳定；`xsxb_bind_godot` 只更新 Godot 同步目标，不移动已有动画或切换创作目录。旧记录沿用原来的存储位置。
+省略 `XSXB_ROOT` 时，项目文件写在 MCP 进程当前工作目录的 `.x-frame/`。若桌面客户端从文件系统根目录启动（如 macOS 的 `/`），服务使用当前用户的 `~/.x-frame/` 保存注册表和默认项目。需要访问特定工作区时可显式设置 `XSXB_ROOT`。`xsxb_create_project` 带 `project_root` 时，该项目文件写到指定目录的 `.x-frame/`，注册表仍在服务的工作区。创作位置由注册表的 `authoringRoot` 保持稳定；`xsxb_bind_godot` 只更新 Godot 同步目标，不移动已有动画或切换创作目录。旧记录沿用原来的存储位置。
 
 命令行自检：
 
@@ -70,15 +74,33 @@ Cursor **不会**展开 `${workspaceFolder}`。`args` 必须是指向 `mcp/xsxb_
 npm run mcp:start
 ```
 
+## 直接操作素材
+
+`xsxb_edit_target` 接受和导入相同的四种来源，也可以单独给一张 PNG。直接调用即可，无需执行 `xsxb_create_project` 或 `xsxb_import_animation`。
+
+| 目标               | 参数                             | 应用编辑时的结果                                                                                                                                        |
+| ------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PNG 或序列目录     | `file_path` 或 `directory`       | 修改原 PNG，目录按文件名自然排序。单图可用 `output_path` 另存。                                                                                         |
+| Godot SpriteFrames | `file_path`，可选 `animation_id` | 修改引用的独立 PNG 纹理。共享纹理只写一次，也会影响引用它的其他动画。保留资源的帧序、时长和 FPS。                                                       |
+| 逐帧 items         | `items: [{path}, {name, data}]`  | 磁盘项原地编辑；内联 PNG 返回在 `animations[].frames[].data`，顺序与输入一致。                                                                          |
+| 视频               | `file_path`，可选 `output_path`  | FFmpeg 重新编码目标视频轨，复制其余轨道。水平翻转默认写回原文件。抠图使用 RGB 色键，MOV/MKV 可原地保存透明度；其他容器默认生成同目录的 `<名>_cut.mov`。 |
+
+`operation` 支持 `inspect`（尺寸、帧或视频流信息）、`analyze`（复用动画的循环、重复帧和动作窗口分析）、`flip_horizontal` 和 `cutout`。后两项默认返回写入计划，传 `dry_run:false` 才应用。PNG 抠图复用智能抠图，可选 `key_color`。视频使用 FFmpeg 和 ffprobe，可通过 `XSXB_FFMPEG` / `XSXB_FFPROBE` 指定程序。批量 PNG 在全部帧准备成功后一起提交。直接编辑不建立项目恢复点。项目级时序、碰撞框、附件、撤销与 Godot 同步继续使用项目工具。
+
+```json
+{ "operation": "cutout", "directory": "/path/to/walk", "key_color": "#00ff00", "dry_run": false }
+```
+
 ## Agent 规则（人也应知道）
 
 服务在 `initialize` 里下发同一段说明，大意是：
 
 - **工程流程：** 开工先用一句话写下用户目标，再 `list`/`get` 选 playbook；多步用有序 todo；每步改盘后打开图（`preview.path` / overlay / gif）再勾掉，`confirmed` 不算完成；眼睛不过就停，不要接着走 playbook
-- 改数据前先 `xsxb_list_projects` 或 `xsxb_get_project`。没有项目时用 `xsxb_create_project`（`project_id` / `label` / `project_root` 均可选；已存在的 id 不重复建）。默认落在当前目录 `.x-frame/`；带 `project_root` 时落在那个目录的 `.x-frame/`
+- 操作已登记的项目数据前先 `xsxb_list_projects` 或 `xsxb_get_project`。没有项目时用 `xsxb_create_project`（`project_id` / `label` / `project_root` 均可选；已存在的 id 不重复建）。默认落在当前目录 `.x-frame/`；带 `project_root` 时落在那个目录的 `.x-frame/`
 - 同步前先 `xsxb_bind_godot`
 - 导入用 `xsxb_import_animation`（支持 `start_frame` / `end_frame` / `replace` / `in_place`）；`xsxb_import_video` 只是视频别名，可另传 `start_time` / `duration`（ffmpeg `-ss`/`-t` 放在 `-i` 后；省略则抽整段）。`in_place: true` 让 PNG 序列继续用源文件，不拷进 `workspace/assets`
 - 切表用 `xsxb_slice_sheet`（packed sprite/contact sheet → PNG 序列）。走循环锁高锁脚仍用 `xsxb_measure_frames` / `xsxb_register_clip`，不要用切表当锁尺
+  同一源图重复切到同一目录时，工具按 `xsxb-slice-outputs.json` 更新和清理自己的编号 PNG。旧目录没有这份记录时，遇到重名请换 `dest` 或 `start_index`。指定 `animation_id` 通过 MCP 导入时，回执的 `data.revisionId` 可恢复切图前的项目状态。同一目录同时只接受一个切图任务。进程异常退出后若遗留 `.xsxb-slice.lock`，确认目录已无切图任务后可移除该空锁目录。
 - 走循环锁尺：`xsxb_measure_frames`（相对待机看 `dBbox` / `dCx` / `dFx`）→ `xsxb_register_clip`（绕脚锁高锁脚锁左右，`equalize` 抹镜头远近，`shared_scale` 留姿势起伏）→ `xsxb_export_sheet normalize=feet|none` 和 `xsxb_export_overlay`（红/青叠）验收 → `xsxb_export_gif`（默认品红底，`output_path` 可出 XSXB 根）或 `xsxb_export_pack_slot` 拷进游戏仓。走循环不要用刀光 / `place_image`
 - 抠图用 `xsxb_cutout`（默认 `fit=none`、`receipt=short`；生成白底或黑底用 `key_mode=border_flood`；看回执 `preview.path` 洋红扁平成图，不要用默认种脚小格子表当「人还在」；网页同一套智能抠图和滑块；可传 `tolerance` / `feather` / `protected_colors` 等，省略则用共用智能档；已抠帧默认跳过，除非 `force`；回执带 `bodyHeight` / `nearWhite`，`metrics=false` 可关）
 - 视频做成循环动画：导入 → `xsxb_cutout`（省略滑块用共用智能档）→ `xsxb_analyze`（一次解码：去重 / 循环 / 动作窗，并写出推荐窗的 `grid=false` 预览 sheet）。看 `preview.path`，不要给每个候选单独 `xsxb_export_sheet`。`oneShotLikely` 表示长镜头里的短爆发，长镜头里的完整步态循环不是 one-shot。套用时 `xsxb_reorganize_frames` 传 `loop.recommended.order` 或 `motion.order`（`loop_endpoint=duplicate_first` 把第 0 帧拷成尾帧）。回执若带 `autoAdjustedThreshold`，不要直接套用 `duplicates.order`，除非传了 `auto_adjust`

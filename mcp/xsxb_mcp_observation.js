@@ -55,6 +55,30 @@ function createObservation(input) {
 }
 
 /**
+ * Builds the same content id for an animation while allowing STDIO to handle
+ * pings during frame reads and SHA-256 work. Keep only a few PNGs in flight.
+ * @param {Parameters<typeof createObservation>[0]} input Observation sources.
+ * @returns {Promise<ReturnType<typeof createObservation>>} Verified content hashes.
+ */
+async function createAnimationObservation(input) {
+  const sources = [];
+  const batchSize = 4;
+  for (let offset = 0; offset < input.sources.length; offset += batchSize) {
+    const batch = input.sources.slice(offset, offset + batchSize);
+    const hashed = await Promise.all(
+      batch.map(async (source) => {
+        if (source.hash) return source;
+        const bytes = await fs.promises.readFile(source.path);
+        const digest = await crypto.webcrypto.subtle.digest("SHA-256", bytes);
+        return { key: source.key, hash: Buffer.from(digest).toString("hex") };
+      }),
+    );
+    sources.push(...hashed);
+  }
+  return createObservation({ ...input, sources });
+}
+
+/**
  * Creates a stable file observation.
  * @param {string} filePath Existing file.
  * @param {object} [scope] Extra domain scope.
@@ -111,6 +135,7 @@ module.exports = {
   canonicalValue,
   containsCellToken,
   createObservation,
+  createAnimationObservation,
   observeFile,
   sha256,
 };

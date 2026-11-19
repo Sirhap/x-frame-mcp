@@ -11,12 +11,12 @@
 
 ## Project and Data Isolation
 
-- Bind an XSXB project to exactly one Godot project root.
+- In standalone MCP, a project can be used solely for authoring. When syncing to Godot, verify its selected target root.
 - Reuse a project ID only when its stored root matches the target root.
 - Reuse a profile only when it is the intended character in that project.
 - Treat other projects as schema references only. Never copy their numeric tuning, boxes, scene settings, IDs, paths, or gameplay assumptions.
-- Pass both `--project` and `--project-root` when the ID is known.
-- After import, verify `data/projects.json`, the runtime project ID, and the target root agree.
+- For the full Workbench importer CLI, pass both `--project` and `--project-root` when the ID is known.
+- For a Godot handoff, verify the selected project ID, generated runtime project ID and bound root agree.
 - Copy only source PNGs; never copy Godot `.import` files as authored assets.
 
 ## Add and Replace Semantics
@@ -68,3 +68,82 @@ Record and verify:
 - saved box entry count versus actor frame count
 - attack groups and active hitbox coverage
 - stable tuner-local and `res://xsxb_frame_tuner/` paths
+
+## Full workbench CLI examples
+
+These commands apply in a separate full tuner checkout containing the named scripts. For standalone x-frame use the MCP import and authoring tools in SKILL.md. Pass replacement and gameplay-validation flags only for requests that require those operations.
+
+Run commands from the resolved tuner root. For several PNG groups, place global options before the first `--animation` block:
+
+```powershell
+node "<tuner_root>\tools\import_batch.js" --project-root "<godot_project_root>" --project <xsxb_project_id> --profile <profile_id> --label "<character_label>" `
+  --animation idle --source "<idle_png_folder>" --fps 12 `
+  --animation run --source "<run_png_folder>" --fps 12 `
+  --animation stand_attack --source "<attack_png_folder>" --fps 12
+```
+
+For one PNG group:
+
+```powershell
+node "<tuner_root>\tools\import_frames.js" --project <xsxb_project_id> --project-root "<godot_project_root>" --profile <profile_id> --animation <animation_id> --source "<png_folder>" --fps <fps>
+```
+
+For SpriteFrames:
+
+```powershell
+node "<tuner_root>\tools\import_spriteframes.js" --project-root "<godot_project_root>" --project <xsxb_project_id> --all
+```
+
+Plan an attachment sequence from a local PNG folder (frame ranges are one-based):
+
+```bash
+node "<tuner_root>/tools/auto_align_attachments.js" \
+  --project <xsxb_project_id> \
+  --profile <profile_id> \
+  --animation <animation_id> \
+  --assets "<attachment_png_folder>" \
+  --frames <all_or_range> \
+  --plan "<review_plan.json>"
+```
+
+For a longer VFX sequence mapped onto a reviewed active-frame range, request Alpha-activity sampling and spatial proposals explicitly:
+
+```bash
+node "<tuner_root>/tools/auto_align_attachments.js" \
+  --project <xsxb_project_id> \
+  --profile <profile_id> \
+  --animation <animation_id> \
+  --assets "<attachment_png_folder>" \
+  --frames <active_range> \
+  --strategy active \
+  --spatial auto \
+  --direction <auto|left|right> \
+  --plan "<review_plan.json>"
+```
+
+`active` trims low-Alpha tails and samples representative effect phases. `resample` preserves the full source endpoints. `spatial auto` uses robust owner-body and effect Alpha bounds to propose scale and offset; it always sets `requiresVisualReview`.
+
+After reviewing the plan and receiving explicit user confirmation:
+
+```bash
+node "<tuner_root>/tools/auto_align_attachments.js" --apply "<review_plan.json>" --confirm
+node "<tuner_root>/tools/auto_align_attachments.js" \
+  --project <xsxb_project_id> \
+  --profile <profile_id> \
+  --animation <animation_id> \
+  --validate
+```
+
+Use `--assets group`, `--assets group:<profile>/<animation>`, or `--assets ids:<id1>,<id2>` when the images are already in the local attachment asset library. Reapplying an already completed plan must return `already_applied` without creating another instance.
+
+Validate the complete integration:
+
+```powershell
+node "<tuner_root>\tools\validate_import.js" --project <xsxb_project_id> --project-root "<godot_project_root>" --require-gameplay --strict
+```
+
+Start the tuner:
+
+```powershell
+$env:PORT="5179"; node "<tuner_root>\tools\animation_tuner\server.js"
+```

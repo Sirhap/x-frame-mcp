@@ -1,7 +1,26 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+
+/**
+ * Selects the authoring host. Desktop launchers sometimes supply the filesystem
+ * root as cwd even though no project directory was selected.
+ * @param {string} [explicitRoot] Host supplied by the service caller.
+ * @returns {string} Absolute host for the registry, project assets and artifacts.
+ */
+function resolveMcpHostRoot(explicitRoot) {
+  const configured = explicitRoot || process.env.XSXB_ROOT;
+  if (configured) return path.resolve(configured);
+  const cwd = process.cwd();
+  if (cwd !== path.parse(cwd).root) return cwd;
+  const home = os.homedir();
+  if (home && path.isAbsolute(home) && path.resolve(home) !== path.parse(home).root) {
+    return path.resolve(home);
+  }
+  throw new Error("MCP started at the filesystem root without a user home. Set XSXB_ROOT to your workspace.");
+}
 
 /**
  * Resolves the workspace / package root used by vendored MCP helpers.
@@ -23,4 +42,4 @@ function resolveXsxbRoot(fromDir) {
   return path.resolve(fromDir, "../..");
 }
 
-module.exports = { resolveXsxbRoot };
+module.exports = { resolveMcpHostRoot, resolveXsxbRoot };

@@ -210,8 +210,8 @@ test("concise tools retain routing constraints and workflow docs retain the cres
   const gif = toolDefinitions().find((entry) => entry.name === "xsxb_export_gif");
   const sheet = toolDefinitions().find((entry) => entry.name === "xsxb_export_sheet");
   assert.ok(trail && place && cutout && gif && sheet);
-  assert.match(trail.description, /smooth_arc only for truly curved motion/);
-  assert.match(trail.description, /pixel-layer crescents belong to place_image/);
+  assert.match(trail.description, /attachment_id/);
+  assert.match(trail.description, /two blade-edge sticks/);
   assert.match(place.description, /require overlay_id/);
   assert.match(place.description, /xsxb_plan_place/);
   assert.match(place.description, /output_path stays inside XSXB root/);
@@ -223,51 +223,16 @@ test("concise tools retain routing constraints and workflow docs retain the cres
   const skillRoot = path.join(__dirname, "../../skills/xsxb-frame-tuner");
   const skill = fs.readFileSync(path.join(skillRoot, "SKILL.md"), "utf8");
   const workflows = fs.readFileSync(path.join(skillRoot, "references/media-and-tuning-workflows.md"), "utf8");
-  for (const [label, text] of [
-    ["SKILL.md", skill],
-    ["media-and-tuning-workflows.md", workflows],
-  ]) {
-    assert.match(text, /月牙/, `${label} must name 月牙`);
-    assert.match(text, /像素层/, `${label} must name 像素层`);
-    assert.match(text, /7字/, `${label} must name the 7字 failure`);
-    assert.match(text, /xsxb_add_attack_trail/, `${label} must name when not to use the mesh`);
-    assert.match(
-      text,
-      /do not hardcode red|sample.*color|smear color/i,
-      `${label} must keep smear color generic`,
-    );
-    assert.match(text, /上挑/, `${label} must still name 上挑 as something you can read from frames`);
-    assert.match(
-      text,
-      /trace the striking-mass|trace.{0,60}striking-mass/i,
-      `${label} must read the smear arc from this clip's weapon motion`,
-    );
-    assert.doesNotMatch(text, /Generate a red hollow/, `${label} must not prescribe a red VFX`);
-    assert.doesNotMatch(
-      text,
-      /high→forward→down|chop bows high/i,
-      `${label} must not ship a canned chop/挑 arc recipe`,
-    );
-    assert.match(
-      text,
-      /start and end cells|lock per-frame start/i,
-      `${label} must lock smear start/end cells before painting`,
-    );
-    assert.match(
-      text,
-      /do not pin the head on the striking/i,
-      `${label} must not pin the smear head on the weapon`,
-    );
-    assert.match(
-      text,
-      /xsxb_plan_smear/,
-      `${label} must compile a clip-specific smear brief before painting`,
-    );
-    assert.match(text, /skeleton/, `${label} must treat the generic playbook as a skeleton`);
-    assert.doesNotMatch(text, /one gap off/, `${label} must not tell the agent to skip a full grid cell`);
-    assert.doesNotMatch(text, /head at the current striking mass/, `${label} must not pin onto the cup`);
-    assert.match(text, /crescent-trail-v4/, `${label} must cite the validated smear reference`);
-  }
+  // Run examples from the entry skill through the published input contract.
+  // The longer hand-painting procedure belongs in its linked reference.
+  const { validateToolArguments } = require("../../mcp/xsxb_mcp_schema");
+  const examples = [...skill.matchAll(/```json\s+([\s\S]*?)```/g)].map((match) => JSON.parse(match[1]));
+  for (const args of examples) validateToolArguments(trail.name, trail.inputSchema, args);
+  assert.ok(examples.some((args) => args.brush_preset === "crescent" && args.crescent_fit === "shrink"));
+  assert.ok(examples.some((args) => args.attachment_id && args.end_frame > args.start_frame));
+  assert.match(skill, /references\/media-and-tuning-workflows\.md/);
+  assert.match(workflows, /xsxb_plan_smear/);
+  assert.match(workflows, /data\.brief/);
 });
 
 test("a failing tool answers with an MCP error result instead of a transport error", async () => {
@@ -888,6 +853,44 @@ test("MCP without an explicit root stores in the current working directory .x-fr
     else process.env.XSXB_ROOT = previousRoot;
     fs.rmSync(host, { recursive: true, force: true });
   }
+});
+
+test("desktop launch from the filesystem root stores the registry and projects in the user's home", async (t) => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "xsxb-desktop-host-"));
+  const fsRoot = path.parse(process.cwd()).root;
+  const env = { ...process.env };
+  delete env.XSXB_ROOT;
+  const entry = require.resolve("../../mcp/xsxb_mcp_server");
+  t.after(() => fs.rmSync(homeDir, { recursive: true, force: true }));
+  // Isolate the child user's home and check the resolved host before any disk writes.
+  const launch = `
+    const assert = require("node:assert/strict");
+    require("node:os").homedir = () => process.argv[1];
+    const { resolveMcpHostRoot } = require(process.argv[2]);
+    assert.equal(resolveMcpHostRoot(), process.argv[1]);
+    require(process.argv[3]).startServer();
+  `;
+  const requests = [
+    { name: "xsxb_list_projects", arguments: {} },
+    { name: "xsxb_create_project", arguments: { project_id: "desktop" } },
+  ].map((params, id) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params }));
+  const { execFileSync } = require("node:child_process");
+  const output = execFileSync(
+    process.execPath,
+    ["-e", launch, homeDir, require.resolve("../../mcp/lib/xsxb_root"), entry],
+    { cwd: fsRoot, env, input: requests.join("\n") + "\n", encoding: "utf8", timeout: 10000 },
+  );
+  const [listed, created] = output
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line).result.structuredContent);
+  assert.equal(listed.ok, true);
+  assert.equal(listed.data.count, 0);
+  assert.equal(created.ok, true);
+  const dataDir = path.join(homeDir, ".x-frame", "data");
+  assert.equal(created.data.project.dataPath, path.join(dataDir, "projects", "desktop"));
+  assert.ok(fs.existsSync(path.join(dataDir, "projects.json")));
+  assert.ok(fs.existsSync(path.join(created.data.project.dataPath, "animation_manifest.json")));
 });
 
 test("import_video forwards optional start_time/duration and omits them for full-file extract", async () => {

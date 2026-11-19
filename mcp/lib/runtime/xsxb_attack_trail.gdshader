@@ -2,6 +2,8 @@ shader_type canvas_item;
 render_mode unshaded, blend_mix;
 
 uniform sampler2D trail_texture : source_color, filter_linear_mipmap, repeat_disable;
+uniform sampler2D pixel_texture : source_color, filter_nearest, repeat_disable;
+uniform bool pixel_art = false;
 uniform sampler2D trail_gradient : source_color, filter_linear, repeat_disable;
 uniform vec4 trail_color : source_color = vec4(0.85, 0.15, 0.22, 1.0);
 uniform bool use_original_color = false;
@@ -10,7 +12,7 @@ uniform float alpha_gain : hint_range(0.0, 3.0, 0.01) = 1.0;
 uniform float tail_fade_start : hint_range(0.0, 0.95, 0.01) = 0.6;
 
 void fragment() {
-	vec4 source = texture(trail_texture, UV);
+	vec4 source = pixel_art ? texture(pixel_texture, UV) : texture(trail_texture, UV);
 	if (use_original_color) {
 		COLOR = source;
 	} else {

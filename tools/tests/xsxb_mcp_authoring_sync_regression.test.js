@@ -141,3 +141,31 @@ test("Godot res paths cannot traverse outside the bound project", async () =>
     assert.equal(result.ok, false);
     assert.equal(result.error.code, "GODOT_SYNC_FAILED");
   }));
+
+for (const inPlace of [false, true]) {
+  test(`compare reports missing PNGs but rejects a corrupt manifest (in_place=${inPlace})`, async () =>
+    fixture(async ({ root, png, call }) => {
+      await call("xsxb_create_project", { project_id: "test" });
+      await call("xsxb_import_animation", {
+        source: "items",
+        items: [{ path: png }],
+        in_place: inPlace,
+        animation_id: "walk",
+      });
+      const saved = await call("xsxb_save_revision");
+      const current = await call("xsxb_get_animation");
+      fs.unlinkSync(current.animation.frames[0].absolutePath);
+      const diff = await call("xsxb_compare_revisions", { revision_id: saved.revisionId });
+      assert.deepEqual(
+        diff.changes.map((change) => change.status),
+        ["removed"],
+      );
+      assert.ok(fs.existsSync(diff.preview.path));
+      const store = createProjectStore(root);
+      fs.writeFileSync(store.projectPaths(store.activeProject("test")).manifest, "{");
+      await assert.rejects(
+        () => call("xsxb_compare_revisions", { revision_id: saved.revisionId }),
+        /Invalid JSON/,
+      );
+    }));
+}

@@ -125,6 +125,10 @@ function normalizeValue(toolName, schema, input, label) {
     reject(`argument "${label}" must be at most ${schema.maximum}. Received ${input}.`);
   }
   if (Array.isArray(value) && schema.items) {
+    if (schema.minItems !== undefined && value.length < schema.minItems)
+      reject(`argument "${label}" needs at least ${schema.minItems} items.`);
+    if (schema.maxItems !== undefined && value.length > schema.maxItems)
+      reject(`argument "${label}" accepts at most ${schema.maxItems} items.`);
     return value.map((item, index) => normalizeValue(toolName, schema.items, item, `${label}[${index}]`));
   }
   if (typeOf(value) !== "object") return value;

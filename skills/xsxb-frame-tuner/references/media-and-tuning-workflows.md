@@ -1,6 +1,6 @@
 # Media and Tuning Workflows
 
-Use this reference for existing tuner operations beyond deterministic animation import and runtime wiring.
+Use the MCP sections for standalone x-frame. Sections marked Workbench describe the separate browser-based tuner when the user selects that interface or needs a UI-only feature.
 
 ## Contents
 
@@ -9,22 +9,22 @@ Use this reference for existing tuner operations beyond deterministic animation 
 - MCP video-to-loop playbook
 - MCP overlay grid and group coordinates
 - MCP still overlay and place
-- MCP chop crescent trail (pixel layer)
+- MCP hand-painted sickle (pixel layer)
 - Video extraction and frame organization
 - Transform and playback tuning
 - Boxes, SFX, and image attachments
-- Save, synchronization, and completion evidence
+- Workbench save and synchronization
 
 ## Local Execution and Project Selection
 
 - Keep source images, videos, audio, and Godot projects on the local machine.
-- Start or reuse `tools/animation_tuner/server.js`; it listens on `127.0.0.1` by default.
+- For MCP, use the connected service. For the full Workbench UI, start or reuse its local server in the checkout containing `tools/animation_tuner/server.js`.
 - Select the exact XSXB project, profile, and animation before editing.
 - Record the initial frame count and existing frame-indexed tuning, boxes, SFX, and attachments before destructive operations.
 - Use an available browser-control capability for features implemented only in the local tuner UI. Inspect the page state and rendered frames before acting.
 - Do not invent a CLI or direct JSON rewrite for a browser-only operation when doing so would bypass its remapping, confirmation, or synchronization behavior.
 
-## Batch Cutout
+## Workbench Batch Cutout
 
 Use the Batch Cutout panel for local multi-image background removal and animation-frame replacement.
 
@@ -55,12 +55,12 @@ Do not claim a clean cutout solely because the batch completed. Check edge halos
 
 ## MCP Video-to-Loop Playbook
 
-For a local video that should become one looping animation, stay on XSXB MCP. Follow skill「MCP 工程流程」first: one-sentence goal, ordered todo, look at `preview.path` after cutout before the next step.
+Use this workflow for a video that will become an editable looping animation. For standalone file inspection, use `xsxb_edit_target` directly.
 
 1. If no project exists, `xsxb_create_project`. Import with `xsxb_import_animation` or `xsxb_import_video` (optional `start_time` / `duration`; omit for the full file).
-2. Run `xsxb_cutout` (omit sliders for the shared smart profile; generated black/white plates use `key_mode=border_flood`). Look at `preview.path` (magenta flatten) — not the planted contact sheet — to confirm dark clothes remain.
-3. `xsxb_analyze` (one decode: duplicates, loop, motion, plus a `grid=false` preview sheet). Look at `preview.path` — do not export every candidate with `xsxb_export_sheet`. `oneShotLikely` means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. Skip apply when the receipt has `autoAdjustedThreshold` unless you passed `auto_adjust`.
-4. Inspect the preview, pick `loop.recommended.order` or `motion.order`, and `xsxb_reorganize_frames`.
+2. When cutout is needed, get `observation.snapshotId` from `xsxb_get_animation` for the imported clip. Pass it to `xsxb_cutout` as `basis_snapshot_id` (omit sliders for the shared smart profile; generated black/white plates use `key_mode=border_flood`). Look at `data.preview.path` (magenta flatten) — not the planted contact sheet — to confirm dark clothes remain.
+3. `xsxb_analyze` (one decode: duplicates, loop, motion, plus a `grid=false` preview sheet). Look at `data.preview.path` — do not export every candidate with `xsxb_export_sheet`. `oneShotLikely` means a short burst inside a longer clip; a solid interior cycle in a long take is not a one-shot. Skip apply when the receipt has `autoAdjustedThreshold` unless you passed `auto_adjust`.
+4. Inspect the preview, pick `data.loop.recommended.order` or `data.motion.order`, then preview `xsxb_reorganize_frames` with that order and the analysis receipt’s `observation.snapshotId` as `basis_snapshot_id`. Use `dry_run:false` to commit the intended order.
 5. Keep character scale the same across clips: choose one animation as the template, `xsxb_estimate_visual` with `reference_animation_id` and `apply`, then `xsxb_cutout apply_visual` on a shared canvas.
 6. Finish with one `xsxb_export_gif` of the kept loop.
 
@@ -98,7 +98,7 @@ After a write, export another sheet and check the ticks. `xsxb_get_animation` re
 
 1. Overlay each PNG with `xsxb_overlay_grid` (default 8×8). Report only speakable cell ids such as `A1`. Do not OCR pixel boxes or x,y. Pass receipt `overlay_id` on later `crop_from` / place (agent-led MUST). If `next` is `crop_from`, overlay the contact cells before placing. Do not mix still `view` with animation `grid.cells`. Source PNG is unchanged.
 2. Refine with `crop_from: { parent_view, cells, padding_cells, overlay_id }`. The crop is integer (floor origin, ceil far edge) and `view` stays in original-image pixels so remapped `A1` starts at the crop origin. The new `overlay_id` is for that cropped view.
-3. **图度：** after the user confirms a composite, call `xsxb_plan_place` (`intent`, `read`, `physics`, `accept`, 3–5 step `plan`). Execute `receipt.brief`. Default is to place next; `await_confirm` or a user “先方案” request pauses. Named contact cells default to `snap: "alpha_centroid"` — never freehand `x,y`.
+3. **图度：** after the user confirms a composite, call `xsxb_plan_place` (`intent`, `read`, `physics`, `accept`, 3–5 step `plan`). Execute `data.brief`. Default is to place next; `await_confirm` or a user “先方案” request pauses. Named contact cells default to `snap: "alpha_centroid"` — never freehand `x,y`.
 4. Place with `xsxb_place_image` per that brief. Pass `overlay_id` and optional `plan_id`. Named cells without `derive` default to `alpha_centroid`, then `nudge` `{dx,dy}` only if accept fails. `scale` `relative`|`physical` from a named span. `layer` `front`|`under_target`|`behind`. `rotation` from the pose you see. The tool does not redraw either sprite. Inspect `verify.status` and `verify_overlay_path` against `accept`. Never freehand `x,y`.
 5. Example only: standing a figure on a marked region is cell ids plus a physical width — there are no domain-specific place fields.
 6. `xsxb_measure_image` `anchor=alpha_bottom` returns the same opaque-foot geometry.
@@ -106,9 +106,11 @@ After a write, export another sheet and check the ticks. `xsxb_get_animation` re
 
 ## MCP attack sickle trail (pixel layer)
 
+Use this section for hand-painted smear art. For a procedural crescent or bound-weapon brush use the recipes in [SKILL.md](../SKILL.md#刀光和拖影).
+
 Look at **this** animation's frames (sheet / `xsxb_overlay_grid`) and **trace the striking-mass** (weapon head) cell to cell. The smear arc is that observed motion — do not pick a canned chop or 上挑 recipe. A clip like 牛来's plunger that travels overhead then down reads as a downward sickle; a clip whose head scoops upward reads as 上挑. Same playbook.
 
-The generic playbook is only the **skeleton**. Before painting, call `xsxb_plan_smear` with the motion you actually read, `path_kind` `polyline` or `smooth_arc`, sampled color, and per-frame start/end/head cells. `receipt.brief` is the clip-specific prompt — execute that brief. Do not jump from the skeleton to GenerateImage.
+The generic playbook is only the **skeleton**. Before painting, call `xsxb_plan_smear` with the motion you actually read, `path_kind` `polyline` or `smooth_arc`, sampled color, and per-frame start/end/head cells. `data.brief` is the clip-specific prompt — execute that brief. Do not jump from the skeleton to GenerateImage.
 
 Use `xsxb_add_attack_trail` Hermite sticks only when that traced path is already a smooth arc that matches the smear you want. Mesh `color` is the striking mass or a user-named hex — do not hardcode red. If what you traced is a polyline that should still read as a sickle (牛来 chop across then down, e.g. D1→G3 then H8, is one case; an 上挑 clip can fail the same way) — do **not** default to that mesh. Hermite through those points always reads as a 7字折杆, a diagonal slice, or a column plus hook. Twisting `tangentStrength`, `reverseDirection`, or extra mid sticks only swaps 不够弯 and 7字.
 
@@ -124,7 +126,7 @@ Paint the 拖影 as a 像素层 月牙/镰刀 along the traced path:
 
 Validated reference (example only, not a canned recipe for other attacks): 牛来 downward plunger chop, polyline D1→G3 then H8, 像素层 月牙, `layer` behind — `exports/niulai-plunger-mcp/niulai-chop-crescent-trail-v4.gif`, `exports/niulai-plunger-mcp/niulai-chop-crescent-trail-v4-sheet.png`. Intermediates in `exports/niulai-plunger-mcp/crescent-trail/`.
 
-## Video Extraction and Frame Organization
+## Workbench Video Extraction and Frame Organization
 
 Use the Frame Workset panel for local images, local video extraction, reordering, reduction, flipping, tagging, diagnostics, and animation replacement.
 
@@ -207,9 +209,9 @@ Image attachments:
 - Inspect owner inheritance, facing, scene scale, and layer order in both preview and Godot.
 - Keep attachments visual-only unless explicit gameplay-box support is added.
 
-## Save, Synchronization, and Completion Evidence
+## Workbench Save and Synchronization
 
-Treat Save as the persistence and Godot synchronization boundary.
+In the full Workbench UI, Save persists the edit and can synchronize the bound game. In standalone MCP, project edits persist locally and Godot sync is opt-in.
 
 After every requested operation:
 

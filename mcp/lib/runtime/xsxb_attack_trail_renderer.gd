@@ -1,6 +1,7 @@
 extends Node2D
 
 const TRAIL_SHADER: Shader = preload("res://xsxb_frame_tuner/runtime/xsxb_attack_trail.gdshader")
+const SWEEP_SAMPLES_PER_SECOND := 180.0
 const SPEED_PROFILE = [0.94, 1.015, 0.985, 1.025, 1.035, 1.02, 0.97, 1.04]
 const TAIL_WIDTH_SPEED_INFLUENCE := 0.18
 const DEFAULT_BEFORE_CHASE_MULTIPLIER := 0.12
@@ -25,7 +26,7 @@ func configure(owner_actor: Node, source_bindings: Dictionary, requested_layer: 
 	_rebuild_renderers()
 
 
-func update_for_animation(animation_name: String, animation_time_s: float) -> void:
+func update_for_animation(animation_name: String, animation_time_s: float, canvas_height: float = 0.0, sweep_time_s: float = -1.0) -> void:
 	var binding_key := "%s/%s" % [String(actor.get("frame_profile_id")), animation_name]
 	var segments: Array = bindings.get(binding_key, []) as Array
 	var active_ids: Dictionary = {}
@@ -33,13 +34,22 @@ func update_for_animation(animation_name: String, animation_time_s: float) -> vo
 		if not segment_value is Dictionary:
 			continue
 		var segment: Dictionary = segment_value
+		var is_sweep := String(segment.get("renderMode", "mesh")) == "sweep"
+		if is_sweep and String(segment.get("layer", "behind")) != layer_name:
+			continue
 		var segment_id := "%s:%s" % [binding_key, String(segment.get("id", "trail"))]
 		active_ids[segment_id] = true
 		var state: Dictionary = renderers.get(segment_id, {})
 		if state.is_empty():
-			state = _create_renderer(segment_id, segment)
+			state = _create_renderer(segment_id, segment, animation_name)
 			renderers[segment_id] = state
-		_update_renderer(state, segment, animation_name, animation_time_s)
+		var node := state["node"] as MeshInstance2D
+		# Both trail modes use group coordinates relative to the bottom-center of the canvas.
+		node.position.y = canvas_height * 0.5
+		if is_sweep:
+			_update_sweep(state, segment, sweep_time_s if sweep_time_s >= 0.0 else animation_time_s)
+		else:
+			_update_renderer(state, segment, animation_name, animation_time_s)
 	for renderer_id in renderers.keys():
 		var state: Dictionary = renderers.get(renderer_id, {})
 		var mesh_instance: MeshInstance2D = state.get("node") as MeshInstance2D
@@ -55,16 +65,26 @@ func _rebuild_renderers() -> void:
 	renderers.clear()
 
 
-func _create_renderer(segment_id: String, segment: Dictionary) -> Dictionary:
+func _create_renderer(segment_id: String, segment: Dictionary, animation_name: String) -> Dictionary:
 	var mesh_instance := MeshInstance2D.new()
 	mesh_instance.name = "Trail_%s" % segment_id.replace("/", "_").replace(":", "_")
 	mesh_instance.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	var mesh := ArrayMesh.new()
 	mesh_instance.mesh = mesh
+	add_child(mesh_instance)
+	if String(segment.get("renderMode", "mesh")) == "sweep":
+		var times := PackedFloat64Array()
+		var tips := PackedVector2Array()
+		var bases := PackedVector2Array()
+		for stick: Dictionary in segment.get("sticks", []):
+			times.append(float(actor.call("trail_frame_arrival_time", animation_name, int(stick.frame), float(stick.framePhase))))
+			var pose := _stick_pose(stick)
+			tips.append(pose.top)
+			bases.append(pose.bottom)
+		return {"node": mesh_instance, "mesh": mesh, "times": times, "tips": tips, "bases": bases}
 	var material := ShaderMaterial.new()
 	material.shader = TRAIL_SHADER
 	mesh_instance.material = material
-	add_child(mesh_instance)
 	_apply_material(material, segment)
 	return {
 		"node": mesh_instance,
@@ -81,11 +101,70 @@ func _create_renderer(segment_id: String, segment: Dictionary) -> Dictionary:
 	}
 
 
+# Clip each authored blade interval to the visible history, then sample and
+# fade it with the same midpoint-age curve used by drawSweepLayer in the MCP.
+func _update_sweep(state: Dictionary, segment: Dictionary, now: float) -> void:
+	var node := state["node"] as MeshInstance2D
+	var times: PackedFloat64Array = state["times"]
+	var lifetime := clampf(float(segment.get("trailDurationMs", 150)) * 0.001, 0.001, 5.0)
+	node.visible = false
+	if not segment.get("enabled", true) or times.size() < 2 or now <= times[0] or now >= times[-1] + lifetime:
+		return
+	var tips: PackedVector2Array = state["tips"]
+	var bases: PackedVector2Array = state["bases"]
+	var vertices := PackedVector2Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	var color := Color.from_string(String(segment.get("color", "#d9364a")), Color.WHITE)
+	var opacity := clampf(float(segment.get("opacity", 0.85)), 0.0, 1.0)
+	for i in range(times.size() - 1):
+		var start := maxf(now - lifetime, times[i])
+		var end := minf(now, times[i + 1])
+		if end <= start:
+			continue
+		var steps := maxi(1, ceili((end - start) * SWEEP_SAMPLES_PER_SECOND))
+		var span := maxf(0.000001, times[i + 1] - times[i])
+		var phase := (start - times[i]) / span
+		var tip := tips[i].lerp(tips[i + 1], phase)
+		var base := bases[i].lerp(bases[i + 1], phase)
+		var older := start
+		for step in range(1, steps + 1):
+			var newer := lerpf(start, end, float(step) / steps)
+			phase = (newer - times[i]) / span
+			var next_tip := tips[i].lerp(tips[i + 1], phase)
+			var next_base := bases[i].lerp(bases[i + 1], phase)
+			var age := now - (older + newer) * 0.5
+			color.a = opacity * pow(maxf(0.0, 1.0 - age / lifetime), 1.5)
+			var n := vertices.size()
+			vertices.append_array(PackedVector2Array([tip, base, next_base, next_tip]))
+			colors.append_array(PackedColorArray([color, color, color, color]))
+			indices.append_array(PackedInt32Array([n, n + 1, n + 2, n, n + 2, n + 3]))
+			tip = next_tip
+			base = next_base
+			older = newer
+	if indices.is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := state["mesh"] as ArrayMesh
+	mesh.clear_surfaces()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	node.visible = true
+
+
 func _apply_material(material: ShaderMaterial, segment: Dictionary) -> void:
 	var texture_data: Dictionary = segment.get("texture", {}) if segment.get("texture", {}) is Dictionary else {}
 	var texture_path := String(texture_data.get("path", ""))
 	var texture: Texture2D = load(texture_path) as Texture2D if texture_path != "" else null
 	material.set_shader_parameter("trail_texture", texture)
+	var source := String(segment.get("brushSource", ""))
+	var pixel_art := source.begins_with("pixel_") or source.begins_with("motion:")
+	material.set_shader_parameter("pixel_art", pixel_art)
+	if pixel_art:
+		material.set_shader_parameter("pixel_texture", texture)
 	material.set_shader_parameter("trail_color", Color.from_string(String(segment.get("color", "#d9364a")), Color(0.85, 0.15, 0.22, 1.0)))
 	var color_mode := String(segment.get("colorMode", "solid"))
 	material.set_shader_parameter("use_original_color", color_mode == "original")
@@ -157,11 +236,35 @@ func _update_renderer(state: Dictionary, segment: Dictionary, animation_name: St
 		node.visible = false
 		return
 	var motion_duration := maxf(0.0001, times[-1] - times[0])
+	var source := String(segment.get("brushSource", ""))
+	var follow_blade := source.begins_with("motion:")
+	if follow_blade or source.begins_with("pixel_"):
+		var end_frame := int(sticks[-1].get("frame", 0))
+		if animation_time_s >= float(actor.call("trail_frame_arrival_time", animation_name, end_frame, 1.0)):
+			node.visible = false
+			return
+		local_time = minf(local_time, motion_duration)
+		if follow_blade:
+			# Attachments hold one pose per displayed frame, including during long frame durations.
+			for index in range(times.size() - 1, -1, -1):
+				if times[index] <= animation_time_s + 0.0000001:
+					local_time = times[index] - times[0]
+					break
 	var path_total := float(state.get("path_total", 0.0))
 	var current_time := minf(local_time, motion_duration)
 	var current_distance := _distance_at_local_time(state, current_time)
 	var catch_elapsed := maxf(0.0, local_time - motion_duration)
 	var speeds: PackedFloat32Array = state.get("speeds", PackedFloat32Array())
+	if follow_blade:
+		var history_s := float(segment.get("trailDurationMs", 150)) * 0.001
+		var tail := _distance_at_local_time(state, maxf(0.0, current_time - history_s))
+		node.visible = current_distance - tail >= 0.05
+		if node.visible:
+			var history := PackedFloat32Array()
+			history.resize(speeds.size())
+			history.fill(tail)
+			node.visible = _rebuild_mesh(state, segment, current_distance, history, 0.0)
+		return
 	var before_multiplier: float = _chase_multiplier(segment, true)
 	var after_multiplier: float = _chase_multiplier(segment, false)
 	var average_front_speed: float = path_total / motion_duration
@@ -439,6 +542,13 @@ func _rebuild_mesh(state: Dictionary, segment: Dictionary, current_distance: flo
 	var indices := PackedInt32Array()
 	var current_time := _local_time_at_distance(state, current_distance)
 	var current_pose := _pose_at_local_time(sticks, local_times, current_time)
+	var carry := 0.0
+	var hilt := Vector2(current_pose["top"]).lerp(Vector2(current_pose["bottom"]), 1.0 / 0.52)
+	if String(segment.get("brushSource", "")).begins_with("motion:"):
+		var tail_pose := _pose_at_local_time(sticks, local_times, _local_time_at_distance(state, tail_distances[0]))
+		var tail_axis := Vector2(tail_pose["top"]) - Vector2(tail_pose["bottom"])
+		var head_axis := Vector2(current_pose["top"]) - Vector2(current_pose["bottom"])
+		carry = 0.85 * minf(1.0, 4.0 * (1.0 - cos(head_axis.angle_to(tail_axis))))
 	var head_direction := _direction_at_local_time(sticks, local_times, current_time)
 	var head_half_width := Vector2(current_pose["top"]).distance_to(Vector2(current_pose["bottom"])) * 0.5
 	var head_curvature := float(segment.get("headCurvature", 0.0))
@@ -453,6 +563,9 @@ func _rebuild_mesh(state: Dictionary, segment: Dictionary, current_distance: flo
 			var sample_time := _local_time_at_distance(state, sample_distance)
 			var pose := _pose_at_local_time(sticks, local_times, sample_time)
 			var point := Vector2(pose["top"]).lerp(Vector2(pose["bottom"]), v)
+			if carry > 0.0:
+				var past_hilt := Vector2(pose["top"]).lerp(Vector2(pose["bottom"]), 1.0 / 0.52)
+				point += carry * (hilt - past_hilt)
 			var head_profile: float = _head_curve_profile(v) * _head_curve_blend(u)
 			var bulge := head_curvature * head_half_width * head_profile
 			point -= head_direction * bulge

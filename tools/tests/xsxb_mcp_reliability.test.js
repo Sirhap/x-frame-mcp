@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { handleMessage } = require("../../mcp/xsxb_mcp_server");
 const { createXsxbMcpService } = require("../../mcp/xsxb_mcp_service");
 const { createProjectStore } = require("../../mcp/lib/project_store");
 const { encodePngRgba } = require("../../mcp/xsxb_mcp_cutout");
@@ -166,6 +167,38 @@ for (const [name, args] of [
       assert.equal(failed, true);
       files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), originals[index]));
       assert.deepEqual(fs.readFileSync(paths.manifest), manifest);
+    });
+  });
+}
+
+for (const name of ["xsxb_update_timing", "xsxb_replace_frame"]) {
+  test(`${name} rolls back both files when the second write fails`, async () => {
+    await withProject(async ({ root, service, paths, animation }) => {
+      const replacement = path.join(root, "replacement.png");
+      const timing = name === "xsxb_update_timing";
+      if (!timing) fs.writeFileSync(replacement, encodePngRgba(new Uint8ClampedArray(24), 3, 2));
+      const args = timing ? { frame: 0, fps: 24, duration: 2 } : { frame: 0, file_path: replacement };
+      const files = timing
+        ? [paths.manifest, paths.tuning]
+        : [animation.animation.frames[0].absolutePath, paths.manifest];
+      const originals = files.map((file) => fs.readFileSync(file));
+      const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } };
+      const rename = fs.renameSync;
+      fs.renameSync = (source, target) => {
+        if (target === files[1]) throw new Error("injected second write failure");
+        return rename(source, target);
+      };
+      try {
+        const { result } = await handleMessage(request, service);
+        assert.equal(result.isError, true);
+        assert.match(result.structuredContent.error.message, /injected second write failure/);
+        assert.equal(result.structuredContent.execution.effect, "refused");
+      } finally {
+        fs.renameSync = rename;
+      }
+      files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), originals[index]));
+      assert.equal((await handleMessage(request, service)).result.isError, false);
+      files.forEach((file, index) => assert.notDeepEqual(fs.readFileSync(file), originals[index]));
     });
   });
 }

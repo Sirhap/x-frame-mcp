@@ -8,6 +8,9 @@
  */
 
 const path = require("node:path");
+const { PIXEL_PRESETS } = require("./xsxb_mcp_pixel_slash");
+const { MAX_HITS } = require("./xsxb_mcp_trail_hits");
+const { editTargetDefinition } = require("./xsxb_mcp_edit_target");
 const { authoringDefinitions } = require("./authoring/catalog");
 const { ORGANIZER_SIMILARITY_THRESHOLD } = require("./lib/animation_tuner/public/frame_organizer_core");
 const { workbenchSliderSchemaProperties } = require("./xsxb_mcp_cutout");
@@ -18,6 +21,7 @@ const MCP_TOOL_NAMES = Object.freeze([
   "xsxb_list_projects",
   "xsxb_get_project",
   "xsxb_create_project",
+  editTargetDefinition.name,
   "xsxb_import_video",
   "xsxb_slice_sheet",
   "xsxb_import_animation",
@@ -160,6 +164,7 @@ function toolDefinitions() {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
+    editTargetDefinition,
     {
       name: "xsxb_import_video",
       description:
@@ -267,7 +272,7 @@ function toolDefinitions() {
           dest: {
             type: "string",
             description:
-              "Output directory. May be absolute outside the XSXB root, like xsxb_export_pack_slot. Defaults to <sheet>_cells next to the sheet.",
+              "Defaults to <sheet>_cells next to the sheet. Only replaces PNGs recorded for this sheet. If a filename already exists without an ownership record, choose another dest or start_index.",
           },
           start_index: {
             type: "integer",
@@ -968,7 +973,7 @@ function toolDefinitions() {
     {
       name: "xsxb_plant_feet",
       description:
-        "Plant opaque soles onto a target group-Y without computing dx/dy. Translate only — does not scale; lock height with xsxb_register_clip. Walk-loop plant after xsxb_measure_frames; still confirm on the overlay. Default target is y=-1 (last pixel row of the lock canvas). Yellow 0,0 is outside the bitmap — do not plant soles to 0,0. metrics.feetY is the boot sole and ignores connected bright slash/glow below it. Hanging VFX that would clip is kept by padding the PNG; apply writes the new height into the animation manifest so Tuner/Godot origin matches the bitmap. Optional to accepts an overlay cell id (E5 / e5 / {cell:E5}) and maps to that cell's group coordinate. dry_run (default) returns the plan; apply bakes the translate. Reuses the shift_frames pixel pipeline.",
+        "Move frames vertically to plant the boot soles at group y=-1, or choose an overlay cell. Preview first, then pass apply=true. For scale changes, lock height with xsxb_register_clip. metrics.feetY is the boot sole and ignores connected bright slash effects.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1027,12 +1032,91 @@ function toolDefinitions() {
     {
       name: "xsxb_add_attack_trail",
       description:
-        "Add or replace a still-frame attack-trail segment with blade-edge sticks, layer, color, and optional reverseDirection. Use smooth_arc only for truly curved motion; walk/run loops should use other tools and pixel-layer crescents belong to place_image.",
+        'Draw a continuous blade brush stroke, e.g. {"start_frame":3,"end_frame":7}. A single shared attachment is selected automatically. For combos send hits in one call and inspect the returned strike image. Retiming both endpoints? Reuse the returned id. For multiple props choose attachment_id, to follow the actual swing frame by frame use brush_preset=weapon_motion. For explicitly requested fixed silhouettes choose brush_preset=pixel_cross, pixel_overhead or pixel_spin per hit, for a luminous arc use crescent, for painted blades supply two blade-edge sticks.',
       inputSchema: {
         type: "object",
         properties: {
           ...animationProperties,
-          id: { type: "string", description: "Segment id. Defaults to the texture basename or trail." },
+          hits: {
+            type: "array",
+            minItems: 1,
+            maxItems: MAX_HITS,
+            description:
+              "One entry per hit, in preview order. Top-level brush options apply to every hit. Change a hit in place by sending its id and new range. Unlisted strokes remain in the animation.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["start_frame", "end_frame"],
+              properties: {
+                id: { type: "string", description: "Stable stroke id returned by this tool." },
+                start_frame: { type: "integer", minimum: 0 },
+                end_frame: { type: "integer", minimum: 0 },
+                attachment_id: { type: "string" },
+                color: { type: "string" },
+                brush_preset: { type: "string", enum: ["weapon_motion", "crescent", ...PIXEL_PRESETS] },
+                trail_duration_ms: {
+                  type: "number",
+                  minimum: 1,
+                  maximum: 5000,
+                  description: "Override the history of this hit only.",
+                },
+                pixel_facing: { type: "string", enum: ["right", "left"] },
+                crescent_direction: { type: "string", enum: ["up", "down"] },
+                crescent_facing: { type: "string", enum: ["left", "right"] },
+              },
+            },
+          },
+          preview: {
+            type: "boolean",
+            description:
+              "Return a PNG showing each strike's end frame. Defaults on for weapon brushes, crescents and combos.",
+          },
+          brush_preset: {
+            type: "string",
+            enum: ["weapon_motion", "crescent", ...PIXEL_PRESETS],
+            description:
+              "weapon_motion traces the equipped blade on each visible frame; select this for action-led arcs. New motion strokes fit history to the final uninterrupted turn. Read arcReview for swept degrees and reversal frames. Use trail_duration_ms to override each hit. Static silhouettes use start_frame and end_frame (full silhouette). Flat two-tone pixel slashes: pixel_cross (waist-high streak), pixel_overhead (overhead hook), pixel_spin (open ring around actor). Defaults pink; set color or pixel_facing. For a luminous orange arc use crescent.",
+          },
+          pixel_facing: {
+            type: "string",
+            enum: ["right", "left"],
+            description: "Mirror a pixel slash to match the character. Defaults to right.",
+          },
+          crescent_scale: {
+            type: "number",
+            exclusiveMinimum: 0,
+            maximum: 8,
+            default: 1,
+            description:
+              "Scale relative to the standard body-sized crescent. 0.75 makes it smaller, 1.5 larger.",
+          },
+          crescent_fit: {
+            type: "string",
+            enum: ["keep", "shrink"],
+            default: "keep",
+            description:
+              "keep preserves the requested size and reports strike-frame overflow in pixels. shrink reduces size only as needed to fit that canvas. data.previewCall shows the full slash.",
+          },
+          crescent_facing: {
+            type: "string",
+            enum: ["right", "left"],
+            description: "Side towards which the crescent bows. Default right.",
+          },
+          crescent_direction: {
+            type: "string",
+            enum: ["down", "up"],
+            description: "Travel from upper tip to lower tip (down, default) or the reverse.",
+          },
+          attachment_id: {
+            type: "string",
+            description:
+              'Weapon binding id from xsxb_get_animation include:["attachments"]. Requires start_frame and end_frame (0-based, inclusive). Both endpoint frames must have this weapon. Creates two brush control poses.',
+          },
+          id: {
+            type: "string",
+            description:
+              "Stable stroke id. Omit to allocate or match a stroke on the same weapon sharing its start or end. Reuse the returned id when moving both endpoints.",
+          },
           name: { type: "string" },
           color: { type: "string", description: "#RRGGBB solid color." },
           color_mode: { type: "string", enum: ["solid", "original", "gradient"], default: "solid" },
@@ -1041,16 +1125,27 @@ function toolDefinitions() {
             enum: ["mesh", "sweep"],
             default: "mesh",
             description:
-              "sweep fills the recent blade-edge trajectory with time decay in MCP sheet/GIF exports. Requires explicit sticks. Godot/Tuner continue using their mesh fallback; mesh keeps existing behavior everywhere.",
+              "mesh draws the continuous textured brush (default). sweep fills recent blade positions with fading color and requires explicit sticks. Tuner previews sweep with mesh.",
           },
-          trail_duration_ms: { type: "number", minimum: 1, maximum: 5000, default: 150 },
-          opacity: { type: "number", minimum: 0, maximum: 1, default: 0.85 },
+          trail_duration_ms: {
+            type: "number",
+            minimum: 1,
+            maximum: 5000,
+            description:
+              "Milliseconds of blade history. New weapon_motion strokes fit the swing automatically; sweep defaults to 150 ms. Shorter values keep the arc closer to the blade.",
+          },
+          opacity: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+            default: 0.85,
+            description: "Opacity for sweep only.",
+          },
           path_kind: {
             type: "string",
             enum: ["polyline", "smooth_arc"],
             default: "smooth_arc",
-            description:
-              "polyline forbids Hermite mesh (sticks stay stored; GIF/sheet do not bake the mesh). smooth_arc may use the mesh only if that arc already matches.",
+            description: "smooth_arc renders a curved brush. With mesh, polyline stores guide points only.",
           },
           texture_path: {
             type: "string",
@@ -1075,7 +1170,8 @@ function toolDefinitions() {
           },
           sticks: {
             type: "array",
-            description: "Blade-edge sticks. One swing per segment.",
+            description:
+              "Manual blade poses for one swing. Start with one stick on each endpoint frame. top is the blade tip and bottom is a point farther down the blade. Their separation sets the brush width. Use a distinct id for each hit.",
             items: {
               type: "object",
               properties: {
@@ -1086,7 +1182,7 @@ function toolDefinitions() {
                 },
                 bottom: {
                   description:
-                    'Blade grip in group coordinates. {x,y} or "x,y", or overlay cell id E5 / e5 / {cell:E5}.',
+                    'Inner blade edge toward the grip in group coordinates. {x,y} or "x,y", or overlay cell id E5 / e5 / {cell:E5}.',
                 },
                 layer: {
                   type: "string",
@@ -1114,7 +1210,7 @@ function toolDefinitions() {
     {
       name: "xsxb_plan_smear",
       description:
-        "Walk/run loops: do not use this (still-frame / smear only). Compile a clip-specific weapon-smear prompt from the motion and cells you traced on this animation. The generic playbook is only the skeleton — call this before GenerateImage or xsxb_place_image, then execute receipt.brief. path_kind polyline forbids Hermite; smooth_arc may use the mesh only if that arc already matches. layer behind keeps the cup readable (hairline); do not pin the head on the striking-mass cell; do not skip a full grid cell. If a GIF/sheet already passed eye QA, pass accepted_path and reuse it. Receipt.reference is a validated example only (牛来 chop v4), not a recipe for other attacks.",
+        "Prepare a drawing brief for a hand-painted smear from observed weapon positions. Returns text in data.brief. To render a continuous textured slash in an animation, call xsxb_add_attack_trail directly.",
       inputSchema: {
         type: "object",
         required: ["motion", "path_kind", "color", "frames"],
@@ -1138,7 +1234,7 @@ function toolDefinitions() {
             type: "string",
             enum: ["behind", "front"],
             default: "behind",
-            description: "behind restores opaque weapon pixels so the cup stays readable.",
+            description: "behind keeps the weapon visible in front of the painted smear.",
           },
           accepted_path: {
             type: "string",
@@ -1177,7 +1273,7 @@ function toolDefinitions() {
     {
       name: "xsxb_add_attachment",
       description:
-        "Walk/run loops: do not use this. Bind a local PNG as a frame image attachment. file_path is required for a real asset. Pass frames to bind the same asset on many frames in one write. offset_x/offset_y are group coordinates. Prefer hand (group point, overlay cell, or fresh detect_regions reference) plus t; MCP measures the PNG and applies its scale and rotation before solving the grip offset.",
+        "Bind a PNG weapon or prop to animation frames. Give it an id, then set each frame’s hand position, grip fraction t and clockwise rotation in degrees. Use the same id as attachment_id in xsxb_add_attack_trail.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1434,7 +1530,7 @@ function toolDefinitions() {
     {
       name: "xsxb_export_gif",
       description:
-        "Export one animation as an animated GIF preview via FFmpeg, honoring per-frame durations, group/frame visual_size, authored attack-trail meshes, and frame image attachments. Skips disabled frames. Returns the absolute output path. output_path may be an absolute path outside the XSXB root (/tmp, a game repo). background defaults to magenta so alpha feet do not bounce on opaque black; pass checker, #00FF00, or transparent. After a 像素层 月牙 trail, also xsxb_export_sheet — GIF forward-play can hide a 7字.",
+        "Export an animated GIF with frame timing, weapon attachments and attack trails. Use start_frame and end_frame to inspect one hit. Set background to checker, transparent or a hex color. Returns data.outputPath. Use xsxb_export_sheet for individual poses.",
       inputSchema: {
         type: "object",
         properties: {

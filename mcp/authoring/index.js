@@ -67,6 +67,7 @@ function createAuthoringTools(context) {
     xsxb_interpolate_attachment: withRetention(createAttachmentInterpolation(context, revisions)),
   };
   const checkpointTools = new Set([
+    "xsxb_slice_sheet",
     "xsxb_import_video",
     "xsxb_import_animation",
     "xsxb_cutout",
@@ -96,6 +97,7 @@ function createAuthoringTools(context) {
     )
       return null;
     if (name === "xsxb_reorganize_frames" && args.dry_run !== false) return null;
+    if (name === "xsxb_slice_sheet" && !(args.animation_id || args.animation)) return null;
     const p = context.registryProject(args.project_id, false);
     return { project: p, revisionId: revisions.save(p, `before ${name}`, true, true).revisionId };
   }

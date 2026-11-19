@@ -4,7 +4,7 @@ Do not report success from syntax checks or generated files alone. Validate the 
 
 ## Deterministic Checks
 
-Run from the tuner root:
+For standalone MCP, use `xsxb_validate_project` for project data. Apply the gameplay gates below when the requested result includes game integration. When maintaining the full Workbench checkout containing `tools/validate_import.js`, its repository checks are:
 
 ```powershell
 npm run check

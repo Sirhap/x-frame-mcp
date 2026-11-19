@@ -166,17 +166,19 @@ async function serveCase(root, count) {
   });
   await service.callMcp("xsxb_create_project", { project_id: "benchmark" });
   const readFile = fs.readFileSync;
+  const readFileAsync = fs.promises.readFile;
   let files = new Set();
   let reads = 0;
   let bytes = 0;
-  fs.readFileSync = (file, ...args) => {
-    const value = readFile(file, ...args);
+  const recordRead = (file, value) => {
     if (typeof file === "string" && files.has(file)) {
       reads += 1;
       bytes += value.length;
     }
     return value;
   };
+  fs.readFileSync = (file, ...args) => recordRead(file, readFile(file, ...args));
+  fs.promises.readFile = async (file, ...args) => recordRead(file, await readFileAsync(file, ...args));
   const measuredService = {
     ...service,
     async callMcp(name, args) {
@@ -199,6 +201,7 @@ async function serveCase(root, count) {
   });
   reader.once("close", () => {
     fs.readFileSync = readFile;
+    fs.promises.readFile = readFileAsync;
     process.disconnect();
   });
   process.send({ kind: "benchmark-ready", pngBytes: png.length });

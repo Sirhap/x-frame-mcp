@@ -1,4 +1,4 @@
 interface:
   display_name: "XSXB Frame Tuner"
-  short_description: "Process, tune, and wire Godot frame animations."
-  default_prompt: "Use $xsxb-frame-tuner to process these local animation assets, tune them, and fully wire the result into my Godot game."
+  short_description: "Edit sprite animations, weapon trails, and Godot handoffs."
+  default_prompt: "Use $xsxb-frame-tuner to add a crescent slash to this animation and preview its strike frame."

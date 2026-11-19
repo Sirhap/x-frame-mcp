@@ -14,10 +14,7 @@ const {
 } = require("./lib/animation_tuner/public/app_attachment_utils");
 
 const EDITOR_SCRIPT = path.join(__dirname, "lib/animation_tuner/public/attack_trails.js");
-const FALLBACK_TEXTURE = path.join(
-  __dirname,
-  "lib/animation_tuner/public/presets/attack_trails/dynamic_trail_luma.png",
-);
+const { BUNDLED_TRAIL_TEXTURE } = require("./lib/attack_trails");
 
 /**
  * Segments that the Tuner mesh will actually draw.
@@ -96,31 +93,39 @@ function parseAttachmentBinding(key) {
 }
 
 /**
- * Attachments bound to one exported frame.
- * @param {object[]} bindings All frame image attachments.
- * @param {string} bindingKey profile/animation key.
- * @param {number} frameIndex Absolute frame index.
- * @returns {object[]} Matching attachments.
+ * Groups attachments belonging to this clip by absolute frame index.
+ * Reads compact MCP keys, workbench keys and older metadata-only records.
  */
-function attachmentsForFrame(bindings, bindingKey, frameIndex) {
-  const frameKey = `${bindingKey}:${frameIndex}`;
-  const animationId =
-    String(bindingKey || "")
-      .split("/")
-      .slice(1)
-      .join("/") || String(bindingKey || "");
-  return (Array.isArray(bindings) ? bindings : []).filter((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    const key = String(entry.key || entry.frameKey || "");
-    if (key && key === frameKey) return true;
-    const parsed = parseAttachmentBinding(key);
-    const meta = entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {};
-    const frame = Number(Number.isFinite(Number(parsed?.frame)) ? parsed.frame : (entry.frame ?? meta.frame));
-    if (frame !== frameIndex) return false;
-    const clip = String(meta.animation || parsed?.animation || "");
-    if (!clip) return true;
-    return clip === bindingKey || clip === animationId || parsed?.animation === animationId;
-  });
+function attachmentFrames(bindings, bindingKey, { strictProfile = false } = {}) {
+  const frames = new Map();
+  const slash = bindingKey.indexOf("/");
+  const profileId = slash < 0 ? "" : bindingKey.slice(0, slash);
+  const animationId = slash < 0 ? bindingKey : bindingKey.slice(slash + 1);
+  for (const entry of Array.isArray(bindings) ? bindings : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const rawKey = String(entry.key || entry.frameKey || "");
+    const parsed = parseAttachmentBinding(rawKey);
+    const meta = entry.metadata || {};
+    const profile = parsed?.profileId || meta.profileId;
+    // Legacy workbench imports may remap a profile id while retaining its
+    // seven-part source key. Preserve clip-name matching for that preview path.
+    if ((strictProfile || rawKey.split(":").length < 7) && profile && profileId && profile !== profileId)
+      continue;
+    const clip = parsed?.animation || meta.animation;
+    if (
+      clip &&
+      clip !== animationId &&
+      clip !== bindingKey &&
+      meta.animation !== animationId &&
+      meta.animation !== bindingKey
+    )
+      continue;
+    const frame = Number(parsed?.frame ?? entry.frame ?? meta.frame);
+    if (!Number.isInteger(frame) || frame < 0) continue;
+    if (!frames.has(frame)) frames.set(frame, []);
+    frames.get(frame).push(entry);
+  }
+  return frames;
 }
 
 function drawAttachment(ctx, image, origin, attachment, owner = {}) {
@@ -146,12 +151,12 @@ function resolveTextureFile(requested, root) {
   const candidates = [
     requested && path.isAbsolute(requested) ? requested : "",
     requested && root ? path.resolve(root, requested) : "",
-    FALLBACK_TEXTURE,
+    BUNDLED_TRAIL_TEXTURE,
   ];
   for (const candidate of candidates) {
     if (candidate && fs.existsSync(candidate)) return candidate;
   }
-  throw new Error(`Attack trail texture is missing. Looked for: ${requested || FALLBACK_TEXTURE}`);
+  throw new Error(`Attack trail texture is missing. Looked for: ${requested || BUNDLED_TRAIL_TEXTURE}`);
 }
 
 /**
@@ -248,10 +253,9 @@ async function compositeAttackTrails(job) {
   if (frameIndexes.length !== framePaths.length) {
     throw new Error("frameIndexes must align with framePaths.");
   }
+  const byFrame = attachmentFrames(job.attachments, bindingKey);
   const frameAttachments = frameIndexes.map((frameIndex) =>
-    attachmentsForFrame(job.attachments, bindingKey, frameIndex).filter((entry) =>
-      resolveAttachmentFile(entry.path, job.root),
-    ),
+    (byFrame.get(frameIndex) || []).filter((entry) => resolveAttachmentFile(entry.path, job.root)),
   );
   const attachmentIds = [
     ...new Set(frameAttachments.flat().map((entry) => String(entry.id || entry.name || "attachment"))),
@@ -264,7 +268,7 @@ async function compositeAttackTrails(job) {
   const [profileId, animationId] = bindingKey.split("/");
   const textureByPath = {};
   for (const segment of meshSegments) {
-    const requested = segment.texture?.path || job.trails?.presetTexture?.path || FALLBACK_TEXTURE;
+    const requested = segment.texture?.path || job.trails?.presetTexture?.path || BUNDLED_TRAIL_TEXTURE;
     const absolute = resolveTextureFile(requested, job.root);
     textureByPath[segment.texture?.path || requested] = dataUrl(absolute);
   }
@@ -415,6 +419,7 @@ async function compositeAttackTrails(job) {
 
 module.exports = {
   compositeAttackTrails,
+  attachmentFrames,
   resolveTextureFile,
   usableTrailSegments,
 };
